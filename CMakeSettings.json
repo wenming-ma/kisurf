@@ -1,0 +1,72 @@
+{
+  "environments": [
+    {
+        "BuildDir": "${projectDir}\\build",
+        "InstallDir": "${projectDir}\\install"
+    },
+    {
+        "environment": "vcpkg",
+        "VCPKG_MANIFEST_MODE":"OFF"
+    }
+  ],
+  "configurations": [
+    {
+        "name": "x64-Debug",
+        "generator": "Ninja",
+        "configurationType": "Debug",
+        "inheritEnvironments": [ "msvc_x64_x64", "vcpkg" ],
+        "buildRoot": "${env.BuildDir}\\${name}",
+        "installRoot": "${env.InstallDir}\\${name}",
+        "cmakeCommandArgs": "-DSWIG_EXECUTABLE=C:\\\\swig\\\\swigwin-4.3.1\\\\swig.exe -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-windows" , 
+        "buildCommandArgs": "-v",
+        "ctestCommandArgs": "",
+        "variables": [
+            {
+                "name": "KICAD_BUILD_QA_TESTS",
+                "value": "False",
+                "type": "BOOL"
+            },
+            {
+                "name": "KICAD_WIN32_DPI_AWARE",
+                "value": "ON",
+                "type": "BOOL"
+            },
+            {
+                "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+                "value": "ON",
+                "type": "BOOL"
+            }
+        ],
+        "cmakeToolchain": "D:/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    },
+    {
+        "name": "x64-Release",
+        "generator": "Ninja",
+        "configurationType": "RelWithDebInfo",
+        "inheritEnvironments": [ "msvc_x64_x64", "vcpkg" ],
+        "buildRoot": "${env.BuildDir}\\${name}",
+        "installRoot": "${env.InstallDir}\\${name}",
+        "cmakeCommandArgs": "-DSWIG_EXECUTABLE=C:\\\\swig\\\\swigwin-4.3.1\\\\swig.exe -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-windows",
+        "buildCommandArgs": "-v",
+        "ctestCommandArgs": "",
+        "variables": [
+            {
+                "name": "KICAD_BUILD_QA_TESTS",
+                "value": "False",
+                "type": "BOOL"
+            },
+            {
+                "name": "KICAD_WIN32_DPI_AWARE",
+                "value": "ON",
+                "type": "BOOL"
+            },
+            {
+                "name": "CMAKE_EXPORT_COMPILE_COMMANDS",
+                "value": "ON",
+                "type": "BOOL"
+            }
+        ],
+        "cmakeToolchain": "D:/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake"
+    }
+  ]
+}

@@ -1,0 +1,87 @@
+{
+  "version": 9,
+  "configurePresets": [
+    {
+      "name": "msvc",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "installDir": "${sourceDir}/out/install/${presetName}",
+      "toolchainFile": "D:/Tools/vcpkg/scripts/buildsystems/vcpkg.cmake",
+      "environment": {
+        "VCPKG_ROOT": "D:/Tools/vcpkg"
+      },
+      "cacheVariables": {
+        "VCPKG_MANIFEST_MODE": "OFF",
+        "VCPKG_TARGET_TRIPLET": "x64-windows",
+        "KICAD_BUILD_QA_TESTS": "ON",
+        "KICAD_WIN32_DPI_AWARE": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "SWIG_EXECUTABLE": "C:/swig/swigwin-4.3.1/swig.exe"
+      },
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "vendor": {
+        "microsoft.com/VisualStudioSettings/CMake/1.0": {
+          "hostOS": "Windows"
+        }
+      }
+    },
+    {
+      "name": "msvc-win64",
+      "hidden": true,
+      "architecture": {
+        "value": "x64",
+        "strategy": "external"
+      },
+      "inherits": "msvc"
+    },
+    {
+      "name": "x64-debug",
+      "displayName": "x64 Debug",
+      "inherits": "msvc-win64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "x64-release",
+      "displayName": "x64 Release",
+      "inherits": "msvc-win64",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "x64-debug",
+      "displayName": "x64 Debug",
+      "configurePreset": "x64-debug"
+    },
+    {
+      "name": "x64-release",
+      "displayName": "x64 Release",
+      "configurePreset": "x64-release"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "x64-debug",
+      "configurePreset": "x64-debug",
+      "environment": {
+        "KICAD_RUN_FROM_BUILD_DIR": "1"
+      }
+    },
+    {
+      "name": "x64-release",
+      "configurePreset": "x64-release",
+      "environment": {
+        "KICAD_RUN_FROM_BUILD_DIR": "1"
+      }
+    }
+  ]
+}

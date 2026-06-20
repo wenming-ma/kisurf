@@ -147,8 +147,175 @@ The project is at the beginning. A possible early roadmap:
 
 ## Status
 
-KiSurf is currently an early-stage project. The README defines the product direction
-before the implementation begins.
+KiSurf is currently a developer-preview branch with a first AI-native workflow
+slice implemented. It is not a finished PCB layout/routing assistant yet, but
+the current branch can build PCB and schematic editors with an Agent pane,
+model-provider wiring, model tool interfaces, semantic panel state, and
+observability logs.
+
+## Direct Use Status
+
+Short answer: you can try the current Agent workflow as a developer preview, but
+it is not the finished AI-native product yet.
+
+Currently implemented:
+
+- Agent pane in PCB and schematic editors.
+- OpenAI-compatible provider path with default base URL
+  `https://sub2api.wenming-dev.org/v1`.
+- Agent pane `Model...` settings entry for OpenAI-compatible base URL, model,
+  and API key configuration, with API keys stored in the local platform secret
+  store instead of project files or shell setup.
+- Anthropic-compatible provider kind reserved in settings UI and persistence;
+  runtime request handling for Anthropic is not implemented yet.
+- Explicit offline stub mode with `KISURF_AI_PROVIDER=stub`.
+- Python-first AI execution session runtime for PCB preview-first edits:
+  session tools, typed atomic operations, semantic shadow board, operation
+  journal, checkpoints, rollback, native preview rendering, validation, accept
+  replay, and a local protobuf Python worker/SDK.
+- PCB session startup seeds existing board tracks, vias, zones, drawing shapes,
+  footprints, and pads into typed shadow-board handles, including selected pad
+  metadata for agent queries.
+- Successful Python mutation cells automatically produce step feedback through
+  editor-native validation and preview services when the script did not request
+  them explicitly, so iterative Agent work is visible before Accept.
+- Python SDK composite helpers such as via rings and annular zones lower into
+  typed atomic operations instead of model-facing bespoke PCB tools.
+- Model-facing tools for actions, context snapshots, workspace view, visual
+  frame metadata/pixels when available, activity timeline, AI execution session
+  control/query/render/validation, and guarded semantic UI actions.
+- Legacy model-facing composite/script tools such as
+  `script_run_operation_bundle`, `pcb_fill_via_matrix`, and direct
+  `pcb_create_*` tools are no longer exposed; complex editing goes through
+  `kisurf_run_cell` and the session control tools.
+- Session typed properties are inspectable and replayable: property patches
+  merge into shadow-board state, invalid zone property patches are rejected
+  before journal append, and accepted via/track/zone/shape property changes use
+  native KiCad setters instead of geometry patching.
+- Model-originated `kisurf_run_action` calls are preview-first: allowed action
+  requests create a pending preview suggestion, and the native action runner is
+  invoked only after explicit user Accept.
+- Autonomous background suggestions are preview-only in the current session
+  runtime phase: generated edit objects are stripped, preview remains
+  available, and real board mutation must go through an accepted execution
+  session.
+- Active-routing route-to-anchor previews can target a semantic anchor directly;
+  if the model omits the start anchor, KiSurf uses the current
+  `tool.routing.start` anchor from the routing context.
+- Active footprint-placement contexts expose semantic placement candidate anchors
+  around the cursor, giving the model deterministic named points for placement
+  previews instead of pixel guessing.
+- Visual reads in active footprint-placement contexts automatically highlight
+  placement candidate anchors, so the model sees layout choices without
+  repeating visual directives.
+- Anchor-focus operation previews render lightweight PCB canvas markers, giving
+  semantic anchor choices a visible non-mutating board preview.
+- Visual-frame diagnostics that report why pixels are unavailable instead of
+  returning only an empty frame.
+- Routing visual reads automatically carry render directives for the active
+  route net/layer and routing anchors, so the model sees the intended visual
+  focus without restating it on every frame request.
+- User activity records for commands, selection, movement, and mouse clicks,
+  including click coordinates, button, and modifier details.
+- Agent observability log for user input, model input/output, tool calls, tool
+  results, suggestions, and recent semantic panel state.
+- Native semantic self-test surface for Agent pane controls and state, including
+  a guarded bridge for model-requested Agent pane UI actions that cannot bypass
+  human accept confirmation.
+
+Still in progress:
+
+- Full GUI smoke verification in the current environment.
+- Broader in-memory canvas visual capture coverage and richer editor semantic
+  trees beyond the Agent pane.
+- Production-level autonomous placement/routing workflows.
+- Model settings UI edge-case polish and production credential-store fallback
+  handling.
+- Dedicated Python worker event streaming during a running cell and final
+  native DRC over reconstructed shadow-board state. Stale-session rebase is
+  intentionally out of the current phase; stale accept is rejected by base hash.
+
+## Quickstart: Agent Preview
+
+Build the developer targets:
+
+```powershell
+cmd.exe /S /C '"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\VsDevCmd.bat" -arch=x64 -host_arch=x64 && cmake --build out\build\x64-release --target pcbnew --config Release && cmake --build out\build\x64-release --target eeschema --config Release'
+```
+
+Configure the provider from inside the editor:
+
+1. Open `AI -> Model Settings...`.
+2. Alternatively, open `AI -> Agent` and click `Model...` in the Agent pane.
+3. Choose `OpenAI-compatible`.
+4. Set the base URL, model, and API key.
+5. Press OK; the Agent reloads the model provider for the next chat or
+   background suggestion.
+
+The default base URL is `https://sub2api.wenming-dev.org/v1`. API keys are stored
+through the local platform secret store and are not written to project files.
+Normal Agent runtime configuration is loaded from Model Settings; OpenAI API
+key, base URL, and model environment variables are not used as default runtime
+credentials. Use `KISURF_AI_PROVIDER=stub` only when you deliberately want the
+offline deterministic provider.
+The `Anthropic-compatible` option is visible for future switching, but this
+developer-preview branch only implements OpenAI-compatible runtime calls.
+
+For offline deterministic testing:
+
+```powershell
+Set-Item Env:KISURF_AI_PROVIDER 'stub'
+```
+
+Launch one of the built editors:
+
+```powershell
+.\tools\run_from_build.ps1 -BuildDir .\out\build\x64-release -App pcbnew
+.\tools\run_from_build.ps1 -BuildDir .\out\build\x64-release -App eeschema
+```
+
+Do not launch the build-tree `.exe` files directly unless you have already
+synced runtime DLLs into the build tree. On Windows, direct double-click launch
+can fail with a missing `kicommon.dll` system-error dialog because sibling build
+directories are not on the process PATH. If you prefer direct executable launch,
+run `.\tools\post_build.ps1 -BuildDir .\out\build\x64-release -SyncBuildTree`
+after building to copy runtime DLLs into the build output directories.
+
+Open the Agent pane from `AI -> Agent`, type a request, and press Send. If no
+API key is saved in Model Settings, the Agent reports a configuration diagnostic
+instead of silently falling back to stub mode.
+
+## Verification
+
+The current branch has been checked with native common tests for provider
+configuration, Agent pane semantics, workspace/context tooling, observability,
+and editor target builds. The Agent pane also exposes a native semantic self-test
+surface so core controls and state can be verified without relying on external
+desktop automation.
+
+For the direct-use developer preview path, run:
+
+```powershell
+$build = Resolve-Path .\out\build\x64-release
+$env:KICAD_RUN_FROM_BUILD_DIR = '1'
+$env:PATH = @(
+    'D:\Tools\vcpkg\installed\x64-windows\bin',
+    "$build\kicad",
+    "$build\common",
+    "$build\api",
+    "$build\common\gal",
+    "$build\pcbnew",
+    "$build\eeschema",
+    "$build\cvpcb",
+    $env:PATH
+) -join ';'
+& "$build\qa\tests\common\qa_common.exe" --run_test=AiDirectUseSmoke
+```
+
+For GUI smoke, launch PCB Editor with `tools\run_from_build.ps1` and inspect the
+real desktop window. This branch has been checked by opening `AI -> Agent` from
+the build-tree PCB Editor and verifying that no missing-DLL/system-error modal is
+shown during launch.
 
 ## Relationship to KiCad
 

@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<wxFormBuilder_Project>
+  <FileVersion major="1" minor="18"/>
+  <object class="Project" expanded="true">
+    <property name="code_generation">C++</property>
+    <property name="cpp_class_decoration">KICOMMON_API; kicommon.h</property>
+    <property name="cpp_disconnect_events">1</property>
+    <property name="cpp_event_generation">connect</property>
+    <property name="cpp_help_provider">none</property>
+    <property name="cpp_namespace"></property>
+    <property name="cpp_precompiled_header"></property>
+    <property name="cpp_use_array_enum">0</property>
+    <property name="cpp_use_enum">0</property>
+    <property name="embedded_files_path">res</property>
+    <property name="encoding">UTF-8</property>
+    <property name="file">ai_agent_panel_base</property>
+    <property name="first_id">1000</property>
+    <property name="internationalize">1</property>
+    <property name="name">AI_AGENT_PANEL_BASE</property>
+    <property name="path">.</property>
+    <property name="relative_path">1</property>
+    <property name="use_microsoft_bom">0</property>
+    <property name="use_native_eol">0</property>
+    <object class="Panel" expanded="true">
+      <property name="event_handler">impl_virtual</property>
+      <property name="id">wxID_ANY</property>
+      <property name="minimum_size">360,420</property>
+      <property name="name">AI_AGENT_PANEL_BASE</property>
+      <property name="size">420,640</property>
+      <property name="window_style">wxTAB_TRAVERSAL</property>
+      <object class="wxBoxSizer" expanded="true">
+        <property name="name">m_RootSizer</property>
+        <property name="orient">wxVERTICAL</property>
+        <property name="permission">protected</property>
+        <object class="sizeritem" expanded="true">
+          <property name="border">6</property>
+          <property name="flag">wxEXPAND|wxALL</property>
+          <property name="proportion">0</property>
+          <object class="wxBoxSizer" expanded="true">
+            <property name="name">m_HeaderSizer</property>
+            <property name="orient">wxHORIZONTAL</property>
+            <property name="permission">protected</property>
+            <object class="sizeritem" expanded="true">
+              <property name="border">6</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL|wxRIGHT</property>
+              <property name="proportion">0</property>
+              <object class="wxButton" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">Model...</property>
+                <property name="name">m_ModelSettingsButton</property>
+                <property name="permission">protected</property>
+                <event name="OnButtonClick">OnModelSettings</event>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxCheckBox" expanded="true">
+                <property name="checked">0</property>
+                <property name="id">wxID_ANY</property>
+                <property name="label">Background Agent</property>
+                <property name="name">m_BackgroundAgentToggle</property>
+                <property name="permission">protected</property>
+                <event name="OnCheckBox">OnBackgroundAgentToggled</event>
+              </object>
+            </object>
+          </object>
+        </object>
+        <object class="sizeritem" expanded="true">
+          <property name="border">6</property>
+          <property name="flag">wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</property>
+          <property name="proportion">1</property>
+          <object class="wxNotebook" expanded="true">
+            <property name="id">wxID_ANY</property>
+            <property name="name">m_Notebook</property>
+            <property name="permission">protected</property>
+            <object class="notebookpage" expanded="true">
+              <property name="bitmap"></property>
+              <property name="label">Chat</property>
+              <property name="select">1</property>
+              <object class="wxPanel" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="name">m_ChatPage</property>
+                <property name="permission">protected</property>
+                <property name="window_style">wxTAB_TRAVERSAL</property>
+                <object class="wxBoxSizer" expanded="true">
+                  <property name="name">m_ChatSizer</property>
+                  <property name="orient">wxVERTICAL</property>
+                  <property name="permission">protected</property>
+                  <object class="sizeritem" expanded="true">
+                    <property name="border">8</property>
+                    <property name="flag">wxEXPAND|wxALL</property>
+                    <property name="proportion">1</property>
+                    <object class="wxHtmlWindow" expanded="true">
+                      <property name="id">wxID_ANY</property>
+                      <property name="name">m_Transcript</property>
+                      <property name="permission">protected</property>
+                      <property name="style">wxHW_SCROLLBAR_AUTO</property>
+                      <property name="subclass">HTML_WINDOW; widgets/html_window.h; </property>
+                    </object>
+                  </object>
+                </object>
+              </object>
+            </object>
+            <object class="notebookpage" expanded="true">
+              <property name="bitmap"></property>
+              <property name="label">Log</property>
+              <property name="select">0</property>
+              <object class="wxPanel" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="name">m_LogPage</property>
+                <property name="permission">protected</property>
+                <property name="window_style">wxTAB_TRAVERSAL</property>
+                <object class="wxBoxSizer" expanded="true">
+                  <property name="name">m_LogSizer</property>
+                  <property name="orient">wxVERTICAL</property>
+                  <property name="permission">protected</property>
+                  <object class="sizeritem" expanded="true">
+                    <property name="border">8</property>
+                    <property name="flag">wxEXPAND|wxALL</property>
+                    <property name="proportion">1</property>
+                    <object class="wxTextCtrl" expanded="true">
+                      <property name="id">wxID_ANY</property>
+                      <property name="name">m_Log</property>
+                      <property name="permission">protected</property>
+                      <property name="style">wxTE_MULTILINE|wxTE_READONLY|wxBORDER_NONE</property>
+                      <property name="value"></property>
+                    </object>
+                  </object>
+                </object>
+              </object>
+            </object>
+          </object>
+        </object>
+        <object class="sizeritem" expanded="true">
+          <property name="border">6</property>
+          <property name="flag">wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</property>
+          <property name="proportion">0</property>
+          <object class="wxPanel" expanded="true">
+            <property name="id">wxID_ANY</property>
+            <property name="minimum_size">-1,150</property>
+            <property name="name">m_ComposerPanel</property>
+            <property name="permission">protected</property>
+            <property name="window_style">wxTAB_TRAVERSAL|wxBORDER_SIMPLE</property>
+            <object class="wxBoxSizer" expanded="true">
+              <property name="name">m_ComposerSizer</property>
+              <property name="orient">wxVERTICAL</property>
+              <property name="permission">protected</property>
+              <object class="sizeritem" expanded="true">
+                <property name="border">6</property>
+                <property name="flag">wxEXPAND|wxLEFT|wxRIGHT|wxTOP</property>
+                <property name="proportion">1</property>
+                <object class="wxTextCtrl" expanded="true">
+                  <property name="id">wxID_ANY</property>
+                  <property name="minimum_size">-1,76</property>
+                  <property name="name">m_Input</property>
+                  <property name="permission">protected</property>
+                  <property name="style">wxTE_MULTILINE|wxTE_PROCESS_ENTER|wxBORDER_NONE</property>
+                  <property name="value"></property>
+                  <event name="OnText">OnPromptTextChanged</event>
+                  <event name="OnTextEnter">OnPromptEnter</event>
+                </object>
+              </object>
+              <object class="sizeritem" expanded="true">
+                <property name="border">6</property>
+                <property name="flag">wxEXPAND|wxALL</property>
+                <property name="proportion">0</property>
+                <object class="wxBoxSizer" expanded="true">
+                  <property name="name">m_ComposerFooterSizer</property>
+                  <property name="orient">wxVERTICAL</property>
+                  <property name="permission">protected</property>
+                  <object class="sizeritem" expanded="true">
+                    <property name="border">6</property>
+                    <property name="flag">wxEXPAND|wxBOTTOM</property>
+                    <property name="proportion">0</property>
+                    <object class="wxStaticText" expanded="true">
+                      <property name="id">wxID_ANY</property>
+                      <property name="label">Ready</property>
+                      <property name="name">m_ComposerStatus</property>
+                      <property name="permission">protected</property>
+                      <property name="wrap">-1</property>
+                    </object>
+                  </object>
+                  <object class="sizeritem" expanded="true">
+                    <property name="border">0</property>
+                    <property name="flag">wxALIGN_RIGHT</property>
+                    <property name="proportion">0</property>
+                    <object class="wxGridSizer" expanded="true">
+                      <property name="cols">3</property>
+                      <property name="hgap">4</property>
+                      <property name="minimum_size"></property>
+                      <property name="name">m_ComposerButtonSizer</property>
+                      <property name="permission">protected</property>
+                      <property name="rows">0</property>
+                      <property name="vgap">4</property>
+                      <object class="sizeritem" expanded="true">
+                        <property name="border">0</property>
+                        <property name="flag">wxEXPAND</property>
+                        <property name="proportion">0</property>
+                        <object class="wxButton" expanded="true">
+                          <property name="id">wxID_ANY</property>
+                          <property name="label">Show</property>
+                          <property name="name">m_PreviewButton</property>
+                          <property name="permission">protected</property>
+                          <event name="OnButtonClick">OnPreviewSuggestion</event>
+                        </object>
+                      </object>
+                      <object class="sizeritem" expanded="true">
+                        <property name="border">0</property>
+                        <property name="flag">wxEXPAND</property>
+                        <property name="proportion">0</property>
+                        <object class="wxButton" expanded="true">
+                          <property name="id">wxID_ANY</property>
+                          <property name="label">Accept</property>
+                          <property name="name">m_AcceptButton</property>
+                          <property name="permission">protected</property>
+                          <event name="OnButtonClick">OnAcceptSuggestion</event>
+                        </object>
+                      </object>
+                      <object class="sizeritem" expanded="true">
+                        <property name="border">0</property>
+                        <property name="flag">wxEXPAND</property>
+                        <property name="proportion">0</property>
+                        <object class="wxButton" expanded="true">
+                          <property name="id">wxID_ANY</property>
+                          <property name="label">Reject</property>
+                          <property name="name">m_RejectButton</property>
+                          <property name="permission">protected</property>
+                          <event name="OnButtonClick">OnRejectSuggestion</event>
+                        </object>
+                      </object>
+                      <object class="sizeritem" expanded="true">
+                        <property name="border">0</property>
+                        <property name="flag">wxEXPAND</property>
+                        <property name="proportion">0</property>
+                        <object class="wxButton" expanded="true">
+                          <property name="id">wxID_ANY</property>
+                          <property name="label">Send</property>
+                          <property name="name">m_SendButton</property>
+                          <property name="permission">protected</property>
+                          <event name="OnButtonClick">OnSend</event>
+                        </object>
+                      </object>
+                      <object class="sizeritem" expanded="true">
+                        <property name="border">0</property>
+                        <property name="flag">wxEXPAND</property>
+                        <property name="proportion">0</property>
+                        <object class="wxButton" expanded="true">
+                          <property name="id">wxID_ANY</property>
+                          <property name="label">Stop</property>
+                          <property name="name">m_StopButton</property>
+                          <property name="permission">protected</property>
+                          <event name="OnButtonClick">OnStop</event>
+                        </object>
+                      </object>
+                    </object>
+                  </object>
+                </object>
+              </object>
+            </object>
+          </object>
+        </object>
+      </object>
+    </object>
+  </object>
+</wxFormBuilder_Project>
