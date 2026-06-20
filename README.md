@@ -49,6 +49,39 @@ The ideal loop is:
 4. The engineer accepts it with one action.
 5. The schematic or PCB updates immediately.
 
+## Two Agent Workflows
+
+KiSurf has two separate AI workflows that share underlying editor context,
+preview, validation, and operation infrastructure, but serve different product
+roles.
+
+### Chat Agent
+
+The Chat Agent is the user-directed workflow. The engineer opens the Agent pane,
+describes a goal, and the model uses KiSurf tools to complete tasks ranging from
+small queries to multi-step PCB edits.
+
+This workflow is similar to using Codex for code, but the target environment is a
+schematic or PCB editor instead of a source tree. The Chat Agent can inspect the
+workspace, open an AI execution session, run Python-first cells, lower composite
+helpers into typed atomic operations, preview intermediate results, validate the
+session, roll back when needed, and submit the accepted journal as one undoable
+editor commit.
+
+### Next Action / Continue / Suggestion Agent
+
+The Next Action Agent is the ambient background workflow. It observes the
+engineer's live editor state and proposes the next useful action directly in the
+workspace, without requiring the engineer to start a chat.
+
+This agent is intended for low-friction assistance such as table completion,
+placement continuation, routing continuation, anchor-based route previews, and
+other contextual "continue from here" suggestions. Suggestions must be tied to
+the editor revision, selection, tool state, and viewport that produced them, so
+stale suggestions can be expired when the engineer moves on. The current branch
+implements the foundation for preview-only background suggestions; production
+quality autonomous placement and routing suggestions are still in progress.
+
 ## What AI-Native Means
 
 For KiSurf, "AI-native" means the AI is part of the editor's core workflow, not an
@@ -149,9 +182,9 @@ The project is at the beginning. A possible early roadmap:
 
 KiSurf is currently a developer-preview branch with a first AI-native workflow
 slice implemented. It is not a finished PCB layout/routing assistant yet, but
-the current branch can build PCB and schematic editors with an Agent pane,
-model-provider wiring, model tool interfaces, semantic panel state, and
-observability logs.
+the current branch can build PCB and schematic editors with the Chat Agent pane,
+model-provider wiring, model tool interfaces, semantic panel state, preview-only
+background suggestion plumbing, and observability logs.
 
 ## Direct Use Status
 
@@ -195,10 +228,11 @@ Currently implemented:
 - Model-originated `kisurf_run_action` calls are preview-first: allowed action
   requests create a pending preview suggestion, and the native action runner is
   invoked only after explicit user Accept.
-- Autonomous background suggestions are preview-only in the current session
-  runtime phase: generated edit objects are stripped, preview remains
-  available, and real board mutation must go through an accepted execution
-  session.
+- Next Action / Continue / Suggestion Agent plumbing for activity-triggered
+  background suggestions. In the current session runtime phase these autonomous
+  suggestions are preview-only: generated edit objects are stripped, preview
+  remains available, and real board mutation must go through an accepted
+  execution session.
 - Active-routing route-to-anchor previews can target a semantic anchor directly;
   if the model omits the start anchor, KiSurf uses the current
   `tool.routing.start` anchor from the routing context.
