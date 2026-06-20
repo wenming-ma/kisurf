@@ -1,0 +1,156 @@
+/*
+ * This program source code file is part of KiCad, a free EDA CAD application.
+ *
+ * Copyright The KiCad Developers, see AUTHORS.txt for contributors.
+ *
+ * This program is free software: you can redistribute it and/or modify it under
+ * the terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later version.
+ */
+
+syntax = "proto3";
+
+package kiapi.ai.session;
+
+message SessionContext
+{
+  uint64 id = 1;
+  string board_id = 2;
+  string base_hash = 3;
+  uint64 epoch = 4;
+}
+
+message Cell
+{
+  string id = 1;
+  string text = 2;
+}
+
+message SdkMetadata
+{
+  string name = 1;
+  string version = 2;
+  string protocol = 3;
+}
+
+enum OperationKind
+{
+  OPERATION_KIND_UNSPECIFIED = 0;
+
+  SESSION_CHECKPOINT = 1;
+  SESSION_ROLLBACK_TO = 2;
+
+  QUERY_BOARD_SUMMARY = 10;
+  QUERY_ITEMS = 11;
+  QUERY_ITEM = 12;
+  QUERY_SELECTION = 13;
+  QUERY_NETS = 14;
+  QUERY_LAYERS = 15;
+  QUERY_DESIGN_RULES = 16;
+  QUERY_VIEWPORT = 17;
+  QUERY_ACTIVITY_TIMELINE = 18;
+  RENDER_PREVIEW = 19;
+  OBSERVE_STEP = 20;
+
+  PCB_CREATE_VIA = 100;
+  PCB_CREATE_TRACK_SEGMENT = 101;
+  PCB_CREATE_TRACK_POLYLINE = 102;
+  PCB_CREATE_ZONE = 103;
+  PCB_CREATE_SHAPE = 104;
+  PCB_MOVE_ITEMS = 105;
+  PCB_DELETE_ITEMS = 106;
+  PCB_UPDATE_ITEM_GEOMETRY = 107;
+  PCB_SET_ITEM_NET = 108;
+  PCB_SET_ITEM_LAYER = 109;
+  PCB_SET_ITEM_PROPERTIES = 110;
+  PCB_SET_METADATA = 111;
+  PCB_REFILL_ZONES = 112;
+  PCB_REBUILD_CONNECTIVITY = 113;
+  PCB_RUN_VALIDATION = 114;
+}
+
+message OperationRequest
+{
+  OperationKind kind = 1;
+  string arguments_json = 2;
+}
+
+message WorkerEvent
+{
+  string kind = 1;
+  string message = 2;
+  string payload_json = 3;
+}
+
+message RunCellRequest
+{
+  SessionContext session = 1;
+  Cell cell = 2;
+}
+
+message CancelSessionRequest
+{
+  SessionContext session = 1;
+  string reason = 2;
+}
+
+message ShutdownRequest
+{
+}
+
+message WorkerRequest
+{
+  string protocol = 1;
+
+  oneof request
+  {
+    RunCellRequest run_cell = 2;
+    CancelSessionRequest cancel_session = 3;
+    ShutdownRequest shutdown = 4;
+  }
+}
+
+message CellResult
+{
+  bool ok = 1;
+  string error_code = 2;
+  string message = 3;
+  string stdout_text = 4;
+  string stderr_text = 5;
+  string step_label = 6;
+  bool rollback_on_error = 7;
+  SdkMetadata sdk = 8;
+  SessionContext session = 9;
+  repeated WorkerEvent events = 10;
+  repeated OperationRequest operations = 11;
+}
+
+message CancelSessionAck
+{
+  SessionContext session = 1;
+  string reason = 2;
+}
+
+message ShutdownAck
+{
+}
+
+message WorkerError
+{
+  string error_code = 1;
+  string message = 2;
+  bool rollback_on_error = 3;
+}
+
+message WorkerResponse
+{
+  string protocol = 1;
+
+  oneof response
+  {
+    CellResult cell_result = 2;
+    CancelSessionAck cancel_session_ack = 3;
+    ShutdownAck shutdown_ack = 4;
+    WorkerError error = 5;
+  }
+}

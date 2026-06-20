@@ -1,0 +1,181 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<wxFormBuilder_Project>
+  <FileVersion major="1" minor="18"/>
+  <object class="Project" expanded="true">
+    <property name="code_generation">C++</property>
+    <property name="cpp_class_decoration">KICOMMON_API; kicommon.h</property>
+    <property name="cpp_disconnect_events">1</property>
+    <property name="cpp_event_generation">connect</property>
+    <property name="cpp_help_provider">none</property>
+    <property name="cpp_namespace"></property>
+    <property name="cpp_precompiled_header"></property>
+    <property name="cpp_use_array_enum">0</property>
+    <property name="cpp_use_enum">0</property>
+    <property name="embedded_files_path">res</property>
+    <property name="encoding">UTF-8</property>
+    <property name="file">ai_model_settings_dialog_base</property>
+    <property name="first_id">1000</property>
+    <property name="internationalize">1</property>
+    <property name="name">AI_MODEL_SETTINGS_DIALOG_BASE</property>
+    <property name="path">.</property>
+    <property name="relative_path">1</property>
+    <property name="use_microsoft_bom">0</property>
+    <property name="use_native_eol">0</property>
+    <object class="Dialog" expanded="true">
+      <property name="center">wxBOTH</property>
+      <property name="event_handler">impl_virtual</property>
+      <property name="id">wxID_ANY</property>
+      <property name="minimum_size">520,-1</property>
+      <property name="name">AI_MODEL_SETTINGS_DIALOG_BASE</property>
+      <property name="size">560,-1</property>
+      <property name="style">wxDEFAULT_DIALOG_STYLE|wxRESIZE_BORDER</property>
+      <property name="title">Model Settings</property>
+      <object class="wxBoxSizer" expanded="true">
+        <property name="name">m_RootSizer</property>
+        <property name="orient">wxVERTICAL</property>
+        <property name="permission">protected</property>
+        <object class="sizeritem" expanded="true">
+          <property name="border">12</property>
+          <property name="flag">wxEXPAND|wxALL</property>
+          <property name="proportion">1</property>
+          <object class="wxFlexGridSizer" expanded="true">
+            <property name="cols">2</property>
+            <property name="flexible_direction">wxBOTH</property>
+            <property name="growablecols">1</property>
+            <property name="hgap">8</property>
+            <property name="name">m_FormSizer</property>
+            <property name="non_flexible_grow_mode">wxFLEX_GROWMODE_SPECIFIED</property>
+            <property name="permission">protected</property>
+            <property name="rows">0</property>
+            <property name="vgap">8</property>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxStaticText" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">Provider</property>
+                <property name="name">m_ProviderLabel</property>
+                <property name="permission">protected</property>
+                <property name="wrap">-1</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxEXPAND</property>
+              <property name="proportion">0</property>
+              <object class="wxChoice" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="name">m_ProviderChoice</property>
+                <property name="permission">protected</property>
+                <property name="selection">0</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxStaticText" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">Base URL</property>
+                <property name="name">m_BaseUrlLabel</property>
+                <property name="permission">protected</property>
+                <property name="wrap">-1</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxEXPAND</property>
+              <property name="proportion">0</property>
+              <object class="wxTextCtrl" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="minimum_size">360,-1</property>
+                <property name="name">m_BaseUrl</property>
+                <property name="permission">protected</property>
+                <property name="style"></property>
+                <property name="value"></property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxStaticText" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">Model</property>
+                <property name="name">m_ModelLabel</property>
+                <property name="permission">protected</property>
+                <property name="wrap">-1</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxEXPAND</property>
+              <property name="proportion">0</property>
+              <object class="wxTextCtrl" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="name">m_Model</property>
+                <property name="permission">protected</property>
+                <property name="style"></property>
+                <property name="value"></property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxStaticText" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">API key</property>
+                <property name="name">m_ApiKeyLabel</property>
+                <property name="permission">protected</property>
+                <property name="wrap">-1</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxEXPAND</property>
+              <property name="proportion">0</property>
+              <object class="wxTextCtrl" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="name">m_ApiKey</property>
+                <property name="permission">protected</property>
+                <property name="style">wxTE_PASSWORD</property>
+                <property name="value"></property>
+              </object>
+            </object>
+          </object>
+        </object>
+        <object class="sizeritem" expanded="true">
+          <property name="border">12</property>
+          <property name="flag">wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</property>
+          <property name="proportion">0</property>
+          <object class="wxStaticText" expanded="true">
+            <property name="id">wxID_ANY</property>
+            <property name="label">Keys are stored locally. Changes apply to the next Agent request.</property>
+            <property name="name">m_HelpText</property>
+            <property name="permission">protected</property>
+            <property name="wrap">480</property>
+          </object>
+        </object>
+        <object class="sizeritem" expanded="true">
+          <property name="border">12</property>
+          <property name="flag">wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM</property>
+          <property name="proportion">0</property>
+          <object class="wxStdDialogButtonSizer" expanded="true">
+            <property name="Apply">0</property>
+            <property name="Cancel">1</property>
+            <property name="ContextHelp">0</property>
+            <property name="Help">0</property>
+            <property name="No">0</property>
+            <property name="OK">1</property>
+            <property name="Save">0</property>
+            <property name="Yes">0</property>
+            <property name="name">m_StdDialogButtons</property>
+            <property name="permission">protected</property>
+          </object>
+        </object>
+      </object>
+    </object>
+  </object>
+</wxFormBuilder_Project>

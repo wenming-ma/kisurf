@@ -1,0 +1,899 @@
+#include <boost/test/unit_test.hpp>
+#include <json_common.h>
+
+#include <kisurf_ai_pcb_context_adapter.h>
+
+#include <board.h>
+#include <footprint.h>
+#include <netinfo.h>
+#include <pad.h>
+#include <pcb_barcode.h>
+#include <pcb_dimension.h>
+#include <pcb_field.h>
+#include <pcb_shape.h>
+#include <pcb_table.h>
+#include <pcb_tablecell.h>
+#include <pcb_target.h>
+#include <pcb_text.h>
+#include <pcb_textbox.h>
+#include <pcb_track.h>
+#include <zone.h>
+
+namespace
+{
+const AI_OBJECT_REF* findRefByLabel( const std::vector<AI_OBJECT_REF>& aRefs,
+                                     const wxString& aLabel )
+{
+    for( const AI_OBJECT_REF& ref : aRefs )
+    {
+        if( ref.m_Label == aLabel )
+            return &ref;
+    }
+
+    return nullptr;
+}
+
+
+const AI_CONTEXT_ANCHOR* findAnchorById( const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
+                                         const wxString& aId )
+{
+    for( const AI_CONTEXT_ANCHOR& anchor : aAnchors )
+    {
+        if( anchor.m_Id == aId )
+            return &anchor;
+    }
+
+    return nullptr;
+}
+
+
+nlohmann::json anchorDetails( const AI_CONTEXT_ANCHOR& aAnchor )
+{
+    BOOST_REQUIRE( !aAnchor.m_DetailsJson.IsEmpty() );
+    return nlohmann::json::parse( aAnchor.m_DetailsJson.ToStdString() );
+}
+
+
+wxString anchorId( const wxString& aPrefix, const KIID& aUuid, const wxString& aRole )
+{
+    return wxS( "pcb." ) + aPrefix + wxS( "." ) + aUuid.AsString() + wxS( "." ) + aRole;
+}
+
+
+nlohmann::json detailsForLabel( const std::vector<AI_OBJECT_REF>& aRefs,
+                                const wxString& aLabel )
+{
+    const AI_OBJECT_REF* ref = findRefByLabel( aRefs, aLabel );
+
+    BOOST_REQUIRE( ref );
+    BOOST_REQUIRE( !ref->m_DetailsJson.IsEmpty() );
+
+    return nlohmann::json::parse( ref->m_DetailsJson.ToStdString() );
+}
+
+void appendRectangle( ZONE& aZone )
+{
+    aZone.AppendCorner( VECTOR2I( 0, 0 ), -1 );
+    aZone.AppendCorner( VECTOR2I( 1000, 0 ), -1 );
+    aZone.AppendCorner( VECTOR2I( 1000, 500 ), -1 );
+    aZone.AppendCorner( VECTOR2I( 0, 500 ), -1 );
+}
+} // namespace
+
+BOOST_AUTO_TEST_SUITE( AiPcbContextAdapter )
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsFootprintsAndPadsAsVisibleObjects )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    PAD*       pad = new PAD( footprint );
+
+    pad->SetNumber( wxS( "1" ) );
+    footprint->SetReference( wxS( "U1" ) );
+    footprint->Add( pad );
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    BOOST_CHECK( index.EditorKind() == AI_EDITOR_KIND::Pcb );
+    BOOST_CHECK( index.Version().IsValid() );
+    BOOST_REQUIRE_GE( index.VisibleObjects().size(), 2 );
+
+    const AI_OBJECT_REF* footprintRef = findRefByLabel( index.VisibleObjects(), wxS( "U1" ) );
+    const AI_OBJECT_REF* padRef = findRefByLabel( index.VisibleObjects(), wxS( "U1.1" ) );
+
+    BOOST_REQUIRE( footprintRef );
+    BOOST_REQUIRE( padRef );
+    BOOST_CHECK( footprintRef->m_Uuid == footprint->m_Uuid );
+    BOOST_CHECK_EQUAL( footprintRef->m_Type, PCB_FOOTPRINT_T );
+    BOOST_CHECK( padRef->m_Uuid == pad->m_Uuid );
+    BOOST_CHECK_EQUAL( padRef->m_Type, PCB_PAD_T );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsFootprintFieldsAsVisibleObjects )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+    footprint->SetValue( wxS( "MCU" ) );
+
+    PCB_FIELD* reference = footprint->GetField( FIELD_T::REFERENCE );
+    BOOST_REQUIRE( reference );
+    reference->SetPosition( VECTOR2I( 100, 200 ) );
+    reference->SetLayer( F_SilkS );
+    reference->SetTextSize( VECTOR2I( 1200, 900 ) );
+    reference->SetSelected();
+
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* ref =
+            findRefByLabel( index.VisibleObjects(), wxS( "fp:U1/field:Reference" ) );
+
+    BOOST_REQUIRE( ref );
+    BOOST_CHECK( ref->m_Uuid == reference->m_Uuid );
+    BOOST_CHECK_EQUAL( ref->m_Type, PCB_FIELD_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "fp:U1/field:Reference" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "fp:U1/field:Reference" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "field" );
+    BOOST_CHECK_EQUAL( details["text"].get<std::string>(), "U1" );
+    BOOST_CHECK_EQUAL( details["shown_text"].get<std::string>(), "U1" );
+    BOOST_CHECK_EQUAL( details["parent_footprint_reference"].get<std::string>(), "U1" );
+    BOOST_CHECK( !details["parent_footprint_uuid"].get<std::string>().empty() );
+    BOOST_CHECK_EQUAL( details["field_name"].get<std::string>(), "Reference" );
+    BOOST_CHECK_EQUAL( details["field_canonical_name"].get<std::string>(), "Reference" );
+    BOOST_CHECK_EQUAL( details["is_reference"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["is_value"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["position"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( details["layer"].get<std::string>(), "F.Silkscreen" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsFootprintGraphicalItemsAsVisibleObjects )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+
+    PCB_SHAPE* silkLine = new PCB_SHAPE( footprint );
+    silkLine->SetShape( SHAPE_T::SEGMENT );
+    silkLine->SetStart( VECTOR2I( 0, 0 ) );
+    silkLine->SetEnd( VECTOR2I( 1000, 0 ) );
+    silkLine->SetLayer( F_SilkS );
+    silkLine->SetWidth( 100 );
+    silkLine->SetSelected();
+    footprint->Add( silkLine );
+
+    PCB_TEXT* pinOne = new PCB_TEXT( footprint );
+    pinOne->SetText( wxS( "PIN 1" ) );
+    pinOne->SetPosition( VECTOR2I( 50, 75 ) );
+    pinOne->SetLayer( F_Fab );
+    pinOne->SetTextSize( VECTOR2I( 500, 500 ) );
+    pinOne->SetSelected();
+    footprint->Add( pinOne );
+
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* shapeRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "fp:U1/shape:segment:0,0->1000,0" ) );
+    const AI_OBJECT_REF* textRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "fp:U1/text:PIN 1" ) );
+
+    BOOST_REQUIRE( shapeRef );
+    BOOST_REQUIRE( textRef );
+    BOOST_CHECK_EQUAL( shapeRef->m_Type, PCB_SHAPE_T );
+    BOOST_CHECK_EQUAL( textRef->m_Type, PCB_TEXT_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(),
+                                 wxS( "fp:U1/shape:segment:0,0->1000,0" ) ) );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "fp:U1/text:PIN 1" ) ) );
+
+    nlohmann::json shapeDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "fp:U1/shape:segment:0,0->1000,0" ) );
+    BOOST_CHECK_EQUAL( shapeDetails["kind"].get<std::string>(), "shape" );
+    BOOST_CHECK_EQUAL( shapeDetails["parent_footprint_reference"].get<std::string>(), "U1" );
+    BOOST_CHECK_EQUAL( shapeDetails["layer"].get<std::string>(), "F.Silkscreen" );
+
+    nlohmann::json textDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "fp:U1/text:PIN 1" ) );
+    BOOST_CHECK_EQUAL( textDetails["kind"].get<std::string>(), "text" );
+    BOOST_CHECK_EQUAL( textDetails["parent_footprint_reference"].get<std::string>(), "U1" );
+    BOOST_CHECK_EQUAL( textDetails["text"].get<std::string>(), "PIN 1" );
+    BOOST_CHECK_EQUAL( textDetails["layer"].get<std::string>(), "F.Fab" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsSelectedPads )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    PAD*       pad = new PAD( footprint );
+
+    pad->SetNumber( wxS( "2" ) );
+    pad->SetSelected();
+    footprint->SetReference( wxS( "J1" ) );
+    footprint->Add( pad );
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    BOOST_REQUIRE_EQUAL( index.SelectedObjects().size(), 1 );
+    BOOST_CHECK( index.SelectedObjects().front().m_Uuid == pad->m_Uuid );
+    BOOST_CHECK_EQUAL( index.SelectedObjects().front().m_Label, wxString( wxS( "J1.2" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsSelectedFootprints )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    PAD*       pad = new PAD( footprint );
+
+    pad->SetNumber( wxS( "1" ) );
+    footprint->SetReference( wxS( "U2" ) );
+    footprint->SetSelected();
+    footprint->Add( pad );
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    BOOST_REQUIRE_EQUAL( index.SelectedObjects().size(), 1 );
+    BOOST_CHECK( index.SelectedObjects().front().m_Uuid == footprint->m_Uuid );
+    BOOST_CHECK_EQUAL( index.SelectedObjects().front().m_Type, PCB_FOOTPRINT_T );
+    BOOST_CHECK_EQUAL( index.SelectedObjects().front().m_Label, wxString( wxS( "U2" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsTracksAndViasAsRoutingObjects )
+{
+    BOARD board;
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 100, 200 ) );
+    track->SetSelected();
+    board.Add( track );
+
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 300, 400 ) );
+    via->SetSelected();
+    board.Add( via );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* trackRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "track:0,0->100,200" ) );
+    const AI_OBJECT_REF* viaRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "via:300,400" ) );
+
+    BOOST_REQUIRE( trackRef );
+    BOOST_REQUIRE( viaRef );
+    BOOST_CHECK( trackRef->m_Uuid == track->m_Uuid );
+    BOOST_CHECK_EQUAL( trackRef->m_Type, PCB_TRACE_T );
+    BOOST_CHECK( viaRef->m_Uuid == via->m_Uuid );
+    BOOST_CHECK_EQUAL( viaRef->m_Type, PCB_VIA_T );
+    BOOST_REQUIRE_EQUAL( index.SelectedObjects().size(), 2 );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "track:0,0->100,200" ) ) );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "via:300,400" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsArcsAsRoutingObjects )
+{
+    BOARD board;
+
+    PCB_ARC* arc = new PCB_ARC( &board );
+    arc->SetStart( VECTOR2I( 0, 0 ) );
+    arc->SetMid( VECTOR2I( 50, 100 ) );
+    arc->SetEnd( VECTOR2I( 100, 0 ) );
+    arc->SetSelected();
+    board.Add( arc );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* arcRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "arc:0,0->50,100->100,0" ) );
+
+    BOOST_REQUIRE( arcRef );
+    BOOST_CHECK( arcRef->m_Uuid == arc->m_Uuid );
+    BOOST_CHECK_EQUAL( arcRef->m_Type, PCB_ARC_T );
+    BOOST_REQUIRE_EQUAL( index.SelectedObjects().size(), 1 );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "arc:0,0->50,100->100,0" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsDrawingShapesAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_SHAPE* edge = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+    edge->SetStart( VECTOR2I( 0, 0 ) );
+    edge->SetEnd( VECTOR2I( 1000, 0 ) );
+    edge->SetLayer( Edge_Cuts );
+    edge->SetWidth( 50 );
+    edge->SetSelected();
+    board.Add( edge );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* edgeRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "edge:0,0->1000,0" ) );
+
+    BOOST_REQUIRE( edgeRef );
+    BOOST_CHECK( edgeRef->m_Uuid == edge->m_Uuid );
+    BOOST_CHECK_EQUAL( edgeRef->m_Type, PCB_SHAPE_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "edge:0,0->1000,0" ) ) );
+
+    nlohmann::json edgeDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "edge:0,0->1000,0" ) );
+    BOOST_CHECK_EQUAL( edgeDetails["kind"].get<std::string>(), "shape" );
+    BOOST_CHECK_EQUAL( edgeDetails["shape"].get<std::string>(), "segment" );
+    BOOST_CHECK_EQUAL( edgeDetails["layer"].get<std::string>(), "Edge.Cuts" );
+    BOOST_CHECK_EQUAL( edgeDetails["width"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( edgeDetails["start"]["x"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( edgeDetails["end"]["x"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( edgeDetails["net_code"].get<int>(), NETINFO_LIST::UNCONNECTED );
+    BOOST_CHECK_EQUAL( edgeDetails["net_name"].get<std::string>(), "" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsBoardTextAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_TEXT* text = new PCB_TEXT( &board );
+    text->SetText( wxS( "JTAG HEADER" ) );
+    text->SetPosition( VECTOR2I( 100, 200 ) );
+    text->SetLayer( F_SilkS );
+    text->SetTextSize( VECTOR2I( 1200, 900 ) );
+    text->SetTextAngle( EDA_ANGLE( 90, DEGREES_T ) );
+    text->SetBold( true );
+    text->SetSelected();
+    board.Add( text );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* textRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "text:JTAG HEADER" ) );
+
+    BOOST_REQUIRE( textRef );
+    BOOST_CHECK( textRef->m_Uuid == text->m_Uuid );
+    BOOST_CHECK_EQUAL( textRef->m_Type, PCB_TEXT_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "text:JTAG HEADER" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "text:JTAG HEADER" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "text" );
+    BOOST_CHECK_EQUAL( details["text"].get<std::string>(), "JTAG HEADER" );
+    BOOST_CHECK_EQUAL( details["shown_text"].get<std::string>(), "JTAG HEADER" );
+    BOOST_CHECK_EQUAL( details["position"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( details["size"]["x"].get<int>(), 1200 );
+    BOOST_CHECK_EQUAL( details["layer"].get<std::string>(), "F.Silkscreen" );
+    BOOST_CHECK_EQUAL( details["angle_degrees"].get<int>(), 90 );
+    BOOST_CHECK_EQUAL( details["visible"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["mirrored"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["bold"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["italic"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["h_justify"].get<std::string>(), "center" );
+    BOOST_CHECK_EQUAL( details["v_justify"].get<std::string>(), "center" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsBoardTextboxesAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_TEXTBOX* textbox = new PCB_TEXTBOX( &board );
+    textbox->SetText( wxS( "Assembly note" ) );
+    textbox->SetStart( VECTOR2I( 0, 0 ) );
+    textbox->SetEnd( VECTOR2I( 200000, 1000 ) );
+    textbox->SetLayer( Cmts_User );
+    textbox->SetTextSize( VECTOR2I( 1000, 500 ) );
+    textbox->SetHorizJustify( GR_TEXT_H_ALIGN_LEFT );
+    textbox->SetVertJustify( GR_TEXT_V_ALIGN_TOP );
+    textbox->SetBorderEnabled( true );
+    textbox->SetBorderWidth( 100 );
+    textbox->SetSelected();
+    board.Add( textbox );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* textboxRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "textbox:Assembly note" ) );
+
+    BOOST_REQUIRE( textboxRef );
+    BOOST_CHECK( textboxRef->m_Uuid == textbox->m_Uuid );
+    BOOST_CHECK_EQUAL( textboxRef->m_Type, PCB_TEXTBOX_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "textbox:Assembly note" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "textbox:Assembly note" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "textbox" );
+    BOOST_CHECK_EQUAL( details["text"].get<std::string>(), "Assembly note" );
+    BOOST_CHECK_EQUAL( details["shown_text"].get<std::string>(), "Assembly\nnote" );
+    BOOST_CHECK_EQUAL( details["layer"].get<std::string>(), "User.Comments" );
+    BOOST_CHECK_EQUAL( details["start"]["x"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( details["end"]["x"].get<int>(), 200000 );
+    BOOST_CHECK_EQUAL( details["border_enabled"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["border_width"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( details["h_justify"].get<std::string>(), "left" );
+    BOOST_CHECK_EQUAL( details["v_justify"].get<std::string>(), "top" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsBoardTargetsAndBarcodesAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_TARGET* target = new PCB_TARGET( &board, 0, Dwgs_User, VECTOR2I( 100, 200 ),
+                                         1000, 100 );
+    target->SetSelected();
+    board.Add( target );
+
+    PCB_BARCODE* barcode = new PCB_BARCODE( &board );
+    barcode->SetText( wxS( "SN-001" ) );
+    barcode->SetKind( BARCODE_T::QR_CODE );
+    barcode->SetPosition( VECTOR2I( 300, 400 ) );
+    barcode->SetLayer( F_SilkS );
+    barcode->SetWidth( 2000 );
+    barcode->SetHeight( 2000 );
+    barcode->SetShowText( true );
+    barcode->SetSelected();
+    board.Add( barcode );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* targetRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "target:100,200" ) );
+    const AI_OBJECT_REF* barcodeRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "barcode:SN-001" ) );
+
+    BOOST_REQUIRE( targetRef );
+    BOOST_REQUIRE( barcodeRef );
+    BOOST_CHECK_EQUAL( targetRef->m_Type, PCB_TARGET_T );
+    BOOST_CHECK_EQUAL( barcodeRef->m_Type, PCB_BARCODE_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "target:100,200" ) ) );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "barcode:SN-001" ) ) );
+
+    nlohmann::json targetDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "target:100,200" ) );
+    BOOST_CHECK_EQUAL( targetDetails["kind"].get<std::string>(), "target" );
+    BOOST_CHECK_EQUAL( targetDetails["position"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( targetDetails["layer"].get<std::string>(), "User.Drawings" );
+
+    nlohmann::json barcodeDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "barcode:SN-001" ) );
+    BOOST_CHECK_EQUAL( barcodeDetails["kind"].get<std::string>(), "barcode" );
+    BOOST_CHECK_EQUAL( barcodeDetails["text"].get<std::string>(), "SN-001" );
+    BOOST_CHECK_EQUAL( barcodeDetails["barcode_kind"].get<std::string>(), "qr_code" );
+    BOOST_CHECK_EQUAL( barcodeDetails["layer"].get<std::string>(), "F.Silkscreen" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsBoardTablesAndCellsAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_TABLE* table = new PCB_TABLE( &board, 100 );
+    table->SetPosition( VECTOR2I( 0, 0 ) );
+    table->SetLayer( Cmts_User );
+    table->SetColCount( 2 );
+
+    PCB_TABLECELL* firstCell = new PCB_TABLECELL( table );
+    firstCell->SetText( wxS( "Part" ) );
+    firstCell->SetStart( VECTOR2I( 0, 0 ) );
+    firstCell->SetEnd( VECTOR2I( 1000, 500 ) );
+    firstCell->SetSelected();
+    table->AddCell( firstCell );
+
+    PCB_TABLECELL* secondCell = new PCB_TABLECELL( table );
+    secondCell->SetText( wxS( "Qty" ) );
+    secondCell->SetStart( VECTOR2I( 1000, 0 ) );
+    secondCell->SetEnd( VECTOR2I( 2000, 500 ) );
+    table->AddCell( secondCell );
+
+    table->SetSelected();
+    board.Add( table );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* tableRef = findRefByLabel( index.VisibleObjects(), wxS( "table:0,0" ) );
+    const AI_OBJECT_REF* cellRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "table-cell:A1" ) );
+
+    BOOST_REQUIRE( tableRef );
+    BOOST_REQUIRE( cellRef );
+    BOOST_CHECK_EQUAL( tableRef->m_Type, PCB_TABLE_T );
+    BOOST_CHECK_EQUAL( cellRef->m_Type, PCB_TABLECELL_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "table:0,0" ) ) );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "table-cell:A1" ) ) );
+
+    nlohmann::json tableDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "table:0,0" ) );
+    BOOST_CHECK_EQUAL( tableDetails["kind"].get<std::string>(), "table" );
+    BOOST_CHECK_EQUAL( tableDetails["columns"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( tableDetails["rows"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( tableDetails["cell_count"].get<int>(), 2 );
+
+    nlohmann::json cellDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "table-cell:A1" ) );
+    BOOST_CHECK_EQUAL( cellDetails["kind"].get<std::string>(), "table_cell" );
+    BOOST_CHECK_EQUAL( cellDetails["text"].get<std::string>(), "Part" );
+    BOOST_CHECK_EQUAL( cellDetails["address"].get<std::string>(), "A1" );
+    BOOST_CHECK( !cellDetails["parent_table_uuid"].get<std::string>().empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsBoardDimensionsAsVisibleObjects )
+{
+    BOARD board;
+
+    PCB_DIM_ALIGNED* dimension = new PCB_DIM_ALIGNED( &board );
+    dimension->SetStart( VECTOR2I( 0, 0 ) );
+    dimension->SetEnd( VECTOR2I( 1000, 0 ) );
+    dimension->SetHeight( 500 );
+    dimension->SetLayer( Dwgs_User );
+    dimension->SetLineThickness( 100 );
+    dimension->SetSelected();
+    dimension->Update();
+    board.Add( dimension );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* ref =
+            findRefByLabel( index.VisibleObjects(), wxS( "dimension:0,0->1000,0" ) );
+
+    BOOST_REQUIRE( ref );
+    BOOST_CHECK( ref->m_Uuid == dimension->m_Uuid );
+    BOOST_CHECK_EQUAL( ref->m_Type, PCB_DIM_ALIGNED_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "dimension:0,0->1000,0" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "dimension:0,0->1000,0" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "dimension" );
+    BOOST_CHECK_EQUAL( details["dimension_type"].get<std::string>(), "aligned" );
+    BOOST_CHECK_EQUAL( details["start"]["x"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( details["end"]["x"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( details["layer"].get<std::string>(), "User.Drawings" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsZonesAsVisibleObjects )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/GND" ), 1 ) );
+
+    ZONE* zone = new ZONE( &board );
+    zone->SetZoneName( wxS( "GND_POUR" ) );
+    zone->SetLayerSet( LSET( { F_Cu } ) );
+    zone->SetNetCode( 1 );
+    zone->SetAssignedPriority( 2 );
+    zone->SetSelected();
+    appendRectangle( *zone );
+    board.Add( zone );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* zoneRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "zone:GND_POUR" ) );
+
+    BOOST_REQUIRE( zoneRef );
+    BOOST_CHECK( zoneRef->m_Uuid == zone->m_Uuid );
+    BOOST_CHECK_EQUAL( zoneRef->m_Type, PCB_ZONE_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "zone:GND_POUR" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "zone:GND_POUR" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "zone" );
+    BOOST_CHECK_EQUAL( details["zone_kind"].get<std::string>(), "copper" );
+    BOOST_CHECK_EQUAL( details["name"].get<std::string>(), "GND_POUR" );
+    BOOST_CHECK_EQUAL( details["layers"][0].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( details["first_layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( details["corner_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( details["position"]["x"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( details["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( details["net_name"].get<std::string>(), "/GND" );
+    BOOST_CHECK_EQUAL( details["priority"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( details["is_rule_area"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["has_keepout"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
+{
+    BOARD board;
+
+    ZONE* keepout = new ZONE( &board );
+    keepout->SetZoneName( wxS( "NO_ROUTING" ) );
+    keepout->SetIsRuleArea( true );
+    keepout->SetLayerSet( LSET( { F_Cu, B_Cu } ) );
+    keepout->SetDoNotAllowTracks( true );
+    keepout->SetDoNotAllowVias( true );
+    keepout->SetDoNotAllowPads( false );
+    keepout->SetDoNotAllowFootprints( false );
+    keepout->SetDoNotAllowZoneFills( false );
+    keepout->SetSelected();
+    appendRectangle( *keepout );
+    board.Add( keepout );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const AI_OBJECT_REF* keepoutRef =
+            findRefByLabel( index.VisibleObjects(), wxS( "keepout:NO_ROUTING" ) );
+
+    BOOST_REQUIRE( keepoutRef );
+    BOOST_CHECK( keepoutRef->m_Uuid == keepout->m_Uuid );
+    BOOST_CHECK_EQUAL( keepoutRef->m_Type, PCB_ZONE_T );
+    BOOST_CHECK( findRefByLabel( index.SelectedObjects(), wxS( "keepout:NO_ROUTING" ) ) );
+
+    nlohmann::json details =
+            detailsForLabel( index.VisibleObjects(), wxS( "keepout:NO_ROUTING" ) );
+    BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "zone" );
+    BOOST_CHECK_EQUAL( details["zone_kind"].get<std::string>(), "keepout" );
+    BOOST_CHECK_EQUAL( details["name"].get<std::string>(), "NO_ROUTING" );
+    BOOST_CHECK_EQUAL( details["is_rule_area"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["has_keepout"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["keepout"]["tracks"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["keepout"]["vias"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( details["keepout"]["pads"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["keepout"]["footprints"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( details["keepout"]["zone_fills"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToRoutingObjects )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/CLK" ), 1 ) );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 100, 200 ) );
+    track->SetLayer( F_Cu );
+    track->SetWidth( 250 );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    PCB_ARC* arc = new PCB_ARC( &board );
+    arc->SetStart( VECTOR2I( 10, 20 ) );
+    arc->SetMid( VECTOR2I( 50, 90 ) );
+    arc->SetEnd( VECTOR2I( 90, 20 ) );
+    arc->SetLayer( B_Cu );
+    arc->SetWidth( 300 );
+    arc->SetNetCode( 1 );
+    board.Add( arc );
+
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 300, 400 ) );
+    via->SetWidth( 600 );
+    via->SetNetCode( 1 );
+    board.Add( via );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    nlohmann::json trackDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "track:0,0->100,200" ) );
+    BOOST_CHECK_EQUAL( trackDetails["kind"].get<std::string>(), "track" );
+    BOOST_CHECK_EQUAL( trackDetails["start"]["x"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( trackDetails["end"]["y"].get<int>(), 200 );
+    BOOST_CHECK_EQUAL( trackDetails["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( trackDetails["width"].get<int>(), 250 );
+    BOOST_CHECK_EQUAL( trackDetails["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( trackDetails["net_name"].get<std::string>(), "/CLK" );
+
+    nlohmann::json arcDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "arc:10,20->50,90->90,20" ) );
+    BOOST_CHECK_EQUAL( arcDetails["kind"].get<std::string>(), "arc" );
+    BOOST_CHECK_EQUAL( arcDetails["mid"]["x"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( arcDetails["layer"].get<std::string>(), "B.Cu" );
+    BOOST_CHECK_EQUAL( arcDetails["width"].get<int>(), 300 );
+
+    nlohmann::json viaDetails =
+            detailsForLabel( index.VisibleObjects(), wxS( "via:300,400" ) );
+    BOOST_CHECK_EQUAL( viaDetails["kind"].get<std::string>(), "via" );
+    BOOST_CHECK_EQUAL( viaDetails["position"]["x"].get<int>(), 300 );
+    BOOST_CHECK_EQUAL( viaDetails["diameter"].get<int>(), 600 );
+    BOOST_CHECK_EQUAL( viaDetails["net_name"].get<std::string>(), "/CLK" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToFootprintsAndPads )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/GPIO" ), 1 ) );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U3" ) );
+    footprint->SetValue( wxS( "MCU" ) );
+    footprint->SetFPID( LIB_ID( wxS( "Package_QFP" ), wxS( "TQFP-32_7x7mm_P0.8mm" ) ) );
+    footprint->SetPosition( VECTOR2I( 1000, 2000 ) );
+    footprint->SetOrientation( EDA_ANGLE( 45.0, DEGREES_T ) );
+    footprint->SetLayer( F_Cu );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "7" ) );
+    pad->SetPosition( VECTOR2I( 1200, 2300 ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 300, 500 ) );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
+    pad->SetDrillSize( VECTOR2I( 80, 90 ) );
+    pad->SetOrientation( EDA_ANGLE( 90.0, DEGREES_T ) );
+    pad->SetLayerSet( PAD::SMDMask() );
+    pad->SetNetCode( 1 );
+    footprint->Add( pad );
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    nlohmann::json footprintDetails = detailsForLabel( index.VisibleObjects(), wxS( "U3" ) );
+    BOOST_CHECK_EQUAL( footprintDetails["kind"].get<std::string>(), "footprint" );
+    BOOST_CHECK_EQUAL( footprintDetails["reference"].get<std::string>(), "U3" );
+    BOOST_CHECK_EQUAL( footprintDetails["value"].get<std::string>(), "MCU" );
+    BOOST_CHECK_EQUAL( footprintDetails["footprint_id"].get<std::string>(),
+                       "Package_QFP:TQFP-32_7x7mm_P0.8mm" );
+    BOOST_CHECK_EQUAL( footprintDetails["position"]["x"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( footprintDetails["position"]["y"].get<int>(), 2000 );
+    BOOST_CHECK_EQUAL( footprintDetails["orientation_degrees"].get<double>(), 45.0 );
+    BOOST_CHECK_EQUAL( footprintDetails["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( footprintDetails["pad_count"].get<int>(), 1 );
+
+    nlohmann::json padDetails = detailsForLabel( index.VisibleObjects(), wxS( "U3.7" ) );
+    BOOST_CHECK_EQUAL( padDetails["kind"].get<std::string>(), "pad" );
+    BOOST_CHECK_EQUAL( padDetails["footprint_reference"].get<std::string>(), "U3" );
+    BOOST_CHECK_EQUAL( padDetails["number"].get<std::string>(), "7" );
+    BOOST_CHECK_EQUAL( padDetails["position"]["x"].get<int>(), 1200 );
+    BOOST_CHECK_EQUAL( padDetails["size"]["x"].get<int>(), 300 );
+    BOOST_CHECK_EQUAL( padDetails["size"]["y"].get<int>(), 500 );
+    BOOST_CHECK_EQUAL( padDetails["drill"]["x"].get<int>(), 80 );
+    BOOST_CHECK_EQUAL( padDetails["drill"]["y"].get<int>(), 90 );
+    BOOST_CHECK_EQUAL( padDetails["shape"].get<std::string>(), "rect" );
+    BOOST_CHECK_EQUAL( padDetails["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( padDetails["orientation_degrees"].get<double>(), 90.0 );
+    BOOST_CHECK_EQUAL( padDetails["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( padDetails["net_name"].get<std::string>(), "/GPIO" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPadAndViaSemanticAnchors )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/GPIO" ), 1 ) );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U9" ) );
+    footprint->SetValue( wxS( "MCU" ) );
+    footprint->SetFPID( LIB_ID( wxS( "Package_QFP" ), wxS( "TQFP-32" ) ) );
+    footprint->SetPosition( VECTOR2I( 1000, 2000 ) );
+    footprint->SetLayer( F_Cu );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetPosition( VECTOR2I( 1200, 2300 ) );
+    pad->SetLayerSet( PAD::SMDMask() );
+    pad->SetNetCode( 1 );
+    footprint->Add( pad );
+    board.Add( footprint );
+
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 3000, 4000 ) );
+    via->SetWidth( 600 );
+    via->SetNetCode( 1 );
+    board.Add( via );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const wxString padAnchorId = anchorId( wxS( "pad" ), pad->m_Uuid, wxS( "center" ) );
+    const wxString viaAnchorId = anchorId( wxS( "via" ), via->m_Uuid, wxS( "center" ) );
+
+    const AI_CONTEXT_ANCHOR* padAnchor = findAnchorById( index.Anchors(), padAnchorId );
+    const AI_CONTEXT_ANCHOR* viaAnchor = findAnchorById( index.Anchors(), viaAnchorId );
+
+    BOOST_REQUIRE( padAnchor );
+    BOOST_REQUIRE( viaAnchor );
+    BOOST_CHECK_EQUAL( static_cast<int>( padAnchor->m_Kind ),
+                       static_cast<int>( AI_CONTEXT_ANCHOR_KIND::RouteTarget ) );
+    BOOST_CHECK_EQUAL( padAnchor->m_Label, wxString( wxS( "pad:U9.1:center" ) ) );
+    BOOST_CHECK_EQUAL( padAnchor->m_Position.x, 1200 );
+    BOOST_CHECK_EQUAL( padAnchor->m_Position.y, 2300 );
+    BOOST_CHECK_EQUAL( padAnchor->m_Confidence, 1.0 );
+    BOOST_CHECK_EQUAL( static_cast<int>( viaAnchor->m_Kind ),
+                       static_cast<int>( AI_CONTEXT_ANCHOR_KIND::RouteTarget ) );
+    BOOST_CHECK_EQUAL( viaAnchor->m_Position.x, 3000 );
+    BOOST_CHECK_EQUAL( viaAnchor->m_Layer, -1 );
+
+    nlohmann::json padDetails = anchorDetails( *padAnchor );
+    BOOST_CHECK_EQUAL( padDetails["role"].get<std::string>(), "center" );
+    BOOST_CHECK_EQUAL( padDetails["source_label"].get<std::string>(), "U9.1" );
+    BOOST_CHECK_EQUAL( padDetails["footprint_reference"].get<std::string>(), "U9" );
+    BOOST_CHECK_EQUAL( padDetails["pad_number"].get<std::string>(), "1" );
+    BOOST_CHECK_EQUAL( padDetails["net_name"].get<std::string>(), "/GPIO" );
+    BOOST_CHECK_EQUAL( padDetails["position"]["x"].get<int>(), 1200 );
+
+    AI_CONTEXT_SNAPSHOT snapshot = index.BuildSnapshot();
+    BOOST_CHECK( findAnchorById( snapshot.m_Anchors, padAnchorId ) );
+    BOOST_CHECK( findAnchorById( snapshot.m_Anchors, viaAnchorId ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsRouteAndShapeSemanticAnchors )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/CLK" ), 1 ) );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 10, 20 ) );
+    track->SetEnd( VECTOR2I( 110, 120 ) );
+    track->SetLayer( F_Cu );
+    track->SetWidth( 250 );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    PCB_SHAPE* shape = new PCB_SHAPE( &board, SHAPE_T::SEGMENT );
+    shape->SetStart( VECTOR2I( 500, 600 ) );
+    shape->SetEnd( VECTOR2I( 700, 800 ) );
+    shape->SetLayer( Edge_Cuts );
+    shape->SetWidth( 50 );
+    board.Add( shape );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    const wxString trackStartId = anchorId( wxS( "track" ), track->m_Uuid, wxS( "start" ) );
+    const wxString trackEndId = anchorId( wxS( "track" ), track->m_Uuid, wxS( "end" ) );
+    const wxString shapeStartId = anchorId( wxS( "shape" ), shape->m_Uuid, wxS( "start" ) );
+    const wxString shapeEndId = anchorId( wxS( "shape" ), shape->m_Uuid, wxS( "end" ) );
+
+    const AI_CONTEXT_ANCHOR* trackStart = findAnchorById( index.Anchors(), trackStartId );
+    const AI_CONTEXT_ANCHOR* trackEnd = findAnchorById( index.Anchors(), trackEndId );
+    const AI_CONTEXT_ANCHOR* shapeStart = findAnchorById( index.Anchors(), shapeStartId );
+    const AI_CONTEXT_ANCHOR* shapeEnd = findAnchorById( index.Anchors(), shapeEndId );
+
+    BOOST_REQUIRE( trackStart );
+    BOOST_REQUIRE( trackEnd );
+    BOOST_REQUIRE( shapeStart );
+    BOOST_REQUIRE( shapeEnd );
+    BOOST_CHECK_EQUAL( static_cast<int>( trackStart->m_Kind ),
+                       static_cast<int>( AI_CONTEXT_ANCHOR_KIND::RouteStart ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( trackEnd->m_Kind ),
+                       static_cast<int>( AI_CONTEXT_ANCHOR_KIND::RouteTarget ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( shapeStart->m_Kind ),
+                       static_cast<int>( AI_CONTEXT_ANCHOR_KIND::ShapeCorner ) );
+    BOOST_CHECK_EQUAL( trackStart->m_Position.x, 10 );
+    BOOST_CHECK_EQUAL( trackEnd->m_Position.y, 120 );
+    BOOST_CHECK_EQUAL( shapeStart->m_Position.x, 500 );
+    BOOST_CHECK_EQUAL( shapeEnd->m_Position.y, 800 );
+
+    nlohmann::json routeDetails = anchorDetails( *trackStart );
+    BOOST_CHECK_EQUAL( routeDetails["role"].get<std::string>(), "start" );
+    BOOST_CHECK_EQUAL( routeDetails["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( routeDetails["net_name"].get<std::string>(), "/CLK" );
+}
+
+BOOST_AUTO_TEST_SUITE_END()
