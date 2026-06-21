@@ -42,6 +42,15 @@ wxString suggestionStatusText( AI_SUGGESTION_STATUS aStatus )
 
     case AI_SUGGESTION_STATUS::Expired:
         return wxS( "Expired" );
+
+    case AI_SUGGESTION_STATUS::Superseded:
+        return wxS( "Superseded" );
+
+    case AI_SUGGESTION_STATUS::Abandoned:
+        return wxS( "Abandoned" );
+
+    case AI_SUGGESTION_STATUS::Cancelled:
+        return wxS( "Cancelled" );
     }
 
     return wxS( "Unknown" );

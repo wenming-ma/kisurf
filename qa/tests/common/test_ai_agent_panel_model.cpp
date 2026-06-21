@@ -5,6 +5,7 @@
 #include <kisurf/ai/ai_suggestion_orchestrator.h>
 
 #include <memory>
+#include <deque>
 #include <wx/arrstr.h> // for MSVC to see std::vector<wxString> is exported from wx
 
 namespace
@@ -132,6 +133,40 @@ public:
     int                                m_CallCount = 0;
     AI_SUGGESTION_TRIGGER              m_LastTrigger;
     std::optional<AI_SUGGESTION_RECORD> m_NextSuggestion;
+};
+
+
+class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    explicit SCRIPTED_NEXT_ACTION_PROVIDER( std::deque<wxString> aBodies ) :
+            m_Bodies( std::move( aBodies ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "scripted next action" );
+
+        if( m_Bodies.empty() )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+            return response;
+        }
+
+        response.m_Body = m_Bodies.front();
+        m_Bodies.pop_front();
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    std::deque<wxString>             m_Bodies;
 };
 
 
@@ -429,7 +464,7 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentDisabledSuppressesAutomaticSuggestions )
 }
 
 
-BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledDelegatesToSuggestionProvider )
+BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledDoesNotUseLegacySuggestionProvider )
 {
     auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
     suggestionProvider->m_NextSuggestion = makeModelSuggestion();
@@ -437,18 +472,19 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledDelegatesToSuggestionProvider )
     AI_AGENT_PANEL_MODEL model(
             std::make_unique<AI_STUB_PROVIDER>(),
             std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    model.SetNextActionProvider( nullptr );
     model.SetBackgroundAgentEnabled( true );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             model.UpdateSuggestionsIfBackgroundEnabled(
                     makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
 
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 1 );
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
 }
 
 
-BOOST_AUTO_TEST_CASE( BackgroundAgentSuggestionsArePreviewOnly )
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptable )
 {
     auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
     suggestionProvider->m_NextSuggestion = makeModelSuggestion();
@@ -456,20 +492,34 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentSuggestionsArePreviewOnly )
     AI_AGENT_PANEL_MODEL model(
             std::make_unique<AI_STUB_PROVIDER>(),
             std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\"}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
     model.SetBackgroundAgentEnabled( true );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             model.UpdateSuggestionsIfBackgroundEnabled(
-                    makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
+                    makeViaNextActionContext(), makeSuggestionActivity(), wxS( "activity" ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK( suggestion->m_EditObjects.empty() );
+    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 2 );
+    BOOST_CHECK( !suggestion->m_EditObjects.empty() );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "accept_token" ) ) );
     BOOST_CHECK( model.CanPreviewSuggestion( suggestion->m_Id ) );
-    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
+    BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
+
+    FAKE_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION edit( editAdapter );
+    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit ) );
+    BOOST_CHECK( !editAdapter.m_Applied.empty() );
 
     std::optional<AI_SUGGESTION_RECORD> stored = model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( stored.has_value() );
-    BOOST_CHECK( stored->m_EditObjects.empty() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Accepted );
 }
 
 
@@ -762,39 +812,27 @@ BOOST_AUTO_TEST_CASE( AddSuggestionStoresToolGeneratedSuggestion )
 }
 
 
-BOOST_AUTO_TEST_CASE( DefaultModelIncludesNativeNextActionSuggestions )
+BOOST_AUTO_TEST_CASE( DefaultModelDoesNotDirectlyPublishNativeNextActionSuggestions )
 {
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
             makeViaNextActionContext(), makeSuggestionActivity( 9 ), wxS( "activity" ) );
 
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK( suggestion->m_Title.Contains( wxS( "next via" ) ) );
-
-    std::optional<AI_SUGGESTION_OPERATION> operation =
-            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
-
-    BOOST_REQUIRE( operation.has_value() );
-    BOOST_CHECK( operation->IsPlaceViaPreview() );
-    BOOST_CHECK_EQUAL( operation->m_Position.x, 400 );
-    BOOST_CHECK_EQUAL( operation->m_Position.y, 50 );
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( model.Suggestions().empty() );
 }
 
 
-BOOST_AUTO_TEST_CASE( DefaultModelIncludesPanelTableSuggestions )
+BOOST_AUTO_TEST_CASE( DefaultModelDoesNotDirectlyPublishPanelTableSuggestions )
 {
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
             makePanelTableContext(), makeSuggestionActivity( 10 ), wxS( "panel edit" ) );
 
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK( suggestion->m_Title.Contains( wxS( "Fill" ) ) );
-    BOOST_CHECK_EQUAL( suggestion->m_ContextKind, wxString( wxS( "panel" ) ) );
-    BOOST_CHECK( suggestion->m_ArgumentsJson.Contains(
-            wxS( "panel_fill_column_preview" ) ) );
-    BOOST_REQUIRE_EQUAL( model.Suggestions().size(), 1 );
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( model.Suggestions().empty() );
 }
 
 

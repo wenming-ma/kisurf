@@ -74,20 +74,26 @@ The Next Action Agent is the ambient background workflow. It observes the
 engineer's live editor state and proposes the next useful action directly in the
 workspace, without requiring the engineer to start a chat.
 
-This agent is intended for low-friction assistance such as table completion,
-placement continuation, routing continuation, anchor-based route previews, and
-other contextual "continue from here" previews. Its current research and test
-taxonomy is:
+This agent is implemented as a unified, LLM-mediated runtime rather than a
+provider chain that directly emits suggestions. Once a semantic editor event is
+opened, the LLM participates in the decision loop:
 
-1. Placement
-2. Routing
-3. Auto-filling / refilling
+1. Observe the current workspace.
+2. Decide whether to attempt a Next Action.
+3. Call tools that generate candidates or mutate hidden shadow state.
+4. Render and validate the hidden attempt.
+5. Review the result and publish, retry, roll back, or abandon.
+
+Placement, routing, and auto-filling / refilling are work states inside this one
+runtime. They are not separate agents, separate frameworks, or direct native
+publishers.
 
 Suggestions must be tied to the editor revision, selection, tool state, and
 viewport that produced them, so stale suggestions can be expired when the
-engineer moves on. The current branch implements the foundation for preview-only
-Next Action suggestions; production quality autonomous placement, routing, and
-auto-filling/refilling workflows are still in progress.
+engineer moves on. The current branch implements the foundation for
+preview-first, token-gated Next Action suggestions; production quality
+autonomous placement, routing, and auto-filling/refilling workflows are still in
+progress.
 
 ## What AI-Native Means
 
@@ -235,11 +241,16 @@ Currently implemented:
 - Model-originated `kisurf_run_action` calls are preview-first: allowed action
   requests create a pending preview suggestion, and the native action runner is
   invoked only after explicit user Accept.
-- Next Action Agent plumbing for activity-triggered suggestions. In the current
-  session runtime phase these autonomous
-  suggestions are preview-only: generated edit objects are stripped, preview
-  remains available, and real board mutation must go through an accepted
-  execution session.
+- LLM-mediated Next Action runtime for activity-triggered suggestions. Raw editor
+  events are first coalesced into semantic events; every semantic Next Action
+  episode then runs through decision, hidden attempt, render/validation, LLM
+  review, and publish/abandon steps.
+- Next Action tools can generate placement, routing, and panel-fill candidates,
+  but these tools cannot publish user-visible previews on their own. A preview is
+  surfaced only after the LLM review step returns a publish decision.
+- Published Next Action previews carry runtime provenance, preview lease, and
+  accept-token metadata. Runtime accept validates the token/lease/context before
+  applying the reviewed edit objects through the guarded accept path.
 - Active-routing route-to-anchor previews can target a semantic anchor directly;
   if the model omits the start anchor, KiSurf uses the current
   `tool.routing.start` anchor from the routing context.

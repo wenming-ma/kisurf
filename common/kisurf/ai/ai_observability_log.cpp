@@ -269,6 +269,15 @@ wxString suggestionStatusLabel( AI_SUGGESTION_STATUS aStatus )
 
     case AI_SUGGESTION_STATUS::Expired:
         return wxS( "Expired" );
+
+    case AI_SUGGESTION_STATUS::Superseded:
+        return wxS( "Superseded" );
+
+    case AI_SUGGESTION_STATUS::Abandoned:
+        return wxS( "Abandoned" );
+
+    case AI_SUGGESTION_STATUS::Cancelled:
+        return wxS( "Cancelled" );
     }
 
     return wxS( "Suggestion" );
@@ -293,6 +302,15 @@ std::string suggestionStatusJsonName( AI_SUGGESTION_STATUS aStatus )
 
     case AI_SUGGESTION_STATUS::Expired:
         return "expired";
+
+    case AI_SUGGESTION_STATUS::Superseded:
+        return "superseded";
+
+    case AI_SUGGESTION_STATUS::Abandoned:
+        return "abandoned";
+
+    case AI_SUGGESTION_STATUS::Cancelled:
+        return "cancelled";
     }
 
     return "suggestion";
