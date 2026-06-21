@@ -39,6 +39,7 @@ set( QA_COMMON_SRCS
     test_ai_agent_panel_model.cpp
     test_ai_agent_panel.cpp
     test_ai_agent_panel_semantic.cpp
+    test_ai_next_action_runtime.cpp
     test_ai_direct_use_smoke.cpp
     test_ai_observability_log.cpp
     test_ai_python_worker.cpp

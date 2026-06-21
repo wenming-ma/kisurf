@@ -69,6 +69,46 @@ public:
 };
 
 
+class MULTI_ROUND_TOOL_CALL_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_LastRequest = aRequest;
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Multi Round Provider" );
+
+        if( aRequest.m_ToolResults.size() >= 2 )
+        {
+            response.m_Body = wxS( "All tool results received." );
+            return response;
+        }
+
+        const uint64_t round = static_cast<uint64_t>( aRequest.m_ToolResults.size() + 1 );
+        response.m_Body = wxString::Format( wxS( "Tool round %llu requested." ),
+                                            static_cast<unsigned long long>( round ) );
+
+        AI_TOOL_CALL_RECORD call;
+        call.m_RequestId = aRequest.m_RequestId;
+        call.m_ToolCallId = wxString::Format( wxS( "call_round_%llu" ),
+                                              static_cast<unsigned long long>( round ) );
+        call.m_ToolName = wxS( "kisurf_run_action" );
+        call.m_ArgumentsJson =
+                wxS( "{\"action\":\"pcbnew.InteractiveSelectionTool.selectionClear\"}" );
+        response.m_ToolCalls.push_back( call );
+
+        return response;
+    }
+
+    int                 m_CallCount = 0;
+    AI_PROVIDER_REQUEST m_LastRequest;
+};
+
+
 class FAKE_TOOL_CALL_HANDLER : public AI_TOOL_CALL_HANDLER
 {
 public:
@@ -262,6 +302,33 @@ BOOST_AUTO_TEST_CASE( RuntimeContinuesAfterHandledToolResults )
     BOOST_CHECK_EQUAL( runtime.TraceRecords().front().m_Response.m_Body,
                        wxString( wxS( "Tool result received." ) ) );
     BOOST_REQUIRE_EQUAL( runtime.TraceRecords().front().m_Response.m_ToolCalls.size(), 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeContinuesUntilMaxToolRounds )
+{
+    auto* provider = new MULTI_ROUND_TOOL_CALL_PROVIDER();
+    AI_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_UserText = wxS( "use tools until done" );
+    request.m_MaxToolRounds = 2;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "All tool results received." ) ) );
+    BOOST_REQUIRE_EQUAL( response.m_ToolCalls.size(), 2 );
+    BOOST_CHECK_EQUAL( response.m_ToolCalls.at( 0 ).m_ToolCallId,
+                       wxString( wxS( "call_round_1" ) ) );
+    BOOST_CHECK_EQUAL( response.m_ToolCalls.at( 1 ).m_ToolCallId,
+                       wxString( wxS( "call_round_2" ) ) );
+    BOOST_REQUIRE_EQUAL( provider->m_LastRequest.m_ToolResults.size(), 2 );
+    BOOST_REQUIRE_EQUAL( runtime.TraceRecords().size(), 1 );
+    BOOST_REQUIRE_EQUAL( runtime.TraceRecords().front().m_Response.m_ToolCalls.size(), 2 );
 }
 
 

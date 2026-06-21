@@ -8,13 +8,7 @@ namespace
 {
 std::unique_ptr<AI_SUGGESTION_PROVIDER> makeDefaultSuggestionProvider()
 {
-    auto controller = std::make_unique<AI_NEXT_ACTION_CONTROLLER>();
-    controller->AddProvider( std::make_unique<AI_VIA_PATTERN_NEXT_ACTION_PROVIDER>() );
-    controller->AddProvider( std::make_unique<AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER>() );
-    controller->AddProvider( std::make_unique<AI_PANEL_TABLE_NEXT_ACTION_PROVIDER>() );
-    controller->AddProvider( std::make_unique<AI_AGENT_SUGGESTION_PROVIDER>(
-            MakeDefaultAiProvider() ) );
-    return controller;
+    return nullptr;
 }
 } // namespace
 
@@ -29,6 +23,8 @@ AI_AGENT_PANEL_MODEL::AI_AGENT_PANEL_MODEL(
         std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider ) :
         m_ActivityLog( 256 ),
         m_Runtime( std::move( aProvider ), m_ActivityLog ),
+        m_NextActionRuntime( std::make_unique<AI_NEXT_ACTION_RUNTIME>(
+                MakeDefaultAiProvider() ) ),
         m_SuggestionProvider( std::move( aSuggestionProvider ) )
 {
     if( m_SuggestionProvider )
@@ -118,6 +114,15 @@ void AI_AGENT_PANEL_MODEL::SetProvider( std::unique_ptr<AI_PROVIDER> aProvider )
 }
 
 
+void AI_AGENT_PANEL_MODEL::SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider )
+{
+    if( aProvider )
+        m_NextActionRuntime = std::make_unique<AI_NEXT_ACTION_RUNTIME>( std::move( aProvider ) );
+    else
+        m_NextActionRuntime.reset();
+}
+
+
 void AI_AGENT_PANEL_MODEL::SetSuggestionProvider(
         std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider )
 {
@@ -138,6 +143,7 @@ void AI_AGENT_PANEL_MODEL::SetSuggestionProvider(
 void AI_AGENT_PANEL_MODEL::ReloadDefaultProviders()
 {
     SetProvider( MakeDefaultAiProvider() );
+    SetNextActionProvider( MakeDefaultAiProvider() );
     SetSuggestionProvider( makeDefaultSuggestionProvider() );
 }
 
@@ -256,7 +262,7 @@ AI_AGENT_PANEL_MODEL::UpdateSuggestionsIfBackgroundEnabled(
     if( !m_BackgroundAgentEnabled )
         return std::nullopt;
 
-    if( !m_SuggestionOrchestrator )
+    if( !m_NextActionRuntime )
         return std::nullopt;
 
     AI_SUGGESTION_TRIGGER trigger;
@@ -266,29 +272,51 @@ AI_AGENT_PANEL_MODEL::UpdateSuggestionsIfBackgroundEnabled(
     trigger.m_Activity = std::move( aActivity );
     trigger.m_Reason = aReason;
     trigger.m_PreviewOnly = true;
-    return m_SuggestionOrchestrator->Update( std::move( trigger ) );
+    return m_NextActionRuntime->Update( std::move( trigger ) );
 }
 
 
 std::optional<AI_SUGGESTION_RECORD> AI_AGENT_PANEL_MODEL::AddSuggestion(
         AI_SUGGESTION_RECORD aSuggestion )
 {
-    return m_SuggestionOrchestrator
-           ? m_SuggestionOrchestrator->AddSuggestion( std::move( aSuggestion ) )
+    if( m_SuggestionOrchestrator )
+        return m_SuggestionOrchestrator->AddSuggestion( std::move( aSuggestion ) );
+
+    return m_NextActionRuntime
+           ? m_NextActionRuntime->AddPublishedSuggestion( std::move( aSuggestion ) )
            : std::nullopt;
 }
 
 
 std::vector<AI_SUGGESTION_RECORD> AI_AGENT_PANEL_MODEL::Suggestions() const
 {
-    return m_SuggestionOrchestrator ? m_SuggestionOrchestrator->Records()
-                                    : std::vector<AI_SUGGESTION_RECORD>();
+    std::vector<AI_SUGGESTION_RECORD> records =
+            m_SuggestionOrchestrator ? m_SuggestionOrchestrator->Records()
+                                     : std::vector<AI_SUGGESTION_RECORD>();
+
+    if( m_NextActionRuntime )
+    {
+        std::vector<AI_SUGGESTION_RECORD> runtimeRecords =
+                m_NextActionRuntime->Suggestions();
+        records.insert( records.end(), runtimeRecords.begin(), runtimeRecords.end() );
+    }
+
+    return records;
 }
 
 
 std::optional<AI_SUGGESTION_RECORD> AI_AGENT_PANEL_MODEL::FindSuggestion(
         uint64_t aSuggestionId ) const
 {
+    if( m_NextActionRuntime )
+    {
+        if( std::optional<AI_SUGGESTION_RECORD> suggestion =
+                    m_NextActionRuntime->FindSuggestion( aSuggestionId ) )
+        {
+            return suggestion;
+        }
+    }
+
     return m_SuggestionOrchestrator ? m_SuggestionOrchestrator->Find( aSuggestionId )
                                     : std::nullopt;
 }
@@ -313,6 +341,9 @@ std::optional<uint64_t> AI_AGENT_PANEL_MODEL::LatestActiveSuggestionId() const
 
 bool AI_AGENT_PANEL_MODEL::CanPreviewSuggestion( uint64_t aSuggestionId ) const
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->CanPreview( aSuggestionId ) )
+        return true;
+
     return m_SuggestionOrchestrator
            && m_SuggestionOrchestrator->CanPreview( aSuggestionId );
 }
@@ -320,6 +351,9 @@ bool AI_AGENT_PANEL_MODEL::CanPreviewSuggestion( uint64_t aSuggestionId ) const
 
 bool AI_AGENT_PANEL_MODEL::CanAcceptSuggestion( uint64_t aSuggestionId ) const
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->CanAccept( aSuggestionId ) )
+        return true;
+
     return m_SuggestionOrchestrator && m_SuggestionOrchestrator->CanAccept( aSuggestionId );
 }
 
@@ -327,6 +361,12 @@ bool AI_AGENT_PANEL_MODEL::CanAcceptSuggestion( uint64_t aSuggestionId ) const
 bool AI_AGENT_PANEL_MODEL::PreviewSuggestion( uint64_t aSuggestionId,
                                               AI_PREVIEW_MANAGER& aPreviewManager )
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->BeginPreview( aSuggestionId,
+                                                                  aPreviewManager ) )
+    {
+        return true;
+    }
+
     return m_SuggestionOrchestrator
            && m_SuggestionOrchestrator->BeginPreview( aSuggestionId, aPreviewManager );
 }
@@ -335,6 +375,9 @@ bool AI_AGENT_PANEL_MODEL::PreviewSuggestion( uint64_t aSuggestionId,
 bool AI_AGENT_PANEL_MODEL::AcceptSuggestion( uint64_t aSuggestionId,
                                              AI_EDIT_SESSION& aEditSession )
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->Accept( aSuggestionId, aEditSession ) )
+        return true;
+
     return m_SuggestionOrchestrator
            && m_SuggestionOrchestrator->Accept( aSuggestionId, aEditSession );
 }
@@ -342,6 +385,9 @@ bool AI_AGENT_PANEL_MODEL::AcceptSuggestion( uint64_t aSuggestionId,
 
 bool AI_AGENT_PANEL_MODEL::MarkSuggestionAccepted( uint64_t aSuggestionId )
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->MarkAccepted( aSuggestionId ) )
+        return true;
+
     return m_SuggestionOrchestrator
            && m_SuggestionOrchestrator->MarkAccepted( aSuggestionId );
 }
@@ -349,11 +395,20 @@ bool AI_AGENT_PANEL_MODEL::MarkSuggestionAccepted( uint64_t aSuggestionId )
 
 bool AI_AGENT_PANEL_MODEL::RejectSuggestion( uint64_t aSuggestionId )
 {
+    if( m_NextActionRuntime && m_NextActionRuntime->Reject( aSuggestionId ) )
+        return true;
+
     return m_SuggestionOrchestrator && m_SuggestionOrchestrator->Reject( aSuggestionId );
 }
 
 
 size_t AI_AGENT_PANEL_MODEL::ExpireSuggestions( const AI_CONTEXT_VERSION& aCurrentVersion )
 {
-    return m_SuggestionOrchestrator ? m_SuggestionOrchestrator->ExpireStale( aCurrentVersion ) : 0;
+    size_t expired = m_NextActionRuntime ? m_NextActionRuntime->ExpireStale( aCurrentVersion )
+                                         : 0;
+
+    if( m_SuggestionOrchestrator )
+        expired += m_SuggestionOrchestrator->ExpireStale( aCurrentVersion );
+
+    return expired;
 }

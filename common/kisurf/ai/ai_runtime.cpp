@@ -1,6 +1,7 @@
 #include <kisurf/ai/ai_runtime.h>
 
 #include <nlohmann/json.hpp>
+#include <iterator>
 #include <string>
 #include <utility>
 
@@ -162,47 +163,57 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest )
         handler = m_ToolCallHandler;
     }
 
-    for( AI_TOOL_CALL_RECORD& toolCall : response.m_ToolCalls )
-    {
-        toolCall.m_RequestId = aRequest.m_RequestId;
-        recordModelToolCall( *m_ActivityLog, aRequest, toolCall );
+    std::vector<AI_TOOL_CALL_RECORD> handledToolCalls;
+    size_t                           toolRounds = 0;
 
-        if( handler )
-        {
-            AI_TOOL_INVOCATION_RESULT result = handler->HandleToolCall( aRequest, toolCall );
-            copyToolResult( toolCall, result );
-            recordToolResult( *m_ActivityLog, result );
-            recordPythonWorkerEvents( *m_ActivityLog, result );
-        }
-        else
-        {
-            AI_TOOL_INVOCATION_RESULT result;
-            result.m_RequestId = aRequest.m_RequestId;
-            result.m_ToolCallId = toolCall.m_ToolCallId;
-            result.m_ActionName = toolCall.m_ToolName;
-            result.m_Allowed = false;
-            result.m_Executed = false;
-            result.m_ErrorCode = wxS( "no_tool_handler" );
-            result.m_Message = wxS( "No tool handler installed." );
-            result.m_ResultJson = deniedToolResultJson( result );
-            copyToolResult( toolCall, result );
-            recordToolResult( *m_ActivityLog, result );
-            recordPythonWorkerEvents( *m_ActivityLog, result );
-        }
-    }
-
-    if( !response.m_ToolCalls.empty() )
+    while( !response.m_ToolCalls.empty() && toolRounds < aRequest.m_MaxToolRounds )
     {
-        std::vector<AI_TOOL_CALL_RECORD> handledToolCalls = response.m_ToolCalls;
+        std::vector<AI_TOOL_CALL_RECORD> roundToolCalls = std::move( response.m_ToolCalls );
+
+        for( AI_TOOL_CALL_RECORD& toolCall : roundToolCalls )
+        {
+            toolCall.m_RequestId = aRequest.m_RequestId;
+            recordModelToolCall( *m_ActivityLog, aRequest, toolCall );
+
+            if( handler )
+            {
+                AI_TOOL_INVOCATION_RESULT result = handler->HandleToolCall( aRequest, toolCall );
+                copyToolResult( toolCall, result );
+                recordToolResult( *m_ActivityLog, result );
+                recordPythonWorkerEvents( *m_ActivityLog, result );
+            }
+            else
+            {
+                AI_TOOL_INVOCATION_RESULT result;
+                result.m_RequestId = aRequest.m_RequestId;
+                result.m_ToolCallId = toolCall.m_ToolCallId;
+                result.m_ActionName = toolCall.m_ToolName;
+                result.m_Allowed = false;
+                result.m_Executed = false;
+                result.m_ErrorCode = wxS( "no_tool_handler" );
+                result.m_Message = wxS( "No tool handler installed." );
+                result.m_ResultJson = deniedToolResultJson( result );
+                copyToolResult( toolCall, result );
+                recordToolResult( *m_ActivityLog, result );
+                recordPythonWorkerEvents( *m_ActivityLog, result );
+            }
+        }
+
+        handledToolCalls.insert( handledToolCalls.end(),
+                                 std::make_move_iterator( roundToolCalls.begin() ),
+                                 std::make_move_iterator( roundToolCalls.end() ) );
+        ++toolRounds;
 
         AI_PROVIDER_REQUEST continuationRequest = aRequest;
         continuationRequest.m_ToolResults = handledToolCalls;
 
         AI_PROVIDER_RESPONSE continuationResponse = m_Provider->Generate( continuationRequest );
         continuationResponse.m_RequestId = aRequest.m_RequestId;
-        continuationResponse.m_ToolCalls = std::move( handledToolCalls );
         response = std::move( continuationResponse );
     }
+
+    if( !handledToolCalls.empty() )
+        response.m_ToolCalls = std::move( handledToolCalls );
 
     AI_TRACE_RECORD record;
     record.m_RequestId = aRequest.m_RequestId;

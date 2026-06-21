@@ -669,6 +669,48 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
 }
 
 
+BOOST_AUTO_TEST_CASE( OpenAiProviderUsesRequestSpecificToolCatalog )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+
+                BOOST_REQUIRE( body.contains( "tools" ) );
+                BOOST_REQUIRE( body["tools"].is_array() );
+                BOOST_REQUIRE_EQUAL( body["tools"].size(), 1 );
+                BOOST_CHECK_EQUAL( body["tools"].at( 0 )["function"]["name"].get<std::string>(),
+                                   "kisurf_next_action_observe" );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"ready\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 24;
+    request.m_UserText = wxS( "next action decision" );
+    request.m_ToolCatalogJson =
+            wxS( "[{\"type\":\"function\",\"function\":{\"name\":\"kisurf_next_action_observe\","
+                 "\"description\":\"Observe a bounded semantic event.\","
+                 "\"parameters\":{\"type\":\"object\",\"properties\":{},"
+                 "\"additionalProperties\":false}}}]" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 24 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( OpenAiProviderParsesFunctionToolCalls )
 {
     AI_PROVIDER_SETTINGS settings;

@@ -270,7 +270,10 @@ enum class AI_SUGGESTION_STATUS
     Previewing,
     Accepted,
     Rejected,
-    Expired
+    Expired,
+    Superseded,
+    Abandoned,
+    Cancelled
 };
 
 struct KICOMMON_API AI_SUGGESTION_TRIGGER
@@ -297,6 +300,7 @@ struct KICOMMON_API AI_SUGGESTION_RECORD
     wxString                   m_Body;
     wxString                   m_ContextKind;
     wxString                   m_ContextDetailsJson;
+    wxString                   m_RuntimeProvenanceJson;
     wxString                   m_ArgumentsJson;
     bool                       m_PreviewOnly = false;
     std::vector<AI_OBJECT_REF> m_PreviewObjects;
@@ -317,14 +321,27 @@ struct KICOMMON_API AI_TOOL_CALL_RECORD
     wxString m_Message;
 };
 
+enum class AI_PROVIDER_REQUEST_KIND
+{
+    Chat,
+    NextActionDecision,
+    NextActionReview
+};
+
 struct KICOMMON_API AI_PROVIDER_REQUEST
 {
     uint64_t                         m_RequestId = 0;
+    AI_PROVIDER_REQUEST_KIND         m_RequestKind = AI_PROVIDER_REQUEST_KIND::Chat;
     AI_EDITOR_KIND                   m_EditorKind = AI_EDITOR_KIND::Unknown;
     AI_CONTEXT_VERSION               m_ContextVersion;
     AI_CONTEXT_SNAPSHOT              m_ContextSnapshot;
     wxString                         m_UserText;
     std::vector<AI_TOOL_CALL_RECORD> m_ToolResults;
+    wxString                         m_SystemPromptOverride;
+    wxString                         m_ResponseFormatJson;
+    wxString                         m_ToolCatalogJson;
+    size_t                           m_MaxToolRounds = 1;
+    bool                             m_DisableDefaultTools = false;
 };
 
 struct KICOMMON_API AI_PROVIDER_RESPONSE

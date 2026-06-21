@@ -60,7 +60,10 @@ bool isTerminal( const AI_SUGGESTION_RECORD& aSuggestion )
 {
     return aSuggestion.m_Status == AI_SUGGESTION_STATUS::Accepted
         || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Rejected
-        || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Expired;
+        || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Expired
+        || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Superseded
+        || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Abandoned
+        || aSuggestion.m_Status == AI_SUGGESTION_STATUS::Cancelled;
 }
 
 

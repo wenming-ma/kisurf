@@ -2,6 +2,7 @@
 
 #include <kicommon.h>
 #include <kisurf/ai/ai_activity_log.h>
+#include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_observability_log.h>
 #include <kisurf/ai/ai_runtime.h>
 #include <kisurf/ai/ai_suggestion_orchestrator.h>
@@ -38,6 +39,7 @@ public:
     bool LastRequestCancelled() const;
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void SetSuggestionProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider );
+    void SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void ReloadDefaultProviders();
     void SetToolCallHandler( AI_TOOL_CALL_HANDLER* aHandler );
 
@@ -81,6 +83,7 @@ public:
 private:
     AI_ACTIVITY_LOG                         m_ActivityLog;
     AI_RUNTIME                              m_Runtime;
+    std::unique_ptr<AI_NEXT_ACTION_RUNTIME> m_NextActionRuntime;
     std::unique_ptr<AI_SUGGESTION_PROVIDER> m_SuggestionProvider;
     std::unique_ptr<AI_SUGGESTION_ORCHESTRATOR> m_SuggestionOrchestrator;
     std::vector<AI_AGENT_MESSAGE>           m_Messages;

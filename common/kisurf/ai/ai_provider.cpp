@@ -765,6 +765,24 @@ AI_PROVIDER_RESPONSE AI_STUB_PROVIDER::Generate( const AI_PROVIDER_REQUEST& aReq
     response.m_RequestId = aRequest.m_RequestId;
     response.m_Kind = AI_SUGGESTION_KIND::Chat;
     response.m_Title = wxS( "Stub Agent" );
+
+    if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+    {
+        response.m_Title = wxS( "Stub Next Action Decision" );
+        response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                               "\"opportunity_type\":\"placement\","
+                               "\"reason_code\":\"stub_grounded_candidate\"}" );
+        return response;
+    }
+
+    if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+    {
+        response.m_Title = wxS( "Stub Next Action Review" );
+        response.m_Body = wxS( "{\"decision_kind\":\"publish\","
+                               "\"reason_code\":\"stub_review_accept\"}" );
+        return response;
+    }
+
     response.m_Body = wxString::Format( wxS( "Stub response for %s request %llu: %s" ),
                                         aRequest.m_EditorKind == AI_EDITOR_KIND::Pcb
                                                 ? wxS( "PCB" )
@@ -821,12 +839,17 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     nlohmann::json body;
     body["model"] = toUtf8String( m_Settings.m_Model );
     body["temperature"] = 0.2;
+    const wxString systemPrompt =
+            aRequest.m_SystemPromptOverride.IsEmpty()
+                    ? wxString( wxS( "You are KiSurf's native KiCad assistant. Use the "
+                                      "supplied editor context and tool catalog, propose "
+                                      "safe previews before edits, and never assume an edit "
+                                      "has been accepted until the user accepts it." ) )
+                    : aRequest.m_SystemPromptOverride;
+
     nlohmann::json messages = nlohmann::json::array(
             { { { "role", "system" },
-                { "content",
-                  "You are KiSurf's native KiCad assistant. Use the supplied editor context and "
-                  "tool catalog, propose safe previews before edits, and never assume an edit has "
-                  "been accepted until the user accepts it." } },
+                { "content", toUtf8String( systemPrompt ) } },
               { { "role", "user" },
                 { "content",
                   makeUserMessageContent( userContent, aRequest.m_ContextSnapshot.m_Visual ) } } } );
@@ -834,7 +857,41 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     appendToolResultMessages( messages, aRequest.m_ToolResults );
     body["messages"] = std::move( messages );
 
-    body["tools"] = nlohmann::json::array(
+    if( !aRequest.m_ResponseFormatJson.IsEmpty() )
+    {
+        nlohmann::json responseFormat = nlohmann::json::parse(
+                toUtf8String( aRequest.m_ResponseFormatJson ), nullptr, false );
+
+        if( responseFormat.is_object() )
+            body["response_format"] = std::move( responseFormat );
+    }
+
+    if( aRequest.m_DisableDefaultTools )
+    {
+        body["tools"] = nlohmann::json::array();
+    }
+    else if( !aRequest.m_ToolCatalogJson.IsEmpty() )
+    {
+        nlohmann::json toolCatalog = nlohmann::json::parse(
+                toUtf8String( aRequest.m_ToolCatalogJson ), nullptr, false );
+
+        if( toolCatalog.is_array() )
+        {
+            body["tools"] = std::move( toolCatalog );
+        }
+        else if( toolCatalog.is_object() && toolCatalog.contains( "tools" )
+                 && toolCatalog["tools"].is_array() )
+        {
+            body["tools"] = std::move( toolCatalog["tools"] );
+        }
+        else
+        {
+            body["tools"] = nlohmann::json::array();
+        }
+    }
+    else
+    {
+        body["tools"] = nlohmann::json::array(
             { functionTool( "kisurf_run_action",
                             "Request a KiSurf editor action by native action name. Local KiSurf "
                             "policy decides whether the action can run.",
@@ -950,6 +1007,8 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
               functionTool( "kisurf_run_validation",
                             "Run typed validation for the active AI execution session.",
                             sessionValidationToolParameters() ) } );
+    }
+
     body["parallel_tool_calls"] = false;
 
     AI_HTTP_REQUEST request;

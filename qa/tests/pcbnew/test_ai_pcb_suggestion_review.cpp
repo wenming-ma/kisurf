@@ -13,6 +13,8 @@
 #include <zone.h>
 
 #include <optional>
+#include <deque>
+#include <utility>
 #include <vector>
 #include <wx/string.h>
 
@@ -36,6 +38,38 @@ public:
     }
 
     std::optional<AI_SUGGESTION_RECORD> m_NextSuggestion;
+};
+
+
+class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    explicit SCRIPTED_NEXT_ACTION_PROVIDER( std::deque<wxString> aBodies ) :
+            m_Bodies( std::move( aBodies ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "scripted next action" );
+
+        if( m_Bodies.empty() )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+            return response;
+        }
+
+        response.m_Body = m_Bodies.front();
+        m_Bodies.pop_front();
+        return response;
+    }
+
+    int                  m_CallCount = 0;
+    std::deque<wxString> m_Bodies;
 };
 
 
@@ -132,6 +166,25 @@ AI_OBJECT_REF routePreviewRef()
 }
 
 
+wxString viaDetails( int aX, int aY, const wxString& aNetName,
+                     int aDiameter = 600000 )
+{
+    wxString details;
+    details << wxS( "{\"kind\":\"via\",\"position\":{\"x\":" ) << aX
+            << wxS( ",\"y\":" ) << aY << wxS( "},\"diameter\":" )
+            << aDiameter << wxS( ",\"net_name\":\"" ) << aNetName << wxS( "\"}" );
+    return details;
+}
+
+
+AI_OBJECT_REF visibleViaRef( int aX, int aY, const wxString& aNetName = wxS( "GND" ) )
+{
+    return AI_OBJECT_REF( KIID(), PCB_VIA_T,
+                          wxString::Format( wxS( "via:%d,%d" ), aX, aY ),
+                          viaDetails( aX, aY, aNetName ) );
+}
+
+
 AI_OBJECT_REF zonePreviewRef()
 {
     return AI_OBJECT_REF(
@@ -211,6 +264,22 @@ AI_CONTEXT_SNAPSHOT suggestionContext()
 }
 
 
+AI_CONTEXT_SNAPSHOT viaNextActionContext()
+{
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_Version.m_DocumentRevision = 12;
+    snapshot.m_Version.m_ViewRevision = 5;
+    snapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::PlacingVia;
+    snapshot.m_ToolState.m_ContextVersion = snapshot.m_Version;
+    snapshot.m_VisibleObjects.push_back( visibleViaRef( 100, 50 ) );
+    snapshot.m_VisibleObjects.push_back( visibleViaRef( 200, 50 ) );
+    snapshot.m_VisibleObjects.push_back( visibleViaRef( 300, 50 ) );
+    return snapshot;
+}
+
+
 AI_ACTIVITY_RECORD suggestionActivity()
 {
     AI_ACTIVITY_RECORD activity;
@@ -264,6 +333,39 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesRoutePreviewToOperationEditAdapt
     std::vector<PCB_TRACK*> tracks = boardTracksOfType( fixture.m_Board, PCB_TRACE_T );
     BOOST_REQUIRE_EQUAL( tracks.size(), 1 );
     BOOST_CHECK_EQUAL( tracks.front()->GetNetCode(), fixture.m_Gnd->GetNetCode() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeViaPreviewAddsBoardVia )
+{
+    PCB_REVIEW_FIXTURE fixture;
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\"}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    model.SetBackgroundAgentEnabled( true );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled(
+                    viaNextActionContext(), suggestionActivity(), wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "accept_token" ) ) );
+
+    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
+    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit ) );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
+
+    std::vector<PCB_TRACK*> vias = boardTracksOfType( fixture.m_Board, PCB_VIA_T );
+    BOOST_REQUIRE_EQUAL( vias.size(), 1 );
+    BOOST_CHECK_EQUAL( vias.front()->GetNetCode(), fixture.m_Gnd->GetNetCode() );
 }
 
 
