@@ -3251,6 +3251,81 @@ wxString sessionJournalJson( const AI_EXECUTION_SESSION& aSession,
 
     return fromUtf8String( payload.dump() );
 }
+
+
+nlohmann::json surfacePatchPreviewFactsJson(
+        const AI_EXECUTION_SESSION& aSession )
+{
+    nlohmann::json previews = nlohmann::json::array();
+
+    for( const AI_SESSION_OPERATION_RECORD& operation : aSession.Journal().Operations() )
+    {
+        if( operation.m_Kind != AI_SESSION_OPERATION_KIND::ApplySurfacePatch )
+            continue;
+
+        nlohmann::json args = objectFromJsonText( operation.m_ArgumentsJson );
+        nlohmann::json result = objectFromJsonText( operation.m_ResultJson );
+
+        if( !args.is_object() )
+            args = nlohmann::json::object();
+
+        if( !result.is_object() )
+            result = nlohmann::json::object();
+
+        nlohmann::json preview =
+                { { "kind", "surface_patch_preview" },
+                  { "operation_id", operation.m_Id },
+                  { "step_id", operation.m_StepId },
+                  { "source_operation_kind", "surface.apply_patch" },
+                  { "shadow_only", true },
+                  { "live_board_touched", false },
+                  { "direct_publish", false },
+                  { "publish_allowed", false },
+                  { "result", result } };
+
+        if( args.contains( "surface_id" ) && args["surface_id"].is_string() )
+            preview["surface_id"] = args["surface_id"];
+
+        if( args.contains( "table_id" ) && args["table_id"].is_string() )
+            preview["table_id"] = args["table_id"];
+
+        if( args.contains( "alias" ) && args["alias"].is_string() )
+            preview["alias"] = args["alias"];
+
+        if( args.contains( "target_scope" ) && args["target_scope"].is_object() )
+            preview["target_scope"] = args["target_scope"];
+
+        if( args.contains( "patch" ) && args["patch"].is_object() )
+        {
+            preview["patch"] = args["patch"];
+
+            const nlohmann::json& patch = args["patch"];
+            size_t patchOperationCount = 0;
+
+            for( const char* key : { "operations", "ops", "changes" } )
+            {
+                if( patch.contains( key ) && patch[key].is_array() )
+                {
+                    patchOperationCount = patch[key].size();
+                    break;
+                }
+            }
+
+            if( patchOperationCount != 0 )
+                preview["patch_operation_count"] = patchOperationCount;
+        }
+
+        if( !preview.contains( "patch_operation_count" )
+            && result.contains( "patch_operation_count" ) )
+        {
+            preview["patch_operation_count"] = result["patch_operation_count"];
+        }
+
+        previews.push_back( std::move( preview ) );
+    }
+
+    return previews;
+}
 } // namespace
 
 
@@ -3816,6 +3891,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
         const AI_EXECUTION_SESSION& aSession,
         const AI_SUGGESTION_RECORD& aCandidate ) const
 {
+    nlohmann::json surfacePatchPreviews =
+            surfacePatchPreviewFactsJson( aSession );
+
     if( m_PreviewService )
     {
         const wxString renderArgs =
@@ -3844,6 +3922,12 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
                   { "service_result", serviceResult },
                   { "publish_allowed", false } };
 
+        if( !surfacePatchPreviews.empty() )
+        {
+            render["surface_patch_preview_count"] = surfacePatchPreviews.size();
+            render["surface_patch_previews"] = surfacePatchPreviews;
+        }
+
         if( !result.m_ErrorCode.IsEmpty() )
             render["error_code"] = toUtf8String( result.m_ErrorCode );
 
@@ -3859,6 +3943,12 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
               { "mode", "native_preview_candidate" },
               { "operation", toUtf8String( operationSummary( aCandidate ) ) },
               { "publish_allowed", false } };
+
+    if( !surfacePatchPreviews.empty() )
+    {
+        render["surface_patch_preview_count"] = surfacePatchPreviews.size();
+        render["surface_patch_previews"] = surfacePatchPreviews;
+    }
 
     return fromUtf8String( render.dump() );
 }
