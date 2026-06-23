@@ -1124,9 +1124,50 @@ wxString makeNetclassJson( const NETCLASS* aNetclass )
 }
 
 
+wxString makeNetTopologyJson( const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode )
+{
+    if( !aConnectivity )
+        return wxS( "null" );
+
+    int unconnectedEdgeCount = 0;
+    int visibleUnconnectedEdgeCount = 0;
+
+    aConnectivity->RunOnUnconnectedEdges(
+            [&]( CN_EDGE& aEdge ) -> bool
+            {
+                const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
+                const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
+                int                                    edgeNetCode = NETINFO_LIST::UNCONNECTED;
+
+                if( sourceNode && sourceNode->Parent() )
+                    edgeNetCode = sourceNode->Parent()->GetNetCode();
+                else if( targetNode && targetNode->Parent() )
+                    edgeNetCode = targetNode->Parent()->GetNetCode();
+
+                if( edgeNetCode == aNetCode )
+                {
+                    ++unconnectedEdgeCount;
+
+                    if( aEdge.IsVisible() )
+                        ++visibleUnconnectedEdgeCount;
+                }
+
+                return true;
+            } );
+
+    return wxString::Format(
+            wxS( "{\"node_count\":%u,\"pad_count\":%u,"
+                 "\"unconnected_edge_count\":%d,"
+                 "\"visible_unconnected_edge_count\":%d}" ),
+            aConnectivity->GetNodeCount( aNetCode ), aConnectivity->GetPadCount( aNetCode ),
+            unconnectedEdgeCount, visibleUnconnectedEdgeCount );
+}
+
+
 wxString makeNetFactsJson( const BOARD& aBoard )
 {
-    std::vector<wxString> netEntries;
+    std::shared_ptr<CONNECTIVITY_DATA> connectivity = aBoard.GetConnectivity();
+    std::vector<wxString>              netEntries;
 
     for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
     {
@@ -1134,9 +1175,10 @@ wxString makeNetFactsJson( const BOARD& aBoard )
             continue;
 
         netEntries.push_back( wxString::Format(
-                wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s}" ),
+                wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s,\"topology\":%s}" ),
                 net->GetNetCode(), quotedJson( net->GetNetname() ),
-                makeNetclassJson( net->GetNetClass() ) ) );
+                makeNetclassJson( net->GetNetClass() ),
+                makeNetTopologyJson( connectivity, net->GetNetCode() ) ) );
     }
 
     return jsonArray( netEntries );

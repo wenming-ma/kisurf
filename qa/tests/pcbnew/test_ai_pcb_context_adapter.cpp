@@ -318,6 +318,14 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_CHECK( endpointXs == std::set<int>( { 0, 100000 } ) );
     BOOST_CHECK( endpointYs == std::set<int>( { 0 } ) );
     BOOST_CHECK_EQUAL( connectivity["unconnected_edge_sample_truncated"].get<bool>(), false );
+
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["node_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["pad_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["unconnected_edge_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["visible_unconnected_edge_count"].get<int>(), 1 );
 }
 
 
