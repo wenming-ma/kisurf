@@ -326,6 +326,25 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["pad_count"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["unconnected_edge_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["visible_unconnected_edge_count"].get<int>(), 1 );
+
+    nlohmann::json topology = ( *sigFact )["topology"];
+    BOOST_REQUIRE_EQUAL( topology["items"].size(), 2u );
+    BOOST_CHECK_EQUAL( topology["item_sample_truncated"].get<bool>(), false );
+
+    std::set<std::string> itemRefs = { topology["items"][0]["label"].get<std::string>(),
+                                       topology["items"][1]["label"].get<std::string>() };
+    std::set<int> itemXs = { topology["items"][0]["position"]["x"].get<int>(),
+                             topology["items"][1]["position"]["x"].get<int>() };
+
+    BOOST_CHECK( itemRefs == std::set<std::string>( { "U1.1", "U2.1" } ) );
+    BOOST_CHECK( itemXs == std::set<int>( { 0, 100000 } ) );
+    BOOST_CHECK_EQUAL( topology["items"][0]["kind"].get<std::string>(), "pad" );
+    BOOST_CHECK_EQUAL( topology["items"][1]["kind"].get<std::string>(), "pad" );
+
+    BOOST_REQUIRE_EQUAL( topology["unconnected_edges"].size(), 1u );
+    BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( topology["unconnected_edge_sample_truncated"].get<bool>(), false );
 }
 
 

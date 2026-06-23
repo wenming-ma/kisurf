@@ -1124,27 +1124,254 @@ wxString makeNetclassJson( const NETCLASS* aNetclass )
 }
 
 
-wxString makeNetTopologyJson( const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode )
+wxString connectedItemKindToken( const BOARD_CONNECTED_ITEM& aItem )
+{
+    switch( aItem.Type() )
+    {
+    case PCB_PAD_T:    return wxS( "pad" );
+    case PCB_TRACE_T:  return wxS( "track" );
+    case PCB_ARC_T:    return wxS( "arc" );
+    case PCB_VIA_T:    return wxS( "via" );
+    case PCB_ZONE_T:   return wxS( "zone" );
+    case PCB_SHAPE_T:  return wxS( "shape" );
+    default:           return wxS( "connected_item" );
+    }
+}
+
+
+wxString connectedItemLabel( const BOARD_CONNECTED_ITEM& aItem )
+{
+    if( const PAD* pad = dynamic_cast<const PAD*>( &aItem ) )
+    {
+        if( FOOTPRINT* footprint = pad->GetParentFootprint() )
+            return padContextLabel( *footprint, *pad );
+    }
+
+    if( const PCB_TRACK* track = dynamic_cast<const PCB_TRACK*>( &aItem ) )
+        return makeRoutingRef( *track ).m_Label;
+
+    if( const ZONE* zone = dynamic_cast<const ZONE*>( &aItem ) )
+        return makeZoneRef( *zone ).m_Label;
+
+    return connectedItemKindToken( aItem ) + wxS( ":" ) + aItem.m_Uuid.AsString();
+}
+
+
+wxString connectedItemGeometryJson( const BOARD_CONNECTED_ITEM& aItem )
+{
+    if( const PAD* pad = dynamic_cast<const PAD*>( &aItem ) )
+    {
+        wxString parentDetails;
+
+        if( FOOTPRINT* footprint = pad->GetParentFootprint() )
+        {
+            parentDetails = wxString::Format(
+                    wxS( ",\"footprint_reference\":%s,\"pad_number\":%s" ),
+                    quotedJson( footprint->GetReference() ), quotedJson( pad->GetNumber() ) );
+        }
+
+        return wxString::Format(
+                wxS( "\"position\":%s,\"bbox\":%s,\"shape\":%s,\"size\":%s%s" ),
+                pointDetailsJson( pad->GetPosition() ), boxRectDetailsJson( pad->GetBoundingBox() ),
+                quotedJson( padShapeToken( pad->GetShape( PADSTACK::ALL_LAYERS ) ) ),
+                pointDetailsJson( pad->GetSize( PADSTACK::ALL_LAYERS ) ), parentDetails );
+    }
+
+    if( const PCB_TRACK* track = dynamic_cast<const PCB_TRACK*>( &aItem ) )
+    {
+        if( track->Type() == PCB_VIA_T )
+        {
+            const PCB_VIA& via = static_cast<const PCB_VIA&>( *track );
+
+            return wxString::Format(
+                    wxS( "\"position\":%s,\"bbox\":%s,\"diameter\":%d,\"drill\":%d" ),
+                    pointDetailsJson( via.GetPosition() ),
+                    boxRectDetailsJson( via.GetBoundingBox() ),
+                    via.GetWidth( PADSTACK::ALL_LAYERS ), via.GetDrillValue() );
+        }
+
+        return wxString::Format(
+                wxS( "\"position\":%s,\"bbox\":%s,\"start\":%s,\"end\":%s,\"width\":%d" ),
+                pointDetailsJson( track->GetPosition() ),
+                boxRectDetailsJson( track->GetBoundingBox() ),
+                pointDetailsJson( track->GetStart() ), pointDetailsJson( track->GetEnd() ),
+                track->GetWidth() );
+    }
+
+    return wxString::Format( wxS( "\"position\":%s,\"bbox\":%s" ),
+                             pointDetailsJson( aItem.GetPosition() ),
+                             boxRectDetailsJson( aItem.GetBoundingBox() ) );
+}
+
+
+wxString connectedItemGraphJson( const BOARD_CONNECTED_ITEM& aItem )
+{
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s,"
+                 "\"net_code\":%d,\"net_name\":%s,\"layer\":%d,\"layer_name\":%s,"
+                 "\"layers\":%s,%s}" ),
+            quotedJson( aItem.m_Uuid.AsString() ), static_cast<int>( aItem.Type() ),
+            quotedJson( connectedItemKindToken( aItem ) ),
+            quotedJson( connectedItemLabel( aItem ) ), aItem.GetNetCode(),
+            quotedJson( aItem.GetNetname() ), static_cast<int>( aItem.GetLayer() ),
+            quotedJson( boardLayerName( aItem, aItem.GetLayer() ) ),
+            layerSetDetailsJson( aItem, aItem.GetLayerSet() ),
+            connectedItemGeometryJson( aItem ) );
+}
+
+
+void appendNetItemGraphEntry( std::vector<wxString>& aEntries, bool& aTruncated,
+                              const BOARD_CONNECTED_ITEM* aItem, int aNetCode )
+{
+    constexpr size_t maxNetItemSample = 64;
+
+    if( !aItem || aItem->GetNetCode() != aNetCode )
+        return;
+
+    if( aEntries.size() >= maxNetItemSample )
+    {
+        aTruncated = true;
+        return;
+    }
+
+    aEntries.push_back( connectedItemGraphJson( *aItem ) );
+}
+
+
+std::vector<wxString> makeNetItemGraphEntries( const BOARD& aBoard, int aNetCode,
+                                               bool& aTruncated )
+{
+    std::vector<wxString> entries;
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+        appendNetItemGraphEntry( entries, aTruncated, track, aNetCode );
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+            appendNetItemGraphEntry( entries, aTruncated, pad, aNetCode );
+
+        for( ZONE* zone : footprint->Zones() )
+            appendNetItemGraphEntry( entries, aTruncated, zone, aNetCode );
+
+        for( BOARD_ITEM* item : footprint->GraphicalItems() )
+        {
+            appendNetItemGraphEntry( entries, aTruncated,
+                                     dynamic_cast<BOARD_CONNECTED_ITEM*>( item ), aNetCode );
+        }
+    }
+
+    for( ZONE* zone : aBoard.Zones() )
+        appendNetItemGraphEntry( entries, aTruncated, zone, aNetCode );
+
+    for( BOARD_ITEM* item : aBoard.Drawings() )
+    {
+        appendNetItemGraphEntry( entries, aTruncated,
+                                 dynamic_cast<BOARD_CONNECTED_ITEM*>( item ), aNetCode );
+    }
+
+    return entries;
+}
+
+
+int edgeNetCode( const CN_EDGE& aEdge )
+{
+    const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
+    const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
+
+    if( sourceNode && sourceNode->Parent() )
+        return sourceNode->Parent()->GetNetCode();
+
+    if( targetNode && targetNode->Parent() )
+        return targetNode->Parent()->GetNetCode();
+
+    return NETINFO_LIST::UNCONNECTED;
+}
+
+
+wxString connectivityEndpointJson( const std::shared_ptr<const CN_ANCHOR>& aAnchor )
+{
+    if( !aAnchor )
+        return wxS( "{\"position\":null,\"item_uuid\":null,\"item_type\":null}" );
+
+    BOARD_CONNECTED_ITEM* item = aAnchor->Parent();
+
+    if( !item )
+    {
+        return wxString::Format(
+                wxS( "{\"position\":%s,\"item_uuid\":null,\"item_type\":null}" ),
+                pointDetailsJson( aAnchor->Pos() ) );
+    }
+
+    return wxString::Format( wxS( "{\"position\":%s,\"item_uuid\":%s,\"item_type\":%d}" ),
+                             pointDetailsJson( aAnchor->Pos() ),
+                             quotedJson( item->m_Uuid.AsString() ),
+                             static_cast<int>( item->Type() ) );
+}
+
+
+std::vector<wxString> makeNetUnconnectedEdgeEntries(
+        const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode,
+        bool& aTruncated )
+{
+    constexpr size_t      maxNetUnconnectedEdgeSample = 32;
+    std::vector<wxString> edgeEntries;
+
+    if( !aConnectivity )
+        return edgeEntries;
+
+    aConnectivity->RunOnUnconnectedEdges(
+            [&]( CN_EDGE& aEdge ) -> bool
+            {
+                if( edgeNetCode( aEdge ) != aNetCode )
+                    return true;
+
+                if( edgeEntries.size() >= maxNetUnconnectedEdgeSample )
+                {
+                    aTruncated = true;
+                    return false;
+                }
+
+                wxString netName;
+
+                if( aConnectivity->HasNetNameForNetCode( aNetCode ) )
+                    netName = aConnectivity->GetNetNameForNetCode( aNetCode );
+
+                edgeEntries.push_back( wxString::Format(
+                        wxS( "{\"net_code\":%d,\"net_name\":%s,\"visible\":%s,"
+                             "\"source\":%s,\"target\":%s}" ),
+                        aNetCode, quotedJson( netName ), boolJson( aEdge.IsVisible() ),
+                        connectivityEndpointJson( aEdge.GetSourceNode() ),
+                        connectivityEndpointJson( aEdge.GetTargetNode() ) ) );
+
+                return true;
+            } );
+
+    return edgeEntries;
+}
+
+
+wxString makeNetTopologyJson( const BOARD& aBoard,
+                              const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity,
+                              int aNetCode )
 {
     if( !aConnectivity )
         return wxS( "null" );
 
     int unconnectedEdgeCount = 0;
     int visibleUnconnectedEdgeCount = 0;
+    bool itemSampleTruncated = false;
+    bool edgeSampleTruncated = false;
+
+    std::vector<wxString> itemEntries =
+            makeNetItemGraphEntries( aBoard, aNetCode, itemSampleTruncated );
+    std::vector<wxString> edgeEntries =
+            makeNetUnconnectedEdgeEntries( aConnectivity, aNetCode, edgeSampleTruncated );
 
     aConnectivity->RunOnUnconnectedEdges(
             [&]( CN_EDGE& aEdge ) -> bool
             {
-                const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
-                const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
-                int                                    edgeNetCode = NETINFO_LIST::UNCONNECTED;
-
-                if( sourceNode && sourceNode->Parent() )
-                    edgeNetCode = sourceNode->Parent()->GetNetCode();
-                else if( targetNode && targetNode->Parent() )
-                    edgeNetCode = targetNode->Parent()->GetNetCode();
-
-                if( edgeNetCode == aNetCode )
+                if( edgeNetCode( aEdge ) == aNetCode )
                 {
                     ++unconnectedEdgeCount;
 
@@ -1158,9 +1385,14 @@ wxString makeNetTopologyJson( const std::shared_ptr<CONNECTIVITY_DATA>& aConnect
     return wxString::Format(
             wxS( "{\"node_count\":%u,\"pad_count\":%u,"
                  "\"unconnected_edge_count\":%d,"
-                 "\"visible_unconnected_edge_count\":%d}" ),
+                 "\"visible_unconnected_edge_count\":%d,"
+                 "\"items\":%s,\"item_sample_truncated\":%s,"
+                 "\"unconnected_edges\":%s,"
+                 "\"unconnected_edge_sample_truncated\":%s}" ),
             aConnectivity->GetNodeCount( aNetCode ), aConnectivity->GetPadCount( aNetCode ),
-            unconnectedEdgeCount, visibleUnconnectedEdgeCount );
+            unconnectedEdgeCount, visibleUnconnectedEdgeCount,
+            jsonArray( itemEntries ), boolJson( itemSampleTruncated ),
+            jsonArray( edgeEntries ), boolJson( edgeSampleTruncated ) );
 }
 
 
@@ -1178,7 +1410,7 @@ wxString makeNetFactsJson( const BOARD& aBoard )
                 wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s,\"topology\":%s}" ),
                 net->GetNetCode(), quotedJson( net->GetNetname() ),
                 makeNetclassJson( net->GetNetClass() ),
-                makeNetTopologyJson( connectivity, net->GetNetCode() ) ) );
+                makeNetTopologyJson( aBoard, connectivity, net->GetNetCode() ) ) );
     }
 
     return jsonArray( netEntries );
