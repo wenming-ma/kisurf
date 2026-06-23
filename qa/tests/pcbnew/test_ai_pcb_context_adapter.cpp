@@ -19,6 +19,7 @@
 #include <pcb_text.h>
 #include <pcb_textbox.h>
 #include <pcb_track.h>
+#include <project/project_local_settings.h>
 #include <project/net_settings.h>
 #include <settings/settings_manager.h>
 #include <memory>
@@ -223,6 +224,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
     board.SetProject( &mgr.Prj() );
     board.SetCopperLayerCount( 4 );
     board.SetVisibleLayers( LSET( { F_Cu, Edge_Cuts } ) );
+    mgr.Prj().GetLocalSettings().m_ActiveLayer = B_Cu;
 
     KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
     AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
@@ -236,6 +238,10 @@ BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
     BOOST_CHECK_EQUAL( layerContext["copper_layer_count"].get<int>(), 4 );
     BOOST_CHECK_GE( layerContext["enabled_layer_count"].get<int>(), 4 );
     BOOST_CHECK_EQUAL( layerContext["visible_layer_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["id"].get<int>(), static_cast<int>( B_Cu ) );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["name"].get<std::string>(), "B.Cu" );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["visible"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["copper"].get<bool>(), true );
 
     const nlohmann::json* fCu = findLayerById( layerContext["layers"], F_Cu );
     const nlohmann::json* bCu = findLayerById( layerContext["layers"], B_Cu );

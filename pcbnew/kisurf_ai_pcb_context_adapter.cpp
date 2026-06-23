@@ -21,6 +21,8 @@
 #include <pcb_target.h>
 #include <pcb_track.h>
 #include <project/net_settings.h>
+#include <project.h>
+#include <project/project_local_settings.h>
 #include <zone.h>
 
 #include <utility>
@@ -1147,6 +1149,18 @@ wxString makeLayerContextJson( const BOARD& aBoard )
     std::vector<wxString> layerEntries;
     int                   visibleLayerCount = 0;
 
+    auto layerFactJson =
+            [&]( PCB_LAYER_ID aLayer ) -> wxString
+            {
+                return wxString::Format(
+                        wxS( "{\"id\":%d,\"name\":%s,\"enabled\":%s,\"visible\":%s,"
+                             "\"copper\":%s}" ),
+                        static_cast<int>( aLayer ), quotedJson( aBoard.GetLayerName( aLayer ) ),
+                        boolJson( aBoard.IsLayerEnabled( aLayer ) ),
+                        boolJson( aBoard.IsLayerVisible( aLayer ) ),
+                        boolJson( IsCopperLayer( aLayer ) ) );
+            };
+
     for( PCB_LAYER_ID layer : enabledLayers.Seq() )
     {
         const bool visible = aBoard.IsLayerVisible( layer );
@@ -1154,24 +1168,29 @@ wxString makeLayerContextJson( const BOARD& aBoard )
         if( visible )
             ++visibleLayerCount;
 
-        layerEntries.push_back( wxString::Format(
-                wxS( "{\"id\":%d,\"name\":%s,\"enabled\":true,\"visible\":%s,"
-                     "\"copper\":%s}" ),
-                static_cast<int>( layer ), quotedJson( aBoard.GetLayerName( layer ) ),
-                boolJson( visible ), boolJson( IsCopperLayer( layer ) ) ) );
+        layerEntries.push_back( layerFactJson( layer ) );
     }
 
     const wxString visibleLayersSource = aBoard.GetProject()
                                                 ? wxS( "project_local_settings" )
                                                 : wxS( "default_all_layers_no_project" );
+    wxString activeLayerJson = wxS( "null" );
+
+    if( aBoard.GetProject() )
+    {
+        PCB_LAYER_ID activeLayer = aBoard.GetProject()->GetLocalSettings().m_ActiveLayer;
+
+        if( activeLayer >= F_Cu && activeLayer < PCB_LAYER_ID_COUNT )
+            activeLayerJson = layerFactJson( activeLayer );
+    }
 
     return wxString::Format(
             wxS( "{\"source\":\"board\",\"visible_layers_source\":%s,"
                  "\"copper_layer_count\":%d,\"enabled_layer_count\":%d,"
-                 "\"visible_layer_count\":%d,\"layers\":%s}" ),
+                 "\"visible_layer_count\":%d,\"active_layer\":%s,\"layers\":%s}" ),
             quotedJson( visibleLayersSource ), aBoard.GetCopperLayerCount(),
             static_cast<int>( enabledLayers.count() ), visibleLayerCount,
-            jsonArray( layerEntries ) );
+            activeLayerJson, jsonArray( layerEntries ) );
 }
 
 
