@@ -322,10 +322,30 @@ bool isSurfaceRepairPatchTool( const std::string& aToolName )
 }
 
 
+bool isPlacementRepairViaTool( const std::string& aToolName )
+{
+    return aToolName == "placement.repair_via";
+}
+
+
+bool isRoutingRepairSegmentTool( const std::string& aToolName )
+{
+    return aToolName == "routing.repair_segment";
+}
+
+
+bool isRepairWrapperTool( const std::string& aToolName )
+{
+    return isSurfaceRepairPatchTool( aToolName )
+           || isPlacementRepairViaTool( aToolName )
+           || isRoutingRepairSegmentTool( aToolName );
+}
+
+
 bool isHiddenMutationBatchTool( const std::string& aToolName )
 {
     return isBoundedPlanMutationTool( aToolName )
-           || isSurfaceRepairPatchTool( aToolName );
+           || isRepairWrapperTool( aToolName );
 }
 
 
@@ -3691,6 +3711,30 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "role", "checkpoint_rollback" },
                 { "side_effect", "shadow_mutation" },
                 { "can_publish", false } },
+              { { "name", "placement.repair_via" },
+                { "layer", "integrated" },
+                { "role", "placement_repair" },
+                { "work_state", "placement" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.create_via" },
+                { "max_steps", 1 } },
+              { { "name", "routing.repair_segment" },
+                { "layer", "integrated" },
+                { "role", "routing_repair" },
+                { "work_state", "routing" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.create_track_segment" },
+                { "max_steps", 1 } },
               { { "name", "surface.repair_patch" },
                 { "layer", "integrated" },
                 { "role", "surface_repair" },
@@ -3796,6 +3840,70 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "When omitted, the latest merged script batch is restored." } };
                     parameters["required"] = nlohmann::json::array(
                             { "checkpoint_id" } );
+                }
+                else if( isPlacementRepairViaTool( aName ) )
+                {
+                    parameters["properties"]["position"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Board position for the repaired via, using integer "
+                                "internal coordinates." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description", "Net assigned to the repaired via." } };
+                    parameters["properties"]["diameter"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Via diameter in internal units." } };
+                    parameters["properties"]["drill"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Via drill diameter in internal units." } };
+                    parameters["properties"]["layer_pair"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Layer pair for the via, for example start F.Cu and end B.Cu." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias for this repaired via." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "position", "net", "diameter", "drill", "layer_pair" } );
+                }
+                else if( isRoutingRepairSegmentTool( aName ) )
+                {
+                    parameters["properties"]["start"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Start point for the repaired route segment, using "
+                                "integer internal coordinates." } };
+                    parameters["properties"]["end"] =
+                            { { "type", "object" },
+                              { "description",
+                                "End point for the repaired route segment, using "
+                                "integer internal coordinates." } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description", "Routing layer for the segment." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description", "Net assigned to the segment." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Track width in internal units." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias for this repaired segment." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "start", "end", "layer", "net", "width" } );
                 }
                 else if( isSurfaceRepairPatchTool( aName ) )
                 {
@@ -4147,6 +4255,18 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "repair.apply_bounded_plan" );
                 }
 
+                if( name == "placement_repair_via"
+                    || name == "placement.repair_via" )
+                {
+                    return std::string( "placement.repair_via" );
+                }
+
+                if( name == "routing_repair_segment"
+                    || name == "routing.repair_segment" )
+                {
+                    return std::string( "routing.repair_segment" );
+                }
+
                 if( name == "surface_repair_patch"
                     || name == "surface.repair_patch" )
                 {
@@ -4313,20 +4433,68 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
 
-        if( isSurfaceRepairPatchTool( toolName ) )
+        if( isRepairWrapperTool( toolName ) )
         {
-            if( !args.contains( "surface_id" ) || !args["surface_id"].is_string()
-                || !args.contains( "patch" ) || !args["patch"].is_object() )
+            std::string operationKind;
+            wxString    malformedMessage;
+            bool        malformed = false;
+
+            if( isPlacementRepairViaTool( toolName ) )
+            {
+                operationKind = "pcb.create_via";
+                malformed = !args.contains( "position" )
+                             || !args["position"].is_object()
+                             || !args.contains( "net" )
+                             || !args["net"].is_string()
+                             || !args.contains( "diameter" )
+                             || !args["diameter"].is_number_integer()
+                             || !args.contains( "drill" )
+                             || !args["drill"].is_number_integer()
+                             || !args.contains( "layer_pair" )
+                             || !args["layer_pair"].is_object();
+                malformedMessage =
+                        wxS( "placement.repair_via requires position, net, "
+                             "diameter, drill, and layer_pair." );
+            }
+            else if( isRoutingRepairSegmentTool( toolName ) )
+            {
+                operationKind = "pcb.create_track_segment";
+                malformed = !args.contains( "start" )
+                             || !args["start"].is_object()
+                             || !args.contains( "end" )
+                             || !args["end"].is_object()
+                             || !args.contains( "layer" )
+                             || !args["layer"].is_string()
+                             || !args.contains( "net" )
+                             || !args["net"].is_string()
+                             || !args.contains( "width" )
+                             || !args["width"].is_number_integer();
+                malformedMessage =
+                        wxS( "routing.repair_segment requires start, end, "
+                             "layer, net, and width." );
+            }
+            else
+            {
+                operationKind = "surface.apply_patch";
+                malformed = !args.contains( "surface_id" )
+                             || !args["surface_id"].is_string()
+                             || !args.contains( "patch" )
+                             || !args["patch"].is_object();
+                malformedMessage =
+                        wxS( "surface.repair_patch requires surface_id and patch." );
+            }
+
+            if( malformed )
             {
                 return makeResult(
                         false, false, wxS( "malformed_arguments" ),
-                        wxS( "surface.repair_patch requires surface_id and patch." ),
+                        malformedMessage,
                         { { "tool", boundedPlanToolName },
                           { "status", "malformed_arguments" } } );
             }
 
             nlohmann::json operation =
-                    { { "kind", "surface.apply_patch" },
+                    { { "kind", operationKind },
                       { "arguments", args } };
             args =
                     { { "plan",

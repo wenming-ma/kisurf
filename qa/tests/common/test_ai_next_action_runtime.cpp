@@ -596,6 +596,144 @@ public:
 };
 
 
+class PLACEMENT_REPAIR_VIA_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "placement repair via then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"placement_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need placement repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_repair" );
+                call.m_ToolName = wxS( "placement_repair_via" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"position\":{\"x\":1800000,\"y\":2600000},"
+                             "\"net\":\"GND\","
+                             "\"diameter\":600000,"
+                             "\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"placement_repair_via_1\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered placement repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_placement_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class ROUTING_REPAIR_SEGMENT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "routing repair segment then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"routing\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"declared_net\":\"GND\","
+                                  "\"declared_layer\":\"F.Cu\","
+                                  "\"reason_code\":\"routing_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need routing repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_routing_repair" );
+                call.m_ToolName = wxS( "routing_repair_segment" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"start\":{\"x\":1000000,\"y\":1000000},"
+                             "\"end\":{\"x\":2200000,\"y\":1000000},"
+                             "\"layer\":\"F.Cu\","
+                             "\"net\":\"GND\","
+                             "\"width\":250000,"
+                             "\"alias\":\"routing_repair_segment_1\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered routing repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_routing_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1366,6 +1504,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_batch_composition\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_via\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"placement_repair\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"routing.repair_segment\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"routing_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"surface.repair_patch\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"surface_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"raw_board_access\":false" ) ) );
@@ -1390,9 +1532,13 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     bool sawScriptTool = false;
     bool sawRepairTool = false;
+    bool sawPlacementRepairTool = false;
+    bool sawRoutingRepairTool = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
+    bool sawPlacementRepairRequiredPosition = false;
+    bool sawRoutingRepairRequiredSegment = false;
     bool sawSurfaceRepairRequiredPatch = false;
 
     for( const nlohmann::json& tool : callable )
@@ -1445,6 +1591,77 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
         if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
 
+        if( functionName == "placement_repair_via" )
+        {
+            sawPlacementRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasPosition = false;
+            bool hasNet = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "position" )
+                    {
+                        hasPosition = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "net" )
+                    {
+                        hasNet = true;
+                    }
+                }
+            }
+
+            sawPlacementRepairRequiredPosition = hasPosition && hasNet;
+        }
+
+        if( functionName == "routing_repair_segment" )
+        {
+            sawRoutingRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasStart = false;
+            bool hasEnd = false;
+            bool hasLayer = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "start" )
+                    {
+                        hasStart = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "end" )
+                    {
+                        hasEnd = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "layer" )
+                    {
+                        hasLayer = true;
+                    }
+                }
+            }
+
+            sawRoutingRepairRequiredSegment = hasStart && hasEnd && hasLayer;
+        }
+
         if( functionName == "surface_repair_patch" )
         {
             sawSurfaceRepairTool = true;
@@ -1481,9 +1698,13 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawRepairTool );
+    BOOST_CHECK( sawPlacementRepairTool );
+    BOOST_CHECK( sawRoutingRepairTool );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
+    BOOST_CHECK( sawPlacementRepairRequiredPosition );
+    BOOST_CHECK( sawRoutingRepairRequiredSegment );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
@@ -2284,6 +2505,110 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
             wxS( "\"surface_repair_fill_class\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePlacementRepairViaToolLowersAndFeedsRender )
+{
+    auto* provider = new PLACEMENT_REPAIR_VIA_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult =
+            publishRequest.m_ToolResults.at( 0 );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolCallId,
+                       wxString( wxS( "call_placement_repair" ) ) );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolName,
+                       wxString( wxS( "placement_repair_via" ) ) );
+    BOOST_CHECK( repairResult.m_Allowed );
+    BOOST_CHECK( repairResult.m_Executed );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"placement.repair_via\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_via\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"placement_repair_via_1\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"placement.repair_via\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_placement_repair" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"placement_repair_via_1\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"placement.repair_via\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairSegmentToolLowersAndFeedsRender )
+{
+    auto* provider = new ROUTING_REPAIR_SEGMENT_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult =
+            publishRequest.m_ToolResults.at( 0 );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolCallId,
+                       wxString( wxS( "call_routing_repair" ) ) );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolName,
+                       wxString( wxS( "routing_repair_segment" ) ) );
+    BOOST_CHECK( repairResult.m_Allowed );
+    BOOST_CHECK( repairResult.m_Executed );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"routing.repair_segment\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_track_segment\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"routing_repair_segment_1\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"routing.repair_segment\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_routing_repair" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"routing_repair_segment_1\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"routing.repair_segment\"" ) ) );
 }
 
 
