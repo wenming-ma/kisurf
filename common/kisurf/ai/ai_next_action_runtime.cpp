@@ -3699,8 +3699,54 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 }
                 else if( isBoundedPlanMutationTool( aName ) )
                 {
+                    nlohmann::json allowedOperationKinds =
+                            nlohmann::json::array(
+                                    { "pcb.create_via",
+                                      "pcb.create_track_segment",
+                                      "pcb.create_track_polyline",
+                                      "pcb.create_zone",
+                                      "pcb.create_shape",
+                                      "pcb.move_items",
+                                      "pcb.delete_items",
+                                      "pcb.update_item_geometry",
+                                      "pcb.set_item_net",
+                                      "pcb.set_item_layer",
+                                      "pcb.set_item_properties",
+                                      "pcb.set_metadata",
+                                      "pcb.refill_zones",
+                                      "pcb.rebuild_connectivity",
+                                      "pcb.run_validation",
+                                      "surface.apply_patch" } );
+
                     parameters["properties"]["plan"] =
                             { { "type", "object" },
+                              { "additionalProperties", false },
+                              { "properties",
+                                { { "operations",
+                                    { { "type", "array" },
+                                      { "minItems", 1 },
+                                      { "maxItems", 32 },
+                                      { "items",
+                                        { { "type", "object" },
+                                          { "additionalProperties", false },
+                                          { "properties",
+                                            { { "kind",
+                                                { { "type", "string" },
+                                                  { "enum", allowedOperationKinds },
+                                                  { "description",
+                                                    "Operation kind to lower into the hidden "
+                                                    "session journal." } } },
+                                              { "arguments",
+                                                { { "type", "object" },
+                                                  { "description",
+                                                    "Arguments for the selected operation kind. "
+                                                    "surface.apply_patch requires surface_id and "
+                                                    "patch.operations / patch.ops / patch.changes." } } } } },
+                                          { "required",
+                                            nlohmann::json::array(
+                                                    { "kind", "arguments" } ) } } } } } } },
+                              { "required",
+                                nlohmann::json::array( { "operations" } ) },
                               { "description",
                                 "Bounded script plan that lowers only to approved atomic or integrated tools." } };
                     parameters["properties"]["max_steps"] =

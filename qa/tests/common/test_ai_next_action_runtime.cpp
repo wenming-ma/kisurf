@@ -1220,6 +1220,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     bool sawScriptTool = false;
     bool sawRepairTool = false;
+    bool sawScriptSurfacePatchKind = false;
+    bool sawRepairSurfacePatchKind = false;
 
     for( const nlohmann::json& tool : callable )
     {
@@ -1240,15 +1242,42 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
         BOOST_CHECK_EQUAL( function["parameters"]["type"].get<std::string>(),
                            "object" );
 
-        if( function["name"].get<std::string>() == "script_run_bounded_plan" )
+        const std::string functionName = function["name"].get<std::string>();
+
+        if( functionName == "script_run_bounded_plan"
+            || functionName == "repair_apply_bounded_plan" )
+        {
+            const nlohmann::json& kindEnum =
+                    function["parameters"]["properties"]["plan"]["properties"]
+                            ["operations"]["items"]["properties"]["kind"]["enum"];
+
+            BOOST_REQUIRE( kindEnum.is_array() );
+
+            for( const nlohmann::json& kind : kindEnum )
+            {
+                if( kind.is_string()
+                    && kind.get<std::string>() == "surface.apply_patch" )
+                {
+                    if( functionName == "script_run_bounded_plan" )
+                        sawScriptSurfacePatchKind = true;
+
+                    if( functionName == "repair_apply_bounded_plan" )
+                        sawRepairSurfacePatchKind = true;
+                }
+            }
+        }
+
+        if( functionName == "script_run_bounded_plan" )
             sawScriptTool = true;
 
-        if( function["name"].get<std::string>() == "repair_apply_bounded_plan" )
+        if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
     }
 
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawRepairTool );
+    BOOST_CHECK( sawScriptSurfacePatchKind );
+    BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
