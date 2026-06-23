@@ -1403,6 +1403,8 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE( packet.contains( "neighbor_values" ) );
     BOOST_REQUIRE( packet.contains( "value_provenance" ) );
     BOOST_REQUIRE( packet.contains( "validation_state" ) );
+    BOOST_REQUIRE( packet.contains( "normalized_schema" ) );
+    BOOST_REQUIRE( packet.contains( "field_origin_facts" ) );
     BOOST_CHECK_EQUAL( packet["schema_version"].get<std::string>(),
                        "net-class-v1" );
     BOOST_CHECK_EQUAL( packet["target_scope"]["kind"].get<std::string>(),
@@ -1415,6 +1417,31 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                        "project_default" );
     BOOST_CHECK_EQUAL( packet["validation_state"]["status"].get<std::string>(),
                        "needs_value" );
+    BOOST_CHECK_EQUAL( packet["normalized_schema"]["surface_id"].get<std::string>(),
+                       "properties" );
+    BOOST_CHECK_EQUAL( packet["normalized_schema"]["schema_version"].get<std::string>(),
+                       "net-class-v1" );
+    BOOST_CHECK_EQUAL( packet["normalized_schema"]["row_count"].get<int>(), 4 );
+    BOOST_REQUIRE_EQUAL( packet["normalized_schema"]["fields"].size(), 2 );
+    BOOST_CHECK_EQUAL(
+            packet["normalized_schema"]["fields"].at( 0 )["id"].get<std::string>(),
+            "net" );
+    BOOST_CHECK_EQUAL(
+            packet["normalized_schema"]["fields"].at( 0 )["kind"].get<std::string>(),
+            "column" );
+    BOOST_CHECK_EQUAL(
+            packet["normalized_schema"]["fields"].at( 1 )["id"].get<std::string>(),
+            "class" );
+    BOOST_REQUIRE_EQUAL( packet["field_origin_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            packet["field_origin_facts"].at( 0 )["field_id"].get<std::string>(),
+            "class" );
+    BOOST_CHECK_EQUAL(
+            packet["field_origin_facts"].at( 0 )["origin"].get<std::string>(),
+            "project_default" );
+    BOOST_CHECK_EQUAL(
+            packet["field_origin_facts"].at( 0 )["source"].get<std::string>(),
+            "value_provenance" );
 }
 
 

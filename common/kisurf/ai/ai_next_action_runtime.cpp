@@ -2221,6 +2221,209 @@ nlohmann::json panelStateObject( const AI_PANEL_STATE_RECORD& aPanel )
 }
 
 
+nlohmann::json normalizedFieldJson( const nlohmann::json& aColumn )
+{
+    if( aColumn.is_string() )
+    {
+        const std::string id = aColumn.get<std::string>();
+        return { { "id", id },
+                 { "label", id },
+                 { "kind", "column" },
+                 { "value_type", "unknown" } };
+    }
+
+    if( !aColumn.is_object() )
+        return nlohmann::json::object();
+
+    nlohmann::json field =
+            { { "kind", "column" }, { "value_type", "unknown" } };
+
+    if( aColumn.contains( "id" ) && aColumn["id"].is_string() )
+        field["id"] = aColumn["id"];
+    else if( aColumn.contains( "name" ) && aColumn["name"].is_string() )
+        field["id"] = aColumn["name"];
+
+    if( !field.contains( "id" ) )
+        return nlohmann::json::object();
+
+    if( aColumn.contains( "label" ) && aColumn["label"].is_string() )
+        field["label"] = aColumn["label"];
+    else
+        field["label"] = field["id"];
+
+    copyJsonFieldIfPresent( field, aColumn, "value_type" );
+    copyJsonFieldIfPresent( field, aColumn, "type" );
+    copyJsonFieldIfPresent( field, aColumn, "required" );
+    copyJsonFieldIfPresent( field, aColumn, "read_only" );
+
+    return field;
+}
+
+
+nlohmann::json normalizedFieldsJson( const nlohmann::json& aColumns )
+{
+    nlohmann::json fields = nlohmann::json::array();
+
+    if( !aColumns.is_array() )
+        return fields;
+
+    for( const nlohmann::json& column : aColumns )
+    {
+        nlohmann::json field = normalizedFieldJson( column );
+
+        if( !field.empty() )
+            fields.push_back( std::move( field ) );
+    }
+
+    return fields;
+}
+
+
+nlohmann::json normalizedTablesJson( const nlohmann::json& aTables )
+{
+    nlohmann::json tables = nlohmann::json::array();
+
+    if( !aTables.is_array() )
+        return tables;
+
+    for( const nlohmann::json& table : aTables )
+    {
+        if( !table.is_object() )
+            continue;
+
+        nlohmann::json normalized = nlohmann::json::object();
+        copyJsonFieldIfPresent( normalized, table, "id" );
+        copyJsonFieldIfPresent( normalized, table, "title" );
+
+        if( table.contains( "columns" ) )
+            normalized["fields"] = normalizedFieldsJson( table["columns"] );
+
+        if( table.contains( "rows" ) && table["rows"].is_array() )
+            normalized["row_count"] = table["rows"].size();
+
+        if( !normalized.empty() )
+            tables.push_back( std::move( normalized ) );
+    }
+
+    return tables;
+}
+
+
+nlohmann::json normalizedSurfaceSchemaJson(
+        const AI_PANEL_STATE_RECORD& aPanel,
+        const nlohmann::json& aState )
+{
+    nlohmann::json schema =
+            { { "surface_id", toUtf8String( aPanel.m_Id ) },
+              { "surface_title", toUtf8String( aPanel.m_Title ) },
+              { "focused_control_id", toUtf8String( aPanel.m_FocusedControlId ) } };
+
+    copyJsonFieldIfPresent( schema, aState, "schema_version" );
+    copyJsonFieldIfPresent( schema, aState, "row_count" );
+    copyJsonFieldIfPresent( schema, aState, "target_scope" );
+
+    if( aState.contains( "schema" ) && aState["schema"].is_object() )
+    {
+        const nlohmann::json& rawSchema = aState["schema"];
+
+        if( rawSchema.contains( "fields" ) )
+            schema["fields"] = normalizedFieldsJson( rawSchema["fields"] );
+
+        copyJsonFieldIfPresent( schema, rawSchema, "version" );
+        copyJsonFieldIfPresent( schema, rawSchema, "surface_kind" );
+    }
+
+    if( !schema.contains( "fields" ) && aState.contains( "columns" ) )
+        schema["fields"] = normalizedFieldsJson( aState["columns"] );
+
+    if( aState.contains( "tables" ) )
+    {
+        nlohmann::json tables = normalizedTablesJson( aState["tables"] );
+
+        if( !tables.empty() )
+            schema["tables"] = std::move( tables );
+    }
+
+    if( !schema.contains( "fields" ) )
+        schema["fields"] = nlohmann::json::array();
+
+    return schema;
+}
+
+
+nlohmann::json fieldOriginFactJson( const AI_PANEL_STATE_RECORD& aPanel,
+                                    const nlohmann::json& aState,
+                                    const std::string& aFieldId,
+                                    const nlohmann::json& aOrigin )
+{
+    nlohmann::json fact =
+            { { "source", "value_provenance" },
+              { "surface_id", toUtf8String( aPanel.m_Id ) },
+              { "field_id", aFieldId } };
+
+    if( aOrigin.is_string() )
+    {
+        fact["origin"] = aOrigin;
+    }
+    else if( aOrigin.is_object() )
+    {
+        copyJsonFieldIfPresent( fact, aOrigin, "origin" );
+        copyJsonFieldIfPresent( fact, aOrigin, "source" );
+        copyJsonFieldIfPresent( fact, aOrigin, "confidence" );
+        copyJsonFieldIfPresent( fact, aOrigin, "reason" );
+    }
+    else
+    {
+        fact["origin"] = "unknown";
+    }
+
+    if( aState.contains( "target_scope" ) && aState["target_scope"].is_object() )
+    {
+        copyJsonFieldIfPresent( fact, aState["target_scope"], "table_id" );
+        copyJsonFieldIfPresent( fact, aState["target_scope"], "row" );
+        copyJsonFieldIfPresent( fact, aState["target_scope"], "row_id" );
+        copyJsonFieldIfPresent( fact, aState["target_scope"], "column" );
+    }
+
+    return fact;
+}
+
+
+nlohmann::json fieldOriginFactsJson( const AI_PANEL_STATE_RECORD& aPanel,
+                                     const nlohmann::json& aState )
+{
+    nlohmann::json facts = nlohmann::json::array();
+
+    if( !aState.contains( "value_provenance" ) )
+        return facts;
+
+    const nlohmann::json& provenance = aState["value_provenance"];
+
+    if( provenance.is_object() )
+    {
+        for( auto it = provenance.begin(); it != provenance.end(); ++it )
+            facts.push_back( fieldOriginFactJson( aPanel, aState, it.key(), it.value() ) );
+    }
+    else if( provenance.is_array() )
+    {
+        for( const nlohmann::json& entry : provenance )
+        {
+            if( !entry.is_object() || !entry.contains( "field_id" )
+                || !entry["field_id"].is_string() )
+            {
+                continue;
+            }
+
+            facts.push_back( fieldOriginFactJson( aPanel, aState,
+                                                  entry["field_id"].get<std::string>(),
+                                                  entry ) );
+        }
+    }
+
+    return facts;
+}
+
+
 void copySurfaceStateField( nlohmann::json& aPacket,
                             const nlohmann::json& aState,
                             const char* aField )
@@ -2378,6 +2581,10 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
             copySurfaceStateField( packet, state, "neighbor_values" );
             copySurfaceStateField( packet, state, "value_provenance" );
             copySurfaceStateField( packet, state, "validation_state" );
+            packet["normalized_schema"] =
+                    normalizedSurfaceSchemaJson( *panel, state );
+            packet["field_origin_facts"] =
+                    fieldOriginFactsJson( *panel, state );
         }
     }
 
