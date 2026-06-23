@@ -82,6 +82,55 @@ void appendRectangle( ZONE& aZone )
 
 BOOST_AUTO_TEST_SUITE( AiPcbContextAdapter )
 
+BOOST_AUTO_TEST_CASE( AdapterAddsBoardSummaryObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/GND" ), 1 ) );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+    board.Add( footprint );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 100, 200 ) );
+    track->SetEnd( VECTOR2I( 300, 200 ) );
+    track->SetLayer( F_Cu );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    ZONE* zone = new ZONE( &board );
+    zone->SetLayerSet( LSET( { F_Cu } ) );
+    zone->SetNetCode( 1 );
+    appendRectangle( *zone );
+    board.Add( zone );
+
+    PCB_SHAPE* outline = new PCB_SHAPE( &board, SHAPE_T::RECTANGLE );
+    outline->SetLayer( Edge_Cuts );
+    outline->SetStart( VECTOR2I( 1000, 2000 ) );
+    outline->SetEnd( VECTOR2I( 5000, 7000 ) );
+    outline->SetWidth( 0 );
+    board.Add( outline );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    BOOST_REQUIRE( !snapshot.m_Summary.IsEmpty() );
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    BOOST_CHECK_EQUAL( summary["kind"].get<std::string>(), "pcb_board_summary" );
+    BOOST_CHECK_EQUAL( summary["net_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["footprint_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["track_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["zone_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["edge_cut_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["defined"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["x"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["y"].get<int>(), 2000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["x"].get<int>(), 5000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["y"].get<int>(), 7000 );
+}
+
+
 BOOST_AUTO_TEST_CASE( AdapterCollectsFootprintsAndPadsAsVisibleObjects )
 {
     BOARD board;

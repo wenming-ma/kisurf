@@ -24,6 +24,7 @@ public:
     void SetAnchors( std::vector<AI_CONTEXT_ANCHOR> aAnchors );
     void SetPanelStates( std::vector<AI_PANEL_STATE_RECORD> aPanelStates );
     void SetVisualSnapshot( AI_VISUAL_SNAPSHOT aVisual );
+    void SetSummary( wxString aSummary );
     void BumpViewRevision();
 
 private:
@@ -34,4 +35,5 @@ private:
     std::vector<AI_CONTEXT_ANCHOR>       m_Anchors;
     std::vector<AI_PANEL_STATE_RECORD>   m_PanelStates;
     AI_VISUAL_SNAPSHOT                   m_Visual;
+    wxString                             m_Summary;
 };

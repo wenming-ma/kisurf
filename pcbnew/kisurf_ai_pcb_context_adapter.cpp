@@ -3,6 +3,7 @@
 #include <board.h>
 #include <core/typeinfo.h>
 #include <footprint.h>
+#include <netinfo.h>
 #include <pad.h>
 #include <pcb_barcode.h>
 #include <pcb_dimension.h>
@@ -1004,6 +1005,87 @@ AI_OBJECT_REF makeZoneRef( const ZONE& aZone )
     return AI_OBJECT_REF( aZone.m_Uuid, aZone.Type(), label, makeZoneDetailsJson( aZone ) );
 }
 
+wxString boxDetailsJson( const BOX2I& aBox )
+{
+    const bool defined = aBox.GetWidth() != 0 || aBox.GetHeight() != 0;
+
+    return wxString::Format( wxS( "{\"defined\":%s,\"origin\":%s,\"end\":%s,"
+                                  "\"width\":%d,\"height\":%d}" ),
+                             boolJson( defined ), pointDetailsJson( aBox.GetOrigin() ),
+                             pointDetailsJson( aBox.GetEnd() ),
+                             static_cast<int>( aBox.GetWidth() ),
+                             static_cast<int>( aBox.GetHeight() ) );
+}
+
+
+wxString makeBoardSummaryJson( const BOARD& aBoard )
+{
+    size_t netCount = 0;
+
+    for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
+    {
+        if( net->GetNetCode() != NETINFO_LIST::UNCONNECTED )
+            ++netCount;
+    }
+
+    size_t footprintCount = 0;
+    size_t padCount = 0;
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
+        ++footprintCount;
+        padCount += footprint->GetPadCount();
+    }
+
+    size_t trackCount = 0;
+    size_t arcCount = 0;
+    size_t viaCount = 0;
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+    {
+        if( track->Type() == PCB_TRACE_T )
+            ++trackCount;
+        else if( track->Type() == PCB_ARC_T )
+            ++arcCount;
+        else if( track->Type() == PCB_VIA_T )
+            ++viaCount;
+    }
+
+    size_t drawingCount = 0;
+    size_t edgeCutCount = 0;
+
+    for( BOARD_ITEM* drawing : aBoard.Drawings() )
+    {
+        ++drawingCount;
+
+        if( drawing->Type() == PCB_SHAPE_T
+            && static_cast<PCB_SHAPE*>( drawing )->GetLayer() == Edge_Cuts )
+            ++edgeCutCount;
+    }
+
+    size_t zoneCount = 0;
+    size_t keepoutCount = 0;
+
+    for( ZONE* zone : aBoard.Zones() )
+    {
+        ++zoneCount;
+
+        if( zoneHasKeepout( *zone ) )
+            ++keepoutCount;
+    }
+
+    return wxString::Format(
+            wxS( "{\"kind\":\"pcb_board_summary\",\"net_count\":%zu,"
+                 "\"footprint_count\":%zu,\"pad_count\":%zu,\"track_count\":%zu,"
+                 "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
+                 "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
+                 "\"board_edges_bbox\":%s}" ),
+            netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
+            drawingCount, edgeCutCount, zoneCount, keepoutCount,
+            boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ) );
+}
+
+
 } // namespace
 
 
@@ -1226,6 +1308,8 @@ AI_CONTEXT_INDEX KISURF_AI_PCB_CONTEXT_ADAPTER::BuildIndex() const
 
     if( !anchors.empty() )
         index.SetAnchors( anchors );
+
+    index.SetSummary( makeBoardSummaryJson( m_Board ) );
 
     return index;
 }
