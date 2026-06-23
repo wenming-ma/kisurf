@@ -21,6 +21,7 @@
 #include <pcb_track.h>
 #include <project/net_settings.h>
 #include <settings/settings_manager.h>
+#include <memory>
 #include <set>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
@@ -85,6 +86,18 @@ const nlohmann::json* findLayerById( const nlohmann::json& aLayers, PCB_LAYER_ID
     {
         if( layer["id"].get<int>() == static_cast<int>( aLayer ) )
             return &layer;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findNetByCode( const nlohmann::json& aNets, int aNetCode )
+{
+    for( const nlohmann::json& net : aNets )
+    {
+        if( net["code"].get<int>() == aNetCode )
+            return &net;
     }
 
     return nullptr;
@@ -299,6 +312,37 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_CHECK( endpointXs == std::set<int>( { 0, 100000 } ) );
     BOOST_CHECK( endpointYs == std::set<int>( { 0 } ) );
     BOOST_CHECK_EQUAL( connectivity["unconnected_edge_sample_truncated"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPerNetNetclassObservationFacts )
+{
+    BOARD board;
+
+    std::shared_ptr<NETCLASS> power = std::make_shared<NETCLASS>( wxS( "Power" ) );
+    power->SetClearance( 123000 );
+    power->SetTrackWidth( 234000 );
+    power->SetViaDiameter( 345000 );
+    power->SetViaDrill( 456000 );
+    board.GetDesignSettings().m_NetSettings->SetNetclass( power->GetName(), power );
+
+    NETINFO_ITEM* sig = new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 );
+    sig->SetNetClass( power );
+    board.Add( sig );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+    BOOST_CHECK_EQUAL( ( *sigFact )["name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["name"].get<std::string>(), "Power" );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["clearance"].get<int>(), 123000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["track_width"].get<int>(), 234000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["via_diameter"].get<int>(), 345000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["via_drill"].get<int>(), 456000 );
 }
 
 

@@ -1107,6 +1107,40 @@ wxString makeClearanceSourcesJson( const BOARD& aBoard )
 }
 
 
+wxString makeNetclassJson( const NETCLASS* aNetclass )
+{
+    if( !aNetclass )
+        return wxS( "null" );
+
+    return wxString::Format(
+            wxS( "{\"name\":%s,\"clearance\":%d,\"track_width\":%d,"
+                 "\"via_diameter\":%d,\"via_drill\":%d}" ),
+            quotedJson( aNetclass->GetName() ), static_cast<int>( aNetclass->GetClearance() ),
+            static_cast<int>( aNetclass->GetTrackWidth() ),
+            static_cast<int>( aNetclass->GetViaDiameter() ),
+            static_cast<int>( aNetclass->GetViaDrill() ) );
+}
+
+
+wxString makeNetFactsJson( const BOARD& aBoard )
+{
+    std::vector<wxString> netEntries;
+
+    for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
+    {
+        if( net->GetNetCode() == NETINFO_LIST::UNCONNECTED )
+            continue;
+
+        netEntries.push_back( wxString::Format(
+                wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s}" ),
+                net->GetNetCode(), quotedJson( net->GetNetname() ),
+                makeNetclassJson( net->GetNetClass() ) ) );
+    }
+
+    return jsonArray( netEntries );
+}
+
+
 wxString makeLayerContextJson( const BOARD& aBoard )
 {
     const LSET&           enabledLayers = aBoard.GetEnabledLayers();
@@ -1290,12 +1324,13 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
                  "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
-                 "\"layer_context\":%s,\"connectivity_summary\":%s}" ),
+                 "\"net_facts\":%s,\"layer_context\":%s,"
+                 "\"connectivity_summary\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
-            makeClearanceSourcesJson( aBoard ), makeLayerContextJson( aBoard ),
-            makeConnectivitySummaryJson( aBoard ) );
+            makeClearanceSourcesJson( aBoard ), makeNetFactsJson( aBoard ),
+            makeLayerContextJson( aBoard ), makeConnectivitySummaryJson( aBoard ) );
 }
 
 
