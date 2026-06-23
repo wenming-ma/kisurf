@@ -1555,6 +1555,107 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
 }
 
 
+wxString makeConstraintMinimumsJson( const BOARD_DESIGN_SETTINGS& aSettings )
+{
+    return wxString::Format(
+            wxS( "{\"min_clearance\":%d,\"min_groove_width\":%d,"
+                 "\"min_connection_width\":%d,\"min_track_width\":%d,"
+                 "\"min_via_annular_width\":%d,\"min_via_size\":%d,"
+                 "\"min_through_drill\":%d,\"copper_edge_clearance\":%d,"
+                 "\"hole_clearance\":%d,\"hole_to_hole_min\":%d,"
+                 "\"silk_clearance\":%d}" ),
+            static_cast<int>( aSettings.m_MinClearance ),
+            static_cast<int>( aSettings.m_MinGrooveWidth ),
+            static_cast<int>( aSettings.m_MinConn ),
+            static_cast<int>( aSettings.m_TrackMinWidth ),
+            static_cast<int>( aSettings.m_ViasMinAnnularWidth ),
+            static_cast<int>( aSettings.m_ViasMinSize ),
+            static_cast<int>( aSettings.m_MinThroughDrill ),
+            static_cast<int>( aSettings.m_CopperEdgeClearance ),
+            static_cast<int>( aSettings.m_HoleClearance ),
+            static_cast<int>( aSettings.m_HoleToHoleMin ),
+            static_cast<int>( aSettings.m_SilkClearance ) );
+}
+
+
+wxString makeKeepoutConstraintJson( const ZONE& aZone )
+{
+    wxString parentDetails;
+
+    if( FOOTPRINT* footprint = aZone.GetParentFootprint() )
+    {
+        parentDetails = wxString::Format(
+                wxS( ",\"parent_footprint_reference\":%s,"
+                     "\"parent_footprint_uuid\":%s" ),
+                quotedJson( footprint->GetReference() ),
+                quotedJson( footprint->m_Uuid.AsString() ) );
+    }
+
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"name\":%s,\"zone_kind\":%s,"
+                 "\"layers\":%s,\"first_layer\":%s,\"position\":%s,"
+                 "\"bbox\":%s,\"corner_count\":%d,"
+                 "\"blocks\":{\"tracks\":%s,\"vias\":%s,\"pads\":%s,"
+                 "\"footprints\":%s,\"zone_fills\":%s}%s}" ),
+            quotedJson( aZone.m_Uuid.AsString() ), quotedJson( aZone.GetZoneName() ),
+            quotedJson( zoneKindToken( aZone ) ), layerSetDetailsJson( aZone, aZone.GetLayerSet() ),
+            quotedJson( boardLayerName( aZone, aZone.GetFirstLayer() ) ),
+            pointDetailsJson( aZone.GetPosition() ), boxRectDetailsJson( aZone.GetBoundingBox() ),
+            aZone.GetNumCorners(), boolJson( aZone.GetDoNotAllowTracks() ),
+            boolJson( aZone.GetDoNotAllowVias() ), boolJson( aZone.GetDoNotAllowPads() ),
+            boolJson( aZone.GetDoNotAllowFootprints() ),
+            boolJson( aZone.GetDoNotAllowZoneFills() ), parentDetails );
+}
+
+
+wxString makeConstraintFactsJson( const BOARD& aBoard )
+{
+    constexpr size_t      maxKeepoutSample = 64;
+    std::vector<wxString> keepoutEntries;
+    bool                  keepoutSampleTruncated = false;
+    size_t                ruleAreaCount = 0;
+    size_t                keepoutCount = 0;
+
+    auto visitZone =
+            [&]( const ZONE& aZone )
+            {
+                if( !aZone.GetIsRuleArea() )
+                    return;
+
+                ++ruleAreaCount;
+
+                if( !zoneHasKeepout( aZone ) )
+                    return;
+
+                ++keepoutCount;
+
+                if( keepoutEntries.size() >= maxKeepoutSample )
+                {
+                    keepoutSampleTruncated = true;
+                    return;
+                }
+
+                keepoutEntries.push_back( makeKeepoutConstraintJson( aZone ) );
+            };
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
+        for( ZONE* zone : footprint->Zones() )
+            visitZone( *zone );
+    }
+
+    for( ZONE* zone : aBoard.Zones() )
+        visitZone( *zone );
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board\",\"minimums\":%s,"
+                 "\"rule_area_count\":%zu,\"keepout_count\":%zu,"
+                 "\"keepouts\":%s,\"keepout_sample_truncated\":%s}" ),
+            makeConstraintMinimumsJson( aBoard.GetDesignSettings() ), ruleAreaCount,
+            keepoutCount, jsonArray( keepoutEntries ), boolJson( keepoutSampleTruncated ) );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -1617,13 +1718,15 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
                  "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
+                 "\"constraint_facts\":%s,"
                  "\"net_facts\":%s,\"layer_context\":%s,"
                  "\"connectivity_summary\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
-            makeClearanceSourcesJson( aBoard ), makeNetFactsJson( aBoard ),
-            makeLayerContextJson( aBoard ), makeConnectivitySummaryJson( aBoard ) );
+            makeClearanceSourcesJson( aBoard ), makeConstraintFactsJson( aBoard ),
+            makeNetFactsJson( aBoard ), makeLayerContextJson( aBoard ),
+            makeConnectivitySummaryJson( aBoard ) );
 }
 
 

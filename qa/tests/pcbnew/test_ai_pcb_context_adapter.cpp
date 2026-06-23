@@ -923,6 +923,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsZonesAsVisibleObjects )
 BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
 {
     BOARD board;
+    board.GetDesignSettings().m_TrackMinWidth = 12000;
+    board.GetDesignSettings().m_ViasMinSize = 24000;
+    board.GetDesignSettings().m_MinThroughDrill = 8000;
 
     ZONE* keepout = new ZONE( &board );
     keepout->SetZoneName( wxS( "NO_ROUTING" ) );
@@ -960,6 +963,27 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["keepout"]["pads"].get<bool>(), false );
     BOOST_CHECK_EQUAL( details["keepout"]["footprints"].get<bool>(), false );
     BOOST_CHECK_EQUAL( details["keepout"]["zone_fills"].get<bool>(), false );
+
+    AI_CONTEXT_SNAPSHOT snapshot = index.BuildSnapshot();
+    nlohmann::json      summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json      constraints = summary["constraint_facts"];
+
+    BOOST_CHECK_EQUAL( constraints["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_track_width"].get<int>(), 12000 );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_via_size"].get<int>(), 24000 );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_through_drill"].get<int>(), 8000 );
+    BOOST_CHECK_EQUAL( constraints["rule_area_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( constraints["keepout_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( constraints["keepout_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( constraints["keepouts"].size(), 1u );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["name"].get<std::string>(), "NO_ROUTING" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["layers"][0].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["layers"][1].get<std::string>(), "B.Cu" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["bbox"]["height"].get<int>(), 500 );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["tracks"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["vias"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["pads"].get<bool>(), false );
 }
 
 
