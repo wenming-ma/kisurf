@@ -13,9 +13,18 @@
 #include <cstdint>
 
 class AI_AGENT_PANEL_MODEL;
+class AI_ACCEPT_APPLY_ADAPTER;
+class AI_SESSION_VALIDATION_SERVICE;
+struct AI_NEXT_ACTION_CONTEXT_VERSION;
 class COMMIT;
 class KISURF_AI_PCB_OBJECT_RESOLVER;
 
 bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+                            AI_ACCEPT_APPLY_ADAPTER& aSessionApplyAdapter,
+                            AI_SESSION_VALIDATION_SERVICE& aValidationService,
+                            const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );
+
+bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
                             KISURF_AI_PCB_OBJECT_RESOLVER& aResolver,
-                            COMMIT& aCommit );
+                            COMMIT& aCommit,
+                            const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );

@@ -779,7 +779,11 @@ AI_PROVIDER_RESPONSE AI_STUB_PROVIDER::Generate( const AI_PROVIDER_REQUEST& aReq
     {
         response.m_Title = wxS( "Stub Next Action Review" );
         response.m_Body = wxS( "{\"decision_kind\":\"publish\","
-                               "\"reason_code\":\"stub_review_accept\"}" );
+                               "\"reason_code\":\"stub_review_accept\","
+                               "\"review_basis\":{\"render_valid\":true,"
+                               "\"validation_passed\":true,"
+                               "\"budget_within_limits\":true,"
+                               "\"self_review_passed\":true}}" );
         return response;
     }
 
@@ -866,11 +870,7 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
             body["response_format"] = std::move( responseFormat );
     }
 
-    if( aRequest.m_DisableDefaultTools )
-    {
-        body["tools"] = nlohmann::json::array();
-    }
-    else if( !aRequest.m_ToolCatalogJson.IsEmpty() )
+    if( !aRequest.m_ToolCatalogJson.IsEmpty() )
     {
         nlohmann::json toolCatalog = nlohmann::json::parse(
                 toUtf8String( aRequest.m_ToolCatalogJson ), nullptr, false );
@@ -888,6 +888,10 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
         {
             body["tools"] = nlohmann::json::array();
         }
+    }
+    else if( aRequest.m_DisableDefaultTools )
+    {
+        body["tools"] = nlohmann::json::array();
     }
     else
     {

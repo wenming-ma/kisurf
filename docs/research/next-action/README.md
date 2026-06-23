@@ -1,6 +1,32 @@
 # Next Action Research
 
-Place research reports for the Next Action Agent here.
+Place research reports and external research prompts for the Next Action Agent here.
+
+The consolidated implementation-oriented report is:
+
+- `results/next-action-runtime-consolidated-report.md`
+- `results/next-action-source-spike-20260622.md`
+
+Research questions / briefs live in:
+
+- `questions/`
+
+Research results and consolidated reports live in:
+
+- `results/`
+
+The latest research question briefs are:
+
+- `questions/next-action-activation-state-research-brief.md`
+- `questions/next-action-proactive-vs-stability-gated-research-brief.md`
+
+The latest source-aware research results are:
+
+- `results/next-action-implementation-strategy-pre-repo-access.md`
+- `results/next-action-implementation-strategy-repository-aware.md`
+- `results/KiSurf Next Action Activation State Research Brief.md`
+- `results/LLM-Mediated Inner Loop for an AI-Native EDA Next Action Runtime.md`
+- `results/next-action-source-spike-20260622.md`
 
 This folder is for the ambient workflow that observes the engineer's live editor
 state and proposes the next useful action as an in-workspace preview.

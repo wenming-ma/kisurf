@@ -1,6 +1,7 @@
 #include <boost/test/unit_test.hpp>
 #include <kisurf/ai/ai_agent_panel_model.h>
 #include <kisurf/ai/ai_provider.h>
+#include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 #include <kisurf/ai/ai_suggestion_orchestrator.h>
 
@@ -193,6 +194,78 @@ public:
 };
 
 
+class BLOCKING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION& aSession,
+            const wxString& ) override
+    {
+        ++m_RenderCount;
+        m_LastSessionId = aSession.SessionId();
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_Ok = false;
+        result.m_ErrorCode = wxS( "render_failed" );
+        result.m_Message = wxS( "Native preview renderer failed." );
+        result.m_ResultJson =
+                wxS( "{\"status\":\"render_failed\",\"render_valid\":false}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t ) override {}
+
+    int      m_RenderCount = 0;
+    uint64_t m_LastSessionId = 0;
+};
+
+
+class PASSING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION&, const wxString& ) override
+    {
+        ++m_RenderCount;
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_Ok = true;
+        result.m_PreviewId = 101;
+        result.m_RenderedItemCount = 1;
+        result.m_ResultJson =
+                wxS( "{\"status\":\"preview_rendered\","
+                     "\"render_valid\":true,"
+                     "\"native_preview\":true}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t ) override {}
+
+    int m_RenderCount = 0;
+};
+
+
+class PASSING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"issue_count\":0}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
 class FAKE_EDIT_ADAPTER : public AI_EDIT_ADAPTER
 {
 public:
@@ -251,6 +324,32 @@ AI_CONTEXT_SNAPSHOT makeViaNextActionContext()
 }
 
 
+AI_CONTEXT_SNAPSHOT makeViewportBoundViaNextActionContext()
+{
+    AI_CONTEXT_SNAPSHOT snapshot = makeViaNextActionContext();
+    snapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    snapshot.m_ToolState.m_CursorBoardPosition = VECTOR2I( 1200, 2200 );
+    snapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"viewport\":{\"center\":{\"x\":1000,\"y\":2000},"
+                 "\"zoom\":3.5,\"width\":640,\"height\":480},"
+                 "\"cursor_region\":{\"x\":1000,\"y\":2000,"
+                 "\"width\":500,\"height\":500}}" );
+    return snapshot;
+}
+
+
+AI_CONTEXT_SNAPSHOT makeViewportDriftedViaNextActionContext()
+{
+    AI_CONTEXT_SNAPSHOT snapshot = makeViewportBoundViaNextActionContext();
+    snapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"viewport\":{\"center\":{\"x\":1500,\"y\":2500},"
+                 "\"zoom\":3.5,\"width\":640,\"height\":480},"
+                 "\"cursor_region\":{\"x\":1500,\"y\":2500,"
+                 "\"width\":500,\"height\":500}}" );
+    return snapshot;
+}
+
+
 wxString panelTableStateJson()
 {
     return wxS( "{\"tables\":[{\"id\":\"clearance.rules\","
@@ -294,6 +393,15 @@ AI_ACTIVITY_RECORD makeSuggestionActivity( uint64_t aSequence = 1 )
     activity.m_Sequence = aSequence;
     activity.m_ActionName = wxS( "common.Interactive.selected" );
     return activity;
+}
+
+
+AI_NEXT_ACTION_CONTEXT_VERSION nextActionContextForSuggestion(
+        const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    AI_NEXT_ACTION_CONTEXT_VERSION context;
+    context.m_ContextVersion = aSuggestion.m_ContextVersion;
+    return context;
 }
 
 
@@ -496,13 +604,22 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptabl
             { wxS( "{\"decision_kind\":\"attempt\","
                    "\"opportunity_type\":\"placement\"}" ),
               wxS( "{\"decision_kind\":\"publish\","
-                   "\"reason_code\":\"acceptable\"}" ) } );
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
     model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
     model.SetBackgroundAgentEnabled( true );
 
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD activity = makeSuggestionActivity();
     std::optional<AI_SUGGESTION_RECORD> suggestion =
-            model.UpdateSuggestionsIfBackgroundEnabled(
-                    makeViaNextActionContext(), makeSuggestionActivity(), wxS( "activity" ) );
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
@@ -514,12 +631,119 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptabl
 
     FAKE_EDIT_ADAPTER editAdapter;
     AI_EDIT_SESSION edit( editAdapter );
-    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit ) );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit,
+                                         currentContext ) );
     BOOST_CHECK( !editAdapter.m_Applied.empty() );
 
     std::optional<AI_SUGGESTION_RECORD> stored = model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( stored.has_value() );
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Accepted );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeUsesConfiguredPreviewServiceGate )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    BLOCKING_SESSION_PREVIEW_SERVICE previewService;
+    model.ConfigureNextActionServices( &previewService, nullptr );
+
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    model.SetBackgroundAgentEnabled( true );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled(
+                    makeViaNextActionContext(), makeSuggestionActivity(), wxS( "activity" ) );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( model.Suggestions().empty() );
+    BOOST_CHECK_EQUAL( previewService.m_RenderCount, 1 );
+    BOOST_CHECK_NE( previewService.m_LastSessionId, 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeUsesConfiguredPublishTimeContextSampler )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity();
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+    drifted.m_ActivitySequence += 1;
+    model.ConfigureNextActionCurrentContextSampler(
+            [drifted]()
+            {
+                return drifted;
+            } );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( model.Suggestions().empty() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeAcceptUsesFullDependencyContext )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    FAKE_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION   edit( editAdapter );
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+    drifted.m_ActivitySequence += 1;
+
+    BOOST_CHECK( !model.AcceptSuggestion( suggestion->m_Id, edit, drifted ) );
+    BOOST_CHECK( editAdapter.m_Applied.empty() );
 }
 
 
@@ -882,7 +1106,8 @@ BOOST_AUTO_TEST_CASE( SuggestionLifecycleDelegatesToOrchestrator )
 
     FAKE_EDIT_ADAPTER editAdapter;
     AI_EDIT_SESSION   edit( editAdapter );
-    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit ) );
+    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit,
+                                         nextActionContextForSuggestion( *suggestion ) ) );
     BOOST_REQUIRE_EQUAL( editAdapter.m_Applied.size(), 1 );
     BOOST_CHECK( model.FindSuggestion( suggestion->m_Id )->m_Status
                  == AI_SUGGESTION_STATUS::Accepted );
@@ -912,7 +1137,8 @@ BOOST_AUTO_TEST_CASE( OperationOnlySuggestionExposesPreviewOnlyCapability )
 
     FAKE_EDIT_ADAPTER editAdapter;
     AI_EDIT_SESSION   edit( editAdapter );
-    BOOST_CHECK( !model.AcceptSuggestion( suggestion->m_Id, edit ) );
+    BOOST_CHECK( !model.AcceptSuggestion( suggestion->m_Id, edit,
+                                          nextActionContextForSuggestion( *suggestion ) ) );
     BOOST_CHECK( editAdapter.m_Applied.empty() );
 }
 
@@ -989,6 +1215,49 @@ BOOST_AUTO_TEST_CASE( ExpireSuggestionsMarksOnlyStaleActiveRecords )
     BOOST_CHECK_EQUAL( model.ExpireSuggestions( current ), 1 );
     BOOST_CHECK( model.FindSuggestion( suggestion->m_Id )->m_Status
                  == AI_SUGGESTION_STATUS::Expired );
+}
+
+
+BOOST_AUTO_TEST_CASE( ExpireSuggestionsUsesFullDependencyContextForRuntimePreview )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViewportBoundViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity( 88 );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
+
+    AI_CONTEXT_SNAPSHOT driftedContext = makeViewportDriftedViaNextActionContext();
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted =
+            AiNextActionContextVersionFromSnapshot( driftedContext,
+                                                    activity.m_Sequence );
+
+    BOOST_CHECK_EQUAL( model.ExpireSuggestions( drifted ), 1 );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
 

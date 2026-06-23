@@ -500,15 +500,29 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 AI_PREVIEW_MANAGER            session( adapter );
                 return aModel.PreviewSuggestion( aSuggestionId, session );
             },
-            [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )
+            [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+                    const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion )
             {
                 if( !GetBoard() || !GetToolManager() )
                     return false;
 
-                BOARD_COMMIT commit( GetToolManager(), true, false );
-                KISURF_AI_PCB_OBJECT_RESOLVER resolver( *GetBoard() );
-                const bool accepted =
-                        AcceptAiPcbSuggestion( aModel, aSuggestionId, resolver, commit );
+                bool accepted = false;
+
+                if( m_aiSessionApplyAdapter && m_aiSessionValidationService )
+                {
+                    accepted = AcceptAiPcbSuggestion( aModel, aSuggestionId,
+                                                      *m_aiSessionApplyAdapter,
+                                                      *m_aiSessionValidationService,
+                                                      aCurrentContextVersion );
+                }
+
+                if( !accepted )
+                {
+                    BOARD_COMMIT commit( GetToolManager(), true, false );
+                    KISURF_AI_PCB_OBJECT_RESOLVER resolver( *GetBoard() );
+                    accepted = AcceptAiPcbSuggestion( aModel, aSuggestionId, resolver,
+                                                      commit, aCurrentContextVersion );
+                }
 
                 if( accepted && GetCanvas() && GetCanvas()->GetView() )
                     GetCanvas()->GetView()->ClearPreview();

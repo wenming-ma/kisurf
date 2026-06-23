@@ -67,6 +67,8 @@ enum OperationKind
   PCB_REFILL_ZONES = 112;
   PCB_REBUILD_CONNECTIVITY = 113;
   PCB_RUN_VALIDATION = 114;
+
+  SURFACE_APPLY_PATCH = 200;
 }
 
 message OperationRequest

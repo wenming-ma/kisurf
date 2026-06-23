@@ -153,6 +153,7 @@ set( KICOMMON_SRCS
     kisurf/ai/ai_semantic_tool_call_handler.cpp
     kisurf/ai/ai_session_tool_call_handler.cpp
     kisurf/ai/ai_shadow_board.cpp
+    kisurf/ai/ai_structured_surface_apply_adapter.cpp
     kisurf/ai/ai_suggestion_operations.cpp
     kisurf/ai/ai_suggestion_orchestrator.cpp
     kisurf/ai/ai_tool_state_provider.cpp

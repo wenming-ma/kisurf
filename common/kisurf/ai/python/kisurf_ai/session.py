@@ -149,6 +149,20 @@ class KiSurfSession:
     def run_validation(self, *, scope: Any = "session", level: str = "geometry") -> None:
         self.emit("pcb.run_validation", scope=scope, level=level)
 
+    def apply_surface_patch(self, *, surface_id: str, patch: dict[str, Any],
+                            table_id: str = "", target_scope: Any = None,
+                            alias: str = "",
+                            metadata: dict[str, Any] | None = None) -> None:
+        args: dict[str, Any] = {
+            "surface_id": surface_id,
+            "patch": patch,
+        }
+        _set_optional(args, "table_id", table_id)
+        _set_optional(args, "target_scope", target_scope)
+        _set_optional(args, "alias", alias)
+        _set_optional(args, "metadata", metadata)
+        self.emit("surface.apply_patch", **args)
+
     def query_board_summary(self) -> None:
         self.emit("query.board_summary")
 

@@ -2,12 +2,14 @@
 
 #include <json_common.h>
 #include <kisurf/ai/ai_accept_applier.h>
+#include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_python_local_worker.h>
 #include <kisurf/ai/ai_python_worker.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 
 #include <algorithm>
+#include <deque>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -164,6 +166,73 @@ public:
 };
 
 
+class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    explicit SCRIPTED_NEXT_ACTION_PROVIDER( std::deque<wxString> aBodies ) :
+            m_Bodies( std::move( aBodies ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+
+        if( m_Bodies.empty() )
+            response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        else
+        {
+            response.m_Body = m_Bodies.front();
+            m_Bodies.pop_front();
+        }
+
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    std::deque<wxString>             m_Bodies;
+};
+
+
+AI_OBJECT_REF nextActionViaRef( int aX, int aY )
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_VIA_T,
+            wxString::Format( wxS( "via:%d,%d" ), aX, aY ),
+            wxString::Format(
+                    wxS( "{\"kind\":\"via\",\"position\":{\"x\":%d,\"y\":%d},"
+                         "\"diameter\":600000,\"net_name\":\"GND\"}" ),
+                    aX, aY ) );
+}
+
+
+AI_SUGGESTION_TRIGGER nextActionViaTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 12;
+    trigger.m_ContextVersion.m_ViewRevision = 5;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::PlacingVia;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_VisibleObjects.push_back( nextActionViaRef( 100, 50 ) );
+    trigger.m_ContextSnapshot.m_VisibleObjects.push_back( nextActionViaRef( 200, 50 ) );
+    trigger.m_ContextSnapshot.m_VisibleObjects.push_back( nextActionViaRef( 300, 50 ) );
+    trigger.m_Activity.m_Sequence = 44;
+    trigger.m_Activity.m_ActionName = wxS( "pcbnew.Interactive.placeVia" );
+    trigger.m_Reason = wxS( "cursor paused" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
 class QUEUED_PYTHON_WORKER : public AI_PYTHON_WORKER
 {
 public:
@@ -279,6 +348,41 @@ public:
 };
 
 
+class BLOCKING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION& aSession,
+            const wxString& aArgumentsJson ) override
+    {
+        ++m_RenderCount;
+        m_LastSessionId = aSession.SessionId();
+        m_LastArgumentsJson = aArgumentsJson;
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_Ok = false;
+        result.m_ErrorCode = wxS( "render_failed" );
+        result.m_Message = wxS( "Native preview renderer failed." );
+        result.m_ResultJson =
+                wxS( "{\"status\":\"render_failed\",\"render_valid\":false,"
+                     "\"reason\":\"native preview renderer failed\"}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t aSessionId ) override
+    {
+        ++m_ClearCount;
+        m_LastClearedSessionId = aSessionId;
+    }
+
+    int      m_RenderCount = 0;
+    int      m_ClearCount = 0;
+    uint64_t m_LastSessionId = 0;
+    uint64_t m_LastClearedSessionId = 0;
+    wxString m_LastArgumentsJson;
+};
+
+
 class RECORDING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -316,6 +420,32 @@ public:
     uint64_t m_LastSessionId = 0;
     wxString m_LastArgumentsJson;
     wxString m_LastCurrentResultJson;
+};
+
+
+class BLOCKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&,
+            const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = false;
+        result.m_ErrorCode = wxS( "preview_gate_blocked" );
+        result.m_Message = wxS( "Blocking native validation issue." );
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"blocked\","
+                     "\"issue_count\":1,\"issues\":[{\"severity\":\"error\","
+                     "\"code\":\"drc_overlap\",\"message\":\"Overlap.\"}]}}" );
+        result.m_Warnings.push_back( wxS( "blocking native validation warning" ) );
+        return result;
+    }
+
+    int m_RunCount = 0;
 };
 } // namespace
 
@@ -1650,6 +1780,102 @@ BOOST_AUTO_TEST_CASE( RunValidationToolUsesInjectedNativeValidationService )
     BOOST_REQUIRE_EQUAL( record.m_Warnings.size(), 1 );
     BOOST_CHECK_EQUAL( record.m_Warnings[0],
                        wxString( wxS( "recording native validation warning" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( NextActionRuntimeValidationFactsUseInjectedSessionValidationService )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    RECORDING_SESSION_VALIDATION_SERVICE validationService;
+    RECORDING_SESSION_PREVIEW_SERVICE    previewService;
+
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    BOOST_REQUIRE( runtime.Update( nextActionViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK_NE( validationService.m_LastSessionId, 0 );
+    BOOST_CHECK( validationService.m_LastArgumentsJson.Contains( wxS( "drc_lite" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "recording" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "recording native validation warning" ) ) );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 2 );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
+            wxS( "recording" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( NextActionRuntimePreviewGateBlocksPublishWhenValidationFails )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    BLOCKING_SESSION_VALIDATION_SERVICE validationService;
+
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( nextActionViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "validation_failed" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+}
+
+
+BOOST_AUTO_TEST_CASE( NextActionRuntimePreviewGateBlocksPublishWhenRenderFails )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    BLOCKING_SESSION_PREVIEW_SERVICE previewService;
+
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    nullptr, &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( nextActionViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_CHECK_EQUAL( previewService.m_RenderCount, 1 );
+    BOOST_CHECK_NE( previewService.m_LastSessionId, 0 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_RenderOutputsJson.Contains(
+            wxS( "render_failed" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
 }
 
 

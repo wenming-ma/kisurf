@@ -56,7 +56,9 @@ enum class AI_SESSION_OPERATION_KIND
     SetMetadata,
     RefillZones,
     RebuildConnectivity,
-    RunValidation
+    RunValidation,
+
+    ApplySurfacePatch
 };
 
 enum class AI_SESSION_HANDLE_STATUS
