@@ -19,6 +19,9 @@
 #include <pcb_textbox.h>
 #include <pcb_track.h>
 #include <project/net_settings.h>
+#include <settings/settings_manager.h>
+#include <wx/filename.h>
+#include <wx/stdpaths.h>
 #include <zone.h>
 
 namespace
@@ -72,6 +75,19 @@ nlohmann::json detailsForLabel( const std::vector<AI_OBJECT_REF>& aRefs,
 
     return nlohmann::json::parse( ref->m_DetailsJson.ToStdString() );
 }
+
+
+const nlohmann::json* findLayerById( const nlohmann::json& aLayers, PCB_LAYER_ID aLayer )
+{
+    for( const nlohmann::json& layer : aLayers )
+    {
+        if( layer["id"].get<int>() == static_cast<int>( aLayer ) )
+            return &layer;
+    }
+
+    return nullptr;
+}
+
 
 void appendRectangle( ZONE& aZone )
 {
@@ -157,6 +173,54 @@ BOOST_AUTO_TEST_CASE( AdapterAddsBoardSummaryObservationFacts )
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["y"].get<int>(), 2000 );
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["x"].get<int>(), 5000 );
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["y"].get<int>(), 7000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
+{
+    SETTINGS_MANAGER mgr;
+    wxString         projectPath = wxStandardPaths::Get().GetTempDir()
+                           + wxFileName::GetPathSeparator()
+                           + wxS( "kisurf_ai_layer_context.kicad_pro" );
+
+    mgr.LoadProject( projectPath.ToStdString() );
+
+    BOARD board;
+    board.SetProject( &mgr.Prj() );
+    board.SetCopperLayerCount( 4 );
+    board.SetVisibleLayers( LSET( { F_Cu, Edge_Cuts } ) );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json layerContext = summary["layer_context"];
+
+    BOOST_CHECK_EQUAL( layerContext["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( layerContext["visible_layers_source"].get<std::string>(),
+                       "project_local_settings" );
+    BOOST_CHECK_EQUAL( layerContext["copper_layer_count"].get<int>(), 4 );
+    BOOST_CHECK_GE( layerContext["enabled_layer_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( layerContext["visible_layer_count"].get<int>(), 2 );
+
+    const nlohmann::json* fCu = findLayerById( layerContext["layers"], F_Cu );
+    const nlohmann::json* bCu = findLayerById( layerContext["layers"], B_Cu );
+    const nlohmann::json* edgeCuts = findLayerById( layerContext["layers"], Edge_Cuts );
+
+    BOOST_REQUIRE( fCu );
+    BOOST_REQUIRE( bCu );
+    BOOST_REQUIRE( edgeCuts );
+    BOOST_CHECK_EQUAL( ( *fCu )["name"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *fCu )["copper"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *fCu )["visible"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *bCu )["copper"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *bCu )["visible"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["name"].get<std::string>(), "Edge.Cuts" );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["copper"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["visible"].get<bool>(), true );
+
+    board.ClearProject();
+    mgr.UnloadProject( &mgr.Prj(), false );
 }
 
 

@@ -76,6 +76,22 @@ wxString boolJson( bool aValue )
 }
 
 
+wxString jsonArray( const std::vector<wxString>& aEntries )
+{
+    wxString result;
+
+    for( size_t i = 0; i < aEntries.size(); ++i )
+    {
+        if( i > 0 )
+            result += wxS( "," );
+
+        result += aEntries[i];
+    }
+
+    return wxS( "[" ) + result + wxS( "]" );
+}
+
+
 wxString pointDetailsJson( const VECTOR2I& aPoint )
 {
     return wxString::Format( wxS( "{\"x\":%d,\"y\":%d}" ), aPoint.x, aPoint.y );
@@ -1088,6 +1104,40 @@ wxString makeClearanceSourcesJson( const BOARD& aBoard )
 }
 
 
+wxString makeLayerContextJson( const BOARD& aBoard )
+{
+    const LSET&           enabledLayers = aBoard.GetEnabledLayers();
+    std::vector<wxString> layerEntries;
+    int                   visibleLayerCount = 0;
+
+    for( PCB_LAYER_ID layer : enabledLayers.Seq() )
+    {
+        const bool visible = aBoard.IsLayerVisible( layer );
+
+        if( visible )
+            ++visibleLayerCount;
+
+        layerEntries.push_back( wxString::Format(
+                wxS( "{\"id\":%d,\"name\":%s,\"enabled\":true,\"visible\":%s,"
+                     "\"copper\":%s}" ),
+                static_cast<int>( layer ), quotedJson( aBoard.GetLayerName( layer ) ),
+                boolJson( visible ), boolJson( IsCopperLayer( layer ) ) ) );
+    }
+
+    const wxString visibleLayersSource = aBoard.GetProject()
+                                                ? wxS( "project_local_settings" )
+                                                : wxS( "default_all_layers_no_project" );
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board\",\"visible_layers_source\":%s,"
+                 "\"copper_layer_count\":%d,\"enabled_layer_count\":%d,"
+                 "\"visible_layer_count\":%d,\"layers\":%s}" ),
+            quotedJson( visibleLayersSource ), aBoard.GetCopperLayerCount(),
+            static_cast<int>( enabledLayers.count() ), visibleLayerCount,
+            jsonArray( layerEntries ) );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -1149,11 +1199,12 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"footprint_count\":%zu,\"pad_count\":%zu,\"track_count\":%zu,"
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
-                 "\"board_edges_bbox\":%s,\"clearance_sources\":%s}" ),
+                 "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
+                 "\"layer_context\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
-            makeClearanceSourcesJson( aBoard ) );
+            makeClearanceSourcesJson( aBoard ), makeLayerContextJson( aBoard ) );
 }
 
 
