@@ -2439,6 +2439,41 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             wxS( "\"table_id\":\"clearance.rules\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"patch_operation_count\":2" ) ) );
+    nlohmann::json renderPayload =
+            nlohmann::json::parse( renderResult.m_ResultJson.ToStdString() );
+    const nlohmann::json& preview =
+            renderPayload["surface_patch_previews"].front();
+    BOOST_REQUIRE( preview.contains( "surface_patch_diff_entries" ) );
+    BOOST_REQUIRE_EQUAL( preview["surface_patch_diff_entries"].size(), 2 );
+    BOOST_CHECK_EQUAL( preview["surface_patch_diff_entry_count"].get<size_t>(), 2 );
+
+    const nlohmann::json& cellDiff =
+            preview["surface_patch_diff_entries"].at( 0 );
+    BOOST_CHECK_EQUAL( cellDiff["kind"].get<std::string>(), "set_cell" );
+    BOOST_CHECK_EQUAL( cellDiff["surface_id"].get<std::string>(),
+                       "board_setup.clearance" );
+    BOOST_CHECK_EQUAL( cellDiff["table_id"].get<std::string>(),
+                       "clearance.rules" );
+    BOOST_CHECK_EQUAL( cellDiff["row_id"].get<std::string>(), "row.power" );
+    BOOST_CHECK_EQUAL( cellDiff["column_id"].get<std::string>(), "class" );
+    BOOST_CHECK_EQUAL( cellDiff["value"].get<std::string>(), "Power" );
+    BOOST_CHECK_EQUAL(
+            cellDiff["target_path"].get<std::string>(),
+            "surfaces.board_setup.clearance.tables.clearance.rules.rows.row.power.cells.class" );
+
+    const nlohmann::json& secondCellDiff =
+            preview["surface_patch_diff_entries"].at( 1 );
+    BOOST_CHECK_EQUAL( secondCellDiff["kind"].get<std::string>(), "set_cell" );
+    BOOST_CHECK_EQUAL( secondCellDiff["surface_id"].get<std::string>(),
+                       "board_setup.clearance" );
+    BOOST_CHECK_EQUAL( secondCellDiff["table_id"].get<std::string>(),
+                       "clearance.rules" );
+    BOOST_CHECK_EQUAL( secondCellDiff["row_id"].get<std::string>(), "row.gpio" );
+    BOOST_CHECK_EQUAL( secondCellDiff["column_id"].get<std::string>(), "class" );
+    BOOST_CHECK_EQUAL( secondCellDiff["value"].get<std::string>(), "GPIO" );
+    BOOST_CHECK_EQUAL(
+            secondCellDiff["target_path"].get<std::string>(),
+            "surfaces.board_setup.clearance.tables.clearance.rules.rows.row.gpio.cells.class" );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"surface_patch_fill_class\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(

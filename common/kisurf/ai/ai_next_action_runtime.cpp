@@ -3286,6 +3286,101 @@ wxString sessionJournalJson( const AI_EXECUTION_SESSION& aSession,
 }
 
 
+std::string jsonStringOrEmpty( const nlohmann::json& aObject, const char* aKey )
+{
+    if( !aObject.is_object() || !aObject.contains( aKey )
+        || !aObject[aKey].is_string() )
+    {
+        return std::string();
+    }
+
+    return aObject[aKey].get<std::string>();
+}
+
+
+const nlohmann::json* surfacePatchOperationArray( const nlohmann::json& aPatch )
+{
+    for( const char* key : { "operations", "ops", "changes" } )
+    {
+        if( aPatch.contains( key ) && aPatch[key].is_array() )
+            return &aPatch[key];
+    }
+
+    return nullptr;
+}
+
+
+nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs )
+{
+    nlohmann::json entries = nlohmann::json::array();
+
+    if( !aArgs.is_object() || !aArgs.contains( "patch" )
+        || !aArgs["patch"].is_object() )
+    {
+        return entries;
+    }
+
+    const nlohmann::json* operations =
+            surfacePatchOperationArray( aArgs["patch"] );
+
+    if( !operations )
+        return entries;
+
+    const std::string surfaceId = jsonStringOrEmpty( aArgs, "surface_id" );
+    const std::string tableId = jsonStringOrEmpty( aArgs, "table_id" );
+
+    for( const nlohmann::json& op : *operations )
+    {
+        const std::string opName = jsonStringOrEmpty( op, "op" );
+
+        if( opName == "set_cell" )
+        {
+            const std::string rowId = jsonStringOrEmpty( op, "row_id" );
+            const std::string columnId = jsonStringOrEmpty( op, "column_id" );
+            const std::string tableOverride = jsonStringOrEmpty( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( surfaceId.empty() || opTableId.empty() || rowId.empty()
+                || columnId.empty() || !op.contains( "value" ) )
+            {
+                continue;
+            }
+
+            entries.push_back(
+                    { { "kind", "set_cell" },
+                      { "surface_id", surfaceId },
+                      { "table_id", opTableId },
+                      { "row_id", rowId },
+                      { "column_id", columnId },
+                      { "value", op["value"] },
+                      { "target_path",
+                        "surfaces." + surfaceId + ".tables." + opTableId
+                                + ".rows." + rowId + ".cells." + columnId } } );
+            continue;
+        }
+
+        if( opName == "set_field" )
+        {
+            const std::string fieldId = jsonStringOrEmpty( op, "field_id" );
+
+            if( surfaceId.empty() || fieldId.empty() || !op.contains( "value" ) )
+                continue;
+
+            entries.push_back(
+                    { { "kind", "set_field" },
+                      { "surface_id", surfaceId },
+                      { "field_id", fieldId },
+                      { "value", op["value"] },
+                      { "target_path",
+                        "surfaces." + surfaceId + ".fields." + fieldId } } );
+        }
+    }
+
+    return entries;
+}
+
+
 nlohmann::json surfacePatchPreviewFactsJson(
         const AI_EXECUTION_SESSION& aSession )
 {
@@ -3346,6 +3441,14 @@ nlohmann::json surfacePatchPreviewFactsJson(
 
             if( patchOperationCount != 0 )
                 preview["patch_operation_count"] = patchOperationCount;
+
+            nlohmann::json diffEntries = surfacePatchDiffEntriesJson( args );
+
+            if( !diffEntries.empty() )
+            {
+                preview["surface_patch_diff_entry_count"] = diffEntries.size();
+                preview["surface_patch_diff_entries"] = std::move( diffEntries );
+            }
         }
 
         if( !preview.contains( "patch_operation_count" )
