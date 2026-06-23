@@ -105,6 +105,23 @@ const nlohmann::json* findNetByCode( const nlohmann::json& aNets, int aNetCode )
 }
 
 
+const nlohmann::json* findObstacleByKindAndLabel( const nlohmann::json& aObstacles,
+                                                  const std::string& aKind,
+                                                  const std::string& aLabel )
+{
+    for( const nlohmann::json& obstacle : aObstacles )
+    {
+        if( obstacle["kind"].get<std::string>() == aKind
+            && obstacle["label"].get<std::string>() == aLabel )
+        {
+            return &obstacle;
+        }
+    }
+
+    return nullptr;
+}
+
+
 void appendRectangle( ZONE& aZone )
 {
     aZone.AppendCorner( VECTOR2I( 0, 0 ), -1 );
@@ -261,6 +278,72 @@ BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
 
     board.ClearProject();
     mgr.UnloadProject( &mgr.Prj(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsObstacleObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+    addRoundPad( *footprint, wxS( "1" ), VECTOR2I( 100, 200 ), 1 );
+    board.Add( footprint );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 1000, 0 ) );
+    track->SetLayer( F_Cu );
+    track->SetWidth( 120 );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 500, 600 ) );
+    via->SetWidth( PADSTACK::ALL_LAYERS, 300 );
+    via->SetDrill( 100 );
+    via->SetNetCode( 1 );
+    board.Add( via );
+
+    ZONE* keepout = new ZONE( &board );
+    keepout->SetZoneName( wxS( "NO_ROUTING" ) );
+    keepout->SetIsRuleArea( true );
+    keepout->SetLayerSet( LSET( { F_Cu, B_Cu } ) );
+    keepout->SetDoNotAllowTracks( true );
+    keepout->SetDoNotAllowVias( true );
+    appendRectangle( *keepout );
+    board.Add( keepout );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json obstacleFacts = summary["obstacle_facts"];
+
+    BOOST_CHECK_EQUAL( obstacleFacts["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( obstacleFacts["obstacles"].size(), 4u );
+
+    const nlohmann::json* footprintObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "footprint", "U1" );
+    const nlohmann::json* trackObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "track", "track:0,0->1000,0" );
+    const nlohmann::json* viaObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "via", "via:500,600" );
+    const nlohmann::json* keepoutObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "keepout", "keepout:NO_ROUTING" );
+
+    BOOST_REQUIRE( footprintObstacle );
+    BOOST_REQUIRE( trackObstacle );
+    BOOST_REQUIRE( viaObstacle );
+    BOOST_REQUIRE( keepoutObstacle );
+    BOOST_CHECK_EQUAL( ( *trackObstacle )["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *trackObstacle )["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *viaObstacle )["position"]["x"].get<int>(), 500 );
+    BOOST_CHECK_EQUAL( ( *keepoutObstacle )["blocks"]["tracks"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *keepoutObstacle )["blocks"]["vias"].get<bool>(), true );
 }
 
 

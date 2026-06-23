@@ -1656,6 +1656,132 @@ wxString makeConstraintFactsJson( const BOARD& aBoard )
 }
 
 
+void appendObstacleEntry( std::vector<wxString>& aEntries, bool& aTruncated, size_t& aCount,
+                          const wxString& aEntry )
+{
+    constexpr size_t maxObstacleSample = 128;
+
+    ++aCount;
+
+    if( aEntries.size() >= maxObstacleSample )
+    {
+        aTruncated = true;
+        return;
+    }
+
+    aEntries.push_back( aEntry );
+}
+
+
+wxString makeFootprintObstacleJson( const FOOTPRINT& aFootprint )
+{
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":\"footprint\",\"label\":%s,"
+                 "\"layer\":%s,\"position\":%s,\"bbox\":%s,\"pad_count\":%u}" ),
+            quotedJson( aFootprint.m_Uuid.AsString() ), static_cast<int>( aFootprint.Type() ),
+            quotedJson( footprintContextLabel( aFootprint ) ),
+            quotedJson( aFootprint.GetLayerName() ), pointDetailsJson( aFootprint.GetPosition() ),
+            boxRectDetailsJson( aFootprint.GetBoundingBox( false ) ), aFootprint.GetPadCount() );
+}
+
+
+wxString makeRoutingObstacleJson( const PCB_TRACK& aTrack )
+{
+    const wxString kind = connectedItemKindToken( aTrack );
+    const wxString label = makeRoutingRef( aTrack ).m_Label;
+
+    wxString geometry;
+
+    if( aTrack.Type() == PCB_VIA_T )
+    {
+        const PCB_VIA& via = static_cast<const PCB_VIA&>( aTrack );
+
+        geometry = wxString::Format(
+                wxS( "\"position\":%s,\"diameter\":%d,\"drill\":%d" ),
+                pointDetailsJson( via.GetPosition() ), via.GetWidth( PADSTACK::ALL_LAYERS ),
+                via.GetDrillValue() );
+    }
+    else
+    {
+        geometry = wxString::Format(
+                wxS( "\"position\":%s,\"start\":%s,\"end\":%s,\"width\":%d" ),
+                pointDetailsJson( aTrack.GetPosition() ), pointDetailsJson( aTrack.GetStart() ),
+                pointDetailsJson( aTrack.GetEnd() ), aTrack.GetWidth() );
+    }
+
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s,"
+                 "\"net_code\":%d,\"net_name\":%s,\"layer\":%s,"
+                 "\"layers\":%s,\"bbox\":%s,%s}" ),
+            quotedJson( aTrack.m_Uuid.AsString() ), static_cast<int>( aTrack.Type() ),
+            quotedJson( kind ), quotedJson( label ), aTrack.GetNetCode(),
+            quotedJson( aTrack.GetNetname() ), quotedJson( aTrack.GetLayerName() ),
+            layerSetDetailsJson( aTrack, aTrack.GetLayerSet() ),
+            boxRectDetailsJson( aTrack.GetBoundingBox() ), geometry );
+}
+
+
+wxString makeZoneObstacleJson( const ZONE& aZone )
+{
+    const wxString kind = zoneKindToken( aZone );
+    const wxString label = makeZoneRef( aZone ).m_Label;
+    wxString       blocksJson = wxS( "null" );
+
+    if( zoneHasKeepout( aZone ) )
+    {
+        blocksJson = wxString::Format(
+                wxS( "{\"tracks\":%s,\"vias\":%s,\"pads\":%s,"
+                     "\"footprints\":%s,\"zone_fills\":%s}" ),
+                boolJson( aZone.GetDoNotAllowTracks() ), boolJson( aZone.GetDoNotAllowVias() ),
+                boolJson( aZone.GetDoNotAllowPads() ),
+                boolJson( aZone.GetDoNotAllowFootprints() ),
+                boolJson( aZone.GetDoNotAllowZoneFills() ) );
+    }
+
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s,"
+                 "\"net_code\":%d,\"net_name\":%s,\"layers\":%s,"
+                 "\"first_layer\":%s,\"position\":%s,\"bbox\":%s,"
+                 "\"is_rule_area\":%s,\"has_keepout\":%s,\"blocks\":%s}" ),
+            quotedJson( aZone.m_Uuid.AsString() ), static_cast<int>( aZone.Type() ),
+            quotedJson( kind ), quotedJson( label ), aZone.GetNetCode(),
+            quotedJson( aZone.GetNetname() ), layerSetDetailsJson( aZone, aZone.GetLayerSet() ),
+            quotedJson( boardLayerName( aZone, aZone.GetFirstLayer() ) ),
+            pointDetailsJson( aZone.GetPosition() ), boxRectDetailsJson( aZone.GetBoundingBox() ),
+            boolJson( aZone.GetIsRuleArea() ), boolJson( zoneHasKeepout( aZone ) ), blocksJson );
+}
+
+
+wxString makeObstacleFactsJson( const BOARD& aBoard )
+{
+    std::vector<wxString> obstacleEntries;
+    bool                  obstacleSampleTruncated = false;
+    size_t                obstacleCount = 0;
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+        appendObstacleEntry( obstacleEntries, obstacleSampleTruncated, obstacleCount,
+                             makeFootprintObstacleJson( *footprint ) );
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+    {
+        if( isRoutingObject( *track ) )
+        {
+            appendObstacleEntry( obstacleEntries, obstacleSampleTruncated, obstacleCount,
+                                 makeRoutingObstacleJson( *track ) );
+        }
+    }
+
+    for( ZONE* zone : aBoard.Zones() )
+        appendObstacleEntry( obstacleEntries, obstacleSampleTruncated, obstacleCount,
+                             makeZoneObstacleJson( *zone ) );
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board\",\"obstacle_count\":%zu,"
+                 "\"obstacles\":%s,\"obstacle_sample_truncated\":%s}" ),
+            obstacleCount, jsonArray( obstacleEntries ), boolJson( obstacleSampleTruncated ) );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -1718,15 +1844,15 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
                  "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
-                 "\"constraint_facts\":%s,"
+                 "\"constraint_facts\":%s,\"obstacle_facts\":%s,"
                  "\"net_facts\":%s,\"layer_context\":%s,"
                  "\"connectivity_summary\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
             makeClearanceSourcesJson( aBoard ), makeConstraintFactsJson( aBoard ),
-            makeNetFactsJson( aBoard ), makeLayerContextJson( aBoard ),
-            makeConnectivitySummaryJson( aBoard ) );
+            makeObstacleFactsJson( aBoard ), makeNetFactsJson( aBoard ),
+            makeLayerContextJson( aBoard ), makeConnectivitySummaryJson( aBoard ) );
 }
 
 
