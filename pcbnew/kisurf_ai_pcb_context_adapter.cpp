@@ -2,6 +2,7 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <connectivity/connectivity_data.h>
 #include <core/typeinfo.h>
 #include <footprint.h>
 #include <netclass.h>
@@ -1138,6 +1139,31 @@ wxString makeLayerContextJson( const BOARD& aBoard )
 }
 
 
+wxString makeConnectivitySummaryJson( const BOARD& aBoard )
+{
+    std::shared_ptr<CONNECTIVITY_DATA> connectivity = aBoard.GetConnectivity();
+
+    if( !connectivity )
+    {
+        return wxS( "{\"source\":\"board_connectivity\",\"present\":false,"
+                    "\"net_count\":0,\"node_count\":0,\"pad_count\":0,"
+                    "\"ratsnest_unconnected_count\":0,"
+                    "\"visible_ratsnest_unconnected_count\":0,"
+                    "\"local_ratsnest_line_count\":0}" );
+    }
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board_connectivity\",\"present\":true,"
+                 "\"net_count\":%d,\"node_count\":%u,\"pad_count\":%u,"
+                 "\"ratsnest_unconnected_count\":%u,"
+                 "\"visible_ratsnest_unconnected_count\":%u,"
+                 "\"local_ratsnest_line_count\":%zu}" ),
+            connectivity->GetNetCount(), connectivity->GetNodeCount(),
+            connectivity->GetPadCount(), connectivity->GetUnconnectedCount( false ),
+            connectivity->GetUnconnectedCount( true ), connectivity->GetLocalRatsnest().size() );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -1200,11 +1226,12 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
                  "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
-                 "\"layer_context\":%s}" ),
+                 "\"layer_context\":%s,\"connectivity_summary\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
-            makeClearanceSourcesJson( aBoard ), makeLayerContextJson( aBoard ) );
+            makeClearanceSourcesJson( aBoard ), makeLayerContextJson( aBoard ),
+            makeConnectivitySummaryJson( aBoard ) );
 }
 
 

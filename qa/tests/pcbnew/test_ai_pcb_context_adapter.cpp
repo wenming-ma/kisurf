@@ -5,6 +5,7 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <connectivity/connectivity_data.h>
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -95,6 +96,25 @@ void appendRectangle( ZONE& aZone )
     aZone.AppendCorner( VECTOR2I( 1000, 0 ), -1 );
     aZone.AppendCorner( VECTOR2I( 1000, 500 ), -1 );
     aZone.AppendCorner( VECTOR2I( 0, 500 ), -1 );
+}
+
+
+PAD* addRoundPad( FOOTPRINT& aFootprint, const wxString& aNumber, const VECTOR2I& aPosition,
+                  int aNetCode )
+{
+    PAD* pad = new PAD( &aFootprint );
+
+    pad->SetNumber( aNumber );
+    pad->SetPosition( aPosition );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 1000, 1000 ) );
+    pad->SetLayerSet( LSET( { F_Cu, F_Mask } ) );
+    pad->SetAttribute( PAD_ATTRIB::SMD );
+    pad->SetNetCode( aNetCode );
+
+    aFootprint.Add( pad );
+
+    return pad;
 }
 } // namespace
 
@@ -221,6 +241,45 @@ BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
 
     board.ClearProject();
     mgr.UnloadProject( &mgr.Prj(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* left = new FOOTPRINT( &board );
+    left->SetReference( wxS( "U1" ) );
+    addRoundPad( *left, wxS( "1" ), VECTOR2I( 0, 0 ), 1 );
+    board.Add( left );
+
+    FOOTPRINT* right = new FOOTPRINT( &board );
+    right->SetReference( wxS( "U2" ) );
+    addRoundPad( *right, wxS( "1" ), VECTOR2I( 100000, 0 ), 1 );
+    board.Add( right );
+
+    BOOST_REQUIRE( board.BuildConnectivity() );
+    BOOST_REQUIRE_EQUAL( board.GetConnectivity()->GetUnconnectedCount( false ), 1u );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json connectivity = summary["connectivity_summary"];
+
+    BOOST_CHECK_EQUAL( connectivity["source"].get<std::string>(), "board_connectivity" );
+    BOOST_CHECK_EQUAL( connectivity["present"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( connectivity["net_count"].get<int>(),
+                       board.GetConnectivity()->GetNetCount() );
+    BOOST_CHECK_EQUAL( connectivity["node_count"].get<int>(),
+                       board.GetConnectivity()->GetNodeCount() );
+    BOOST_CHECK_EQUAL( connectivity["pad_count"].get<int>(),
+                       board.GetConnectivity()->GetPadCount() );
+    BOOST_CHECK_EQUAL( connectivity["ratsnest_unconnected_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( connectivity["visible_ratsnest_unconnected_count"].get<int>(),
+                       board.GetConnectivity()->GetUnconnectedCount( true ) );
+    BOOST_CHECK_EQUAL( connectivity["local_ratsnest_line_count"].get<int>(), 0 );
 }
 
 
