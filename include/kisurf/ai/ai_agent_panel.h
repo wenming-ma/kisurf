@@ -58,7 +58,8 @@ public:
     using SUGGESTION_PREVIEW_HANDLER =
             std::function<bool( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )>;
     using SUGGESTION_ACCEPT_HANDLER =
-            std::function<bool( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )>;
+            std::function<bool( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+                                const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion )>;
     using SUGGESTION_REJECT_HANDLER =
             std::function<bool( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )>;
 

@@ -922,6 +922,20 @@ void AI_AGENT_PANEL::ConfigureActionToolCalls(
         AI_SESSION_VALIDATION_SERVICE* aValidationService )
 {
     m_Model->SetToolCallHandler( nullptr );
+    m_Model->ConfigureNextActionServices( aPreviewService, aValidationService );
+    m_Model->ConfigureNextActionCurrentContextSampler(
+            [this]()
+            {
+                AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+                uint64_t latestActivitySequence = 0;
+
+                for( const AI_ACTIVITY_RECORD& activity : m_Model->ActivityRecords() )
+                    latestActivitySequence =
+                            std::max( latestActivitySequence, activity.m_Sequence );
+
+                return AiNextActionContextVersionFromSnapshot(
+                        snapshot, latestActivitySequence );
+            } );
     m_ToolCallHandler.reset();
     m_ActionRunner = std::move( aRunner );
     m_ToolExecutionPolicy = AI_TOOL_EXECUTION_POLICY();
@@ -1213,7 +1227,16 @@ bool AI_AGENT_PANEL::AcceptLatestSuggestion()
     if( !m_AcceptSuggestionHandler )
         return false;
 
-    bool handled = m_AcceptSuggestionHandler( *m_Model, *suggestionId );
+    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+    uint64_t latestActivitySequence = 0;
+
+    for( const AI_ACTIVITY_RECORD& activity : m_Model->ActivityRecords() )
+        latestActivitySequence = std::max( latestActivitySequence, activity.m_Sequence );
+
+    AI_NEXT_ACTION_CONTEXT_VERSION contextVersion =
+            AiNextActionContextVersionFromSnapshot( snapshot, latestActivitySequence );
+    bool handled = m_AcceptSuggestionHandler( *m_Model, *suggestionId,
+                                              contextVersion );
     RefreshSuggestions();
     RefreshLog();
     updateComposerStatus();
@@ -1325,7 +1348,12 @@ void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )
     {
         AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
         saveWorkspaceContextStateFromContext( snapshot, activity );
-        m_Model->ExpireSuggestions( snapshot.m_Version );
+
+        AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+                AiNextActionContextVersionFromSnapshot( snapshot,
+                                                        activity.m_Sequence );
+        m_Model->ExpireSuggestions( currentContext );
+
         std::optional<AI_SUGGESTION_RECORD> suggestion =
                 m_Model->UpdateSuggestionsIfBackgroundEnabled( std::move( snapshot ),
                                                                std::move( activity ),

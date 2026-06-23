@@ -24,7 +24,8 @@ AI_AGENT_PANEL_MODEL::AI_AGENT_PANEL_MODEL(
         m_ActivityLog( 256 ),
         m_Runtime( std::move( aProvider ), m_ActivityLog ),
         m_NextActionRuntime( std::make_unique<AI_NEXT_ACTION_RUNTIME>(
-                MakeDefaultAiProvider() ) ),
+                MakeDefaultAiProvider(), m_NextActionValidationService,
+                m_NextActionPreviewService ) ),
         m_SuggestionProvider( std::move( aSuggestionProvider ) )
 {
     if( m_SuggestionProvider )
@@ -117,9 +118,40 @@ void AI_AGENT_PANEL_MODEL::SetProvider( std::unique_ptr<AI_PROVIDER> aProvider )
 void AI_AGENT_PANEL_MODEL::SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider )
 {
     if( aProvider )
-        m_NextActionRuntime = std::make_unique<AI_NEXT_ACTION_RUNTIME>( std::move( aProvider ) );
+    {
+        m_NextActionRuntime = std::make_unique<AI_NEXT_ACTION_RUNTIME>(
+                std::move( aProvider ), m_NextActionValidationService,
+                m_NextActionPreviewService );
+
+        if( m_NextActionContextSampler )
+            m_NextActionRuntime->SetCurrentContextSampler( m_NextActionContextSampler );
+    }
     else
+    {
         m_NextActionRuntime.reset();
+    }
+}
+
+
+void AI_AGENT_PANEL_MODEL::ConfigureNextActionServices(
+        AI_SESSION_PREVIEW_SERVICE* aPreviewService,
+        AI_SESSION_VALIDATION_SERVICE* aValidationService )
+{
+    m_NextActionPreviewService = aPreviewService;
+    m_NextActionValidationService = aValidationService;
+
+    if( m_NextActionRuntime )
+        m_NextActionRuntime->SetServices( aValidationService, aPreviewService );
+}
+
+
+void AI_AGENT_PANEL_MODEL::ConfigureNextActionCurrentContextSampler(
+        std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> aSampler )
+{
+    m_NextActionContextSampler = std::move( aSampler );
+
+    if( m_NextActionRuntime )
+        m_NextActionRuntime->SetCurrentContextSampler( m_NextActionContextSampler );
 }
 
 
@@ -373,10 +405,16 @@ bool AI_AGENT_PANEL_MODEL::PreviewSuggestion( uint64_t aSuggestionId,
 
 
 bool AI_AGENT_PANEL_MODEL::AcceptSuggestion( uint64_t aSuggestionId,
-                                             AI_EDIT_SESSION& aEditSession )
+                                             AI_EDIT_SESSION& aEditSession,
+                                             const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion )
 {
-    if( m_NextActionRuntime && m_NextActionRuntime->Accept( aSuggestionId, aEditSession ) )
-        return true;
+    if( m_NextActionRuntime && m_NextActionRuntime->FindSuggestion( aSuggestionId ) )
+    {
+        return m_NextActionRuntime->Accept( aSuggestionId, aEditSession,
+                                            aCurrentContextVersion );
+    }
+
+    wxUnusedVar( aCurrentContextVersion );
 
     return m_SuggestionOrchestrator
            && m_SuggestionOrchestrator->Accept( aSuggestionId, aEditSession );
@@ -402,6 +440,12 @@ bool AI_AGENT_PANEL_MODEL::RejectSuggestion( uint64_t aSuggestionId )
 }
 
 
+bool AI_AGENT_PANEL_MODEL::ExpireSuggestion( uint64_t aSuggestionId )
+{
+    return m_NextActionRuntime && m_NextActionRuntime->Expire( aSuggestionId );
+}
+
+
 size_t AI_AGENT_PANEL_MODEL::ExpireSuggestions( const AI_CONTEXT_VERSION& aCurrentVersion )
 {
     size_t expired = m_NextActionRuntime ? m_NextActionRuntime->ExpireStale( aCurrentVersion )
@@ -409,6 +453,21 @@ size_t AI_AGENT_PANEL_MODEL::ExpireSuggestions( const AI_CONTEXT_VERSION& aCurre
 
     if( m_SuggestionOrchestrator )
         expired += m_SuggestionOrchestrator->ExpireStale( aCurrentVersion );
+
+    return expired;
+}
+
+
+size_t AI_AGENT_PANEL_MODEL::ExpireSuggestions(
+        const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentVersion )
+{
+    size_t expired = m_NextActionRuntime
+                     ? m_NextActionRuntime->ExpireStale( aCurrentVersion )
+                     : 0;
+
+    if( m_SuggestionOrchestrator )
+        expired += m_SuggestionOrchestrator->ExpireStale(
+                aCurrentVersion.m_ContextVersion );
 
     return expired;
 }

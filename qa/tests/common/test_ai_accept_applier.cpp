@@ -247,6 +247,45 @@ BOOST_AUTO_TEST_CASE( InexactPreviewValidationRejectsBeforeAdapterBegins )
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptSufficientButInexactPreviewValidationRejectsBeforeAdapterBegins )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "inexact accepted validation" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"v0\",\"net\":\"GND\","
+                 "\"position\":{\"x\":0,\"y\":0}}" ) )
+                           .m_Ok );
+
+    AI_SESSION_OPERATION_RECORD validation;
+    validation.m_Kind = AI_SESSION_OPERATION_KIND::RunValidation;
+    validation.m_ArgumentsJson =
+            wxS( "{\"scope\":\"session\",\"level\":\"full_drc\",\"gate\":\"accept\"}" );
+    validation.m_ResultJson =
+            wxS( "{\"status\":\"validation_completed\",\"validation\":{"
+                 "\"level\":\"full_drc\","
+                 "\"preview_state_exact\":false,"
+                 "\"accept_validation_sufficient\":true,"
+                 "\"accept_validation_reason\":\"native result was not exact\"}}" );
+    session.AppendOperation( std::move( validation ) );
+    session.EndStep( stepId );
+
+    RECORDING_ACCEPT_ADAPTER adapter;
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "validation_not_accept_grade" ) ) );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
 BOOST_AUTO_TEST_CASE( NativeDrcFallbackValidationRejectsBeforeAdapterBegins )
 {
     AI_EXECUTION_SESSION session = makeSession();

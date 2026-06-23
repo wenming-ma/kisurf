@@ -1,12 +1,17 @@
 #include <boost/test/unit_test.hpp>
 
+#include <kisurf/ai/ai_accept_applier.h>
 #include <kisurf/ai/ai_agent_panel_model.h>
+#include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_provider.h>
+#include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf_ai_pcb_object_resolver.h>
+#include <kisurf_ai_pcb_session_apply_adapter.h>
 #include <kisurf_ai_pcb_suggestion_review.h>
 
 #include <board.h>
 #include <commit.h>
+#include <json_common.h>
 #include <netinfo.h>
 #include <pcb_shape.h>
 #include <pcb_track.h>
@@ -142,6 +147,158 @@ private:
 };
 
 
+class JOURNAL_REPLAY_SPY_ADAPTER : public AI_ACCEPT_APPLY_ADAPTER
+{
+public:
+    bool BeginTransaction( const AI_EXECUTION_SESSION& aSession,
+                           wxString& aError ) override
+    {
+        wxUnusedVar( aError );
+
+        ++m_BeginCount;
+        m_BaseHash = aSession.BaseHash();
+        return true;
+    }
+
+    bool ApplyOperation( const AI_SESSION_OPERATION_RECORD& aOperation,
+                         wxString& aError ) override
+    {
+        wxUnusedVar( aError );
+
+        m_AppliedKinds.push_back( aOperation.m_Kind );
+        m_AppliedArguments.push_back( aOperation.m_ArgumentsJson );
+        return true;
+    }
+
+    bool CommitTransaction( wxString& aError ) override
+    {
+        wxUnusedVar( aError );
+
+        ++m_CommitCount;
+        return true;
+    }
+
+    int                                    m_BeginCount = 0;
+    int                                    m_CommitCount = 0;
+    wxString                               m_BaseHash;
+    std::vector<AI_SESSION_OPERATION_KIND> m_AppliedKinds;
+    std::vector<wxString>                  m_AppliedArguments;
+};
+
+
+class ACCEPT_GATE_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    explicit ACCEPT_GATE_VALIDATION_SERVICE( bool aAcceptSufficient,
+                                             bool aPreviewStateExact = true ) :
+            m_AcceptSufficient( aAcceptSufficient ),
+            m_PreviewStateExact( aPreviewStateExact )
+    {
+    }
+
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION& aSession,
+            const wxString& aArgumentsJson,
+            const wxString& aCurrentResultJson ) override
+    {
+        wxUnusedVar( aCurrentResultJson );
+
+        ++m_RunCount;
+        m_ArgumentsJson = aArgumentsJson;
+        m_MutationCount = 0;
+
+        for( const AI_SESSION_OPERATION_RECORD& operation :
+                aSession.Journal().Operations() )
+        {
+            if( operation.IsMutation()
+                && operation.m_Kind != AI_SESSION_OPERATION_KIND::RunValidation )
+            {
+                ++m_MutationCount;
+            }
+        }
+
+        AI_SESSION_VALIDATION_RESULT result;
+        nlohmann::json validation =
+                { { "validation",
+                    { { "status", "native_checked" },
+                      { "level", "full_drc" },
+                      { "preview_state_exact", m_PreviewStateExact },
+                      { "accept_validation_sufficient", m_AcceptSufficient },
+                      { "accept_validation_reason",
+                        m_AcceptSufficient
+                                ? "accept gate passed"
+                                : "accept gate failed" } } } };
+        result.m_ResultJson = wxString::FromUTF8( validation.dump().c_str() );
+        return result;
+    }
+
+    bool     m_AcceptSufficient = true;
+    bool     m_PreviewStateExact = true;
+    int      m_RunCount = 0;
+    size_t   m_MutationCount = 0;
+    wxString m_ArgumentsJson;
+};
+
+
+class PUBLISH_READY_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION&,
+            const wxString& ) override
+    {
+        ++m_RenderCount;
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_PreviewId = 700 + m_RenderCount;
+        result.m_RenderedItemCount = 1;
+        result.m_ResultJson =
+                wxS( "{\"status\":\"preview_rendered\","
+                     "\"render_valid\":true,"
+                     "\"native_preview\":true}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t ) override {}
+
+    int m_RenderCount = 0;
+};
+
+
+class PUBLISH_READY_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&,
+            const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"native_checked\","
+                     "\"level\":\"drc_lite\","
+                     "\"issue_count\":0}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+struct PUBLISH_READY_NEXT_ACTION_SERVICES
+{
+    void Configure( AI_AGENT_PANEL_MODEL& aModel )
+    {
+        aModel.ConfigureNextActionServices( &m_Preview, &m_Validation );
+    }
+
+    PUBLISH_READY_SESSION_PREVIEW_SERVICE    m_Preview;
+    PUBLISH_READY_SESSION_VALIDATION_SERVICE m_Validation;
+};
+
+
 struct PCB_REVIEW_FIXTURE
 {
     PCB_REVIEW_FIXTURE()
@@ -207,6 +364,33 @@ AI_OBJECT_REF shapePreviewRef()
 }
 
 
+std::string toUtf8String( const wxString& aText )
+{
+    wxScopedCharBuffer buffer = aText.ToUTF8();
+    return buffer.data() ? std::string( buffer.data(), buffer.length() ) : std::string();
+}
+
+
+wxString jsonText( const nlohmann::json& aJson )
+{
+    return wxString::FromUTF8( aJson.dump().c_str() );
+}
+
+
+PCB_TRACK* addTrackSegment( BOARD& aBoard, NETINFO_ITEM* aNet,
+                            const VECTOR2I& aStart, const VECTOR2I& aEnd )
+{
+    PCB_TRACK* track = new PCB_TRACK( &aBoard );
+    track->SetStart( aStart );
+    track->SetEnd( aEnd );
+    track->SetLayer( F_Cu );
+    track->SetWidth( 100000 );
+    track->SetNet( aNet );
+    aBoard.Add( track );
+    return track;
+}
+
+
 AI_SUGGESTION_RECORD routeSuggestion()
 {
     AI_OBJECT_REF routeRef = routePreviewRef();
@@ -255,6 +439,153 @@ AI_SUGGESTION_RECORD zoneSuggestion()
 }
 
 
+AI_NEXT_ACTION_CONTEXT_VERSION runtimeAcceptContext()
+{
+    AI_NEXT_ACTION_CONTEXT_VERSION context;
+    context.m_BoardBaseHash = wxS( "board-hash-a" );
+    context.m_ContextVersion.m_DocumentRevision = 12;
+    context.m_ContextVersion.m_ViewRevision = 5;
+    context.m_ActivitySequence = 1;
+    return context;
+}
+
+
+wxString dependencyFingerprintFor( const AI_NEXT_ACTION_CONTEXT_VERSION& aContext )
+{
+    nlohmann::json fingerprint =
+            { { "board_base_hash", toUtf8String( aContext.m_BoardBaseHash ) },
+              { "document_revision",
+                aContext.m_ContextVersion.m_DocumentRevision },
+              { "selection_revision",
+                aContext.m_ContextVersion.m_SelectionRevision },
+              { "view_revision", aContext.m_ContextVersion.m_ViewRevision },
+              { "tool_mode_version", aContext.m_ToolModeVersion },
+              { "ui_focus_version", aContext.m_UiFocusVersion },
+              { "activity_sequence", aContext.m_ActivitySequence },
+              { "viewport_fingerprint",
+                toUtf8String( aContext.m_ViewportFingerprint ) },
+              { "cursor_region_fingerprint",
+                toUtf8String( aContext.m_CursorRegionFingerprint ) } };
+
+    return jsonText( fingerprint );
+}
+
+
+AI_SUGGESTION_RECORD nextActionTrackGeometrySuggestion(
+        const PCB_TRACK& aTrack,
+        const AI_NEXT_ACTION_CONTEXT_VERSION& aContext )
+{
+    constexpr uint64_t sessionId = 77;
+    constexpr uint64_t handleId = 3;
+    constexpr uint64_t generation = 1;
+    constexpr uint64_t leaseId = 1;
+    constexpr uint64_t attemptId = 99;
+
+    nlohmann::json handle =
+            { { "session_id", sessionId },
+              { "handle_id", handleId },
+              { "generation", generation } };
+    nlohmann::json updateArgs =
+            { { "handle", handle },
+              { "geometry_patch",
+                { { "end", { { "x", 500 }, { "y", 600 } } },
+                  { "width", 150000 } } } };
+    nlohmann::json shadowItem =
+            { { "handle", handle },
+              { "type", "track_segment" },
+              { "net", "GND" },
+              { "layer", "F.Cu" },
+              { "layers", nlohmann::json::array( { "F.Cu" } ) },
+              { "geometry",
+                { { "start", { { "x", 0 }, { "y", 0 } } },
+                  { "end", { { "x", 100 }, { "y", 0 } } },
+                  { "width", 100000 } } },
+              { "properties", nlohmann::json::object() },
+              { "metadata",
+                { { "live_uuid", toUtf8String( aTrack.m_Uuid.AsString() ) },
+                  { "live_kicad_type", std::to_string( aTrack.Type() ) } } },
+              { "created_epoch", 0 },
+              { "updated_epoch", 0 },
+              { "deleted", false } };
+    nlohmann::json operation =
+            { { "operation_id", 1 },
+              { "step_id", 1 },
+              { "kind", toUtf8String( AiSessionOperationKindId(
+                          AI_SESSION_OPERATION_KIND::UpdateItemGeometry ) ) },
+              { "arguments", updateArgs },
+              { "resolved_handles", nlohmann::json::array( { handle } ) },
+              { "created_handles", nlohmann::json::array() },
+              { "warnings", nlohmann::json::array() },
+              { "result", nlohmann::json::object() },
+              { "before_epoch", 0 },
+              { "after_epoch", 1 },
+              { "is_mutation", true } };
+    nlohmann::json contextJson =
+            { { "board_base_hash", toUtf8String( aContext.m_BoardBaseHash ) },
+              { "document_revision",
+                aContext.m_ContextVersion.m_DocumentRevision },
+              { "selection_revision",
+                aContext.m_ContextVersion.m_SelectionRevision },
+              { "view_revision", aContext.m_ContextVersion.m_ViewRevision },
+              { "tool_mode_version", aContext.m_ToolModeVersion },
+              { "ui_focus_version", aContext.m_UiFocusVersion },
+              { "activity_sequence", aContext.m_ActivitySequence },
+              { "viewport_fingerprint",
+                toUtf8String( aContext.m_ViewportFingerprint ) },
+              { "cursor_region_fingerprint",
+                toUtf8String( aContext.m_CursorRegionFingerprint ) } };
+    nlohmann::json previewLease =
+            { { "lease_id", leaseId },
+              { "owner_namespace", "nextaction" },
+              { "active", true } };
+    nlohmann::json acceptToken =
+            { { "lease_id", leaseId },
+              { "owner_namespace", "nextaction" },
+              { "attempt_id", attemptId },
+              { "context_version", contextJson },
+              { "dependency_fingerprint",
+                toUtf8String( dependencyFingerprintFor( aContext ) ) },
+              { "touched_object_set_fingerprint", "seeded-track" } };
+    nlohmann::json provenance =
+            { { "runtime", "next_action" },
+              { "runtime_step_id", 1 },
+              { "attempt_id", attemptId },
+              { "dependency_fingerprint",
+                toUtf8String( dependencyFingerprintFor( aContext ) ) },
+              { "preview_lease", previewLease },
+              { "accept_token", acceptToken },
+              { "attempt",
+                { { "attempt_id", attemptId },
+                  { "session_journal",
+                    { { "session_id", sessionId },
+                      { "board_id", "pcb-test" },
+                      { "base_hash", "board-hash-a" },
+                      { "operations", nlohmann::json::array( { operation } ) },
+                      { "shadow_items",
+                        nlohmann::json::array( { shadowItem } ) } } },
+                  { "tool_results",
+                    nlohmann::json::array( {
+                            { { "tool", "validate.hidden_attempt" },
+                              { "validation",
+                                { { "accept_validation_sufficient", true },
+                                  { "preview_state_exact", true } } } } } ) } } } };
+
+    AI_OBJECT_REF previewRef = routePreviewRef();
+
+    AI_SUGGESTION_RECORD suggestion;
+    suggestion.m_Title = wxS( "Patch seeded track" );
+    suggestion.m_Body = wxS( "Preview before applying." );
+    suggestion.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
+    suggestion.m_ContextVersion = aContext.m_ContextVersion;
+    suggestion.m_ArgumentsJson = previewRef.m_DetailsJson;
+    suggestion.m_PreviewObjects.push_back( previewRef );
+    suggestion.m_EditObjects.push_back( previewRef );
+    suggestion.m_RuntimeProvenanceJson = jsonText( provenance );
+    return suggestion;
+}
+
+
 AI_CONTEXT_SNAPSHOT suggestionContext()
 {
     AI_CONTEXT_SNAPSHOT snapshot;
@@ -286,6 +617,15 @@ AI_ACTIVITY_RECORD suggestionActivity()
     activity.m_Sequence = 1;
     activity.m_ActionName = wxS( "kisurf.ai.nextAction" );
     return activity;
+}
+
+
+AI_NEXT_ACTION_CONTEXT_VERSION nextActionContextForSuggestion(
+        const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    AI_NEXT_ACTION_CONTEXT_VERSION context;
+    context.m_ContextVersion = aSuggestion.m_ContextVersion;
+    return context;
 }
 
 
@@ -326,7 +666,8 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesRoutePreviewToOperationEditAdapt
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit ) );
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                        nextActionContextForSuggestion( *suggestion ) ) );
     BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
 
@@ -344,28 +685,244 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeViaPreviewAddsBoardVia )
             { wxS( "{\"decision_kind\":\"attempt\","
                    "\"opportunity_type\":\"placement\"}" ),
               wxS( "{\"decision_kind\":\"publish\","
-                   "\"reason_code\":\"acceptable\"}" ) } );
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
     model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PUBLISH_READY_NEXT_ACTION_SERVICES publishServices;
+    publishServices.Configure( model );
     model.SetBackgroundAgentEnabled( true );
 
+    AI_CONTEXT_SNAPSHOT context = viaNextActionContext();
+    AI_ACTIVITY_RECORD activity = suggestionActivity();
     std::optional<AI_SUGGESTION_RECORD> suggestion =
-            model.UpdateSuggestionsIfBackgroundEnabled(
-                    viaNextActionContext(), suggestionActivity(), wxS( "activity" ) );
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "accept_token" ) ) );
 
-    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
-    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER replayAdapter( fixture.m_Board );
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit ) );
-    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
-    BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, replayAdapter,
+                                        validationService,
+                                        currentContext ) );
 
     std::vector<PCB_TRACK*> vias = boardTracksOfType( fixture.m_Board, PCB_VIA_T );
     BOOST_REQUIRE_EQUAL( vias.size(), 1 );
     BOOST_CHECK_EQUAL( vias.front()->GetNetCode(), fixture.m_Gnd->GetNetCode() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeUsesPublishedAttemptJournalReplay )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PUBLISH_READY_NEXT_ACTION_SERVICES publishServices;
+    publishServices.Configure( model );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = viaNextActionContext();
+    AI_ACTIVITY_RECORD activity = suggestionActivity();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    JOURNAL_REPLAY_SPY_ADAPTER replayAdapter;
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                        replayAdapter, validationService,
+                                        currentContext ) );
+
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK_EQUAL( validationService.m_MutationCount, 1 );
+    BOOST_CHECK( validationService.m_ArgumentsJson.Contains(
+            wxS( "\"level\":\"full_drc\"" ) ) );
+    BOOST_CHECK( validationService.m_ArgumentsJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK_EQUAL( replayAdapter.m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( replayAdapter.m_CommitCount, 1 );
+    BOOST_REQUIRE_EQUAL( replayAdapter.m_AppliedKinds.size(), 2 );
+    BOOST_CHECK( replayAdapter.m_AppliedKinds.front()
+                 == AI_SESSION_OPERATION_KIND::CreateVia );
+    BOOST_CHECK( replayAdapter.m_AppliedKinds.back()
+                 == AI_SESSION_OPERATION_KIND::RunValidation );
+    BOOST_CHECK( replayAdapter.m_AppliedArguments.front().Contains(
+            wxS( "\"net\":\"GND\"" ) ) );
+    BOOST_CHECK( replayAdapter.m_AppliedArguments.front().Contains(
+            wxS( "\"position\"" ) ) );
+
+    std::optional<AI_SUGGESTION_RECORD> accepted =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( accepted.has_value() );
+    BOOST_CHECK( accepted->m_Status == AI_SUGGESTION_STATUS::Accepted );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeJournalReplayCanPatchSeededLiveTrack )
+{
+    PCB_REVIEW_FIXTURE fixture;
+    PCB_TRACK* track = addTrackSegment( fixture.m_Board, fixture.m_Gnd,
+                                        VECTOR2I( 0, 0 ), VECTOR2I( 100, 0 ) );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext = runtimeAcceptContext();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( nextActionTrackGeometrySuggestion(
+                    *track, currentContext ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER replayAdapter( fixture.m_Board );
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true );
+
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                        replayAdapter, validationService,
+                                        currentContext ) );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK_EQUAL( track->GetEnd().x, 500 );
+    BOOST_CHECK_EQUAL( track->GetEnd().y, 600 );
+    BOOST_CHECK_EQUAL( track->GetWidth(), 150000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidationFails )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PUBLISH_READY_NEXT_ACTION_SERVICES publishServices;
+    publishServices.Configure( model );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = viaNextActionContext();
+    AI_ACTIVITY_RECORD activity = suggestionActivity();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    JOURNAL_REPLAY_SPY_ADAPTER replayAdapter;
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( false );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                         replayAdapter, validationService,
+                                         currentContext ) );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK_EQUAL( replayAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( replayAdapter.m_CommitCount, 0 );
+
+    std::optional<AI_SUGGESTION_RECORD> expired =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( expired.has_value() );
+    BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidationIsInexact )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                    "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PUBLISH_READY_NEXT_ACTION_SERVICES publishServices;
+    publishServices.Configure( model );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = viaNextActionContext();
+    AI_ACTIVITY_RECORD activity = suggestionActivity();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    JOURNAL_REPLAY_SPY_ADAPTER replayAdapter;
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true, false );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                         replayAdapter, validationService,
+                                         currentContext ) );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK_EQUAL( replayAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( replayAdapter.m_CommitCount, 0 );
+
+    std::optional<AI_SUGGESTION_RECORD> expired =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( expired.has_value() );
+    BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalDoesNotFallbackToEditObjects )
+{
+    PCB_REVIEW_FIXTURE fixture;
+    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
+    AI_SUGGESTION_RECORD suggestionWithoutJournal = routeSuggestion();
+    suggestionWithoutJournal.m_RuntimeProvenanceJson = wxS( "{\"runtime\":\"next_action\"}" );
+    suggestionProvider->m_NextSuggestion = suggestionWithoutJournal;
+
+    AI_AGENT_PANEL_MODEL model(
+            std::make_unique<AI_STUB_PROVIDER>(),
+            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
+            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
+    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver,
+                                         commit,
+                                         nextActionContextForSuggestion( *suggestion ) ) );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 0 );
+    BOOST_CHECK( boardTracksOfType( fixture.m_Board, PCB_TRACE_T ).empty() );
 }
 
 
@@ -407,7 +964,8 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesCopperZonePreviewToOperationEdit
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit ) );
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                        nextActionContextForSuggestion( *suggestion ) ) );
     BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
     BOOST_REQUIRE_EQUAL( fixture.m_Board.Zones().size(), 1 );
@@ -434,7 +992,8 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesShapePreviewToOperationEditAdapt
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit ) );
+    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                        nextActionContextForSuggestion( *suggestion ) ) );
     BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
     BOOST_REQUIRE_EQUAL( fixture.m_Board.Drawings().size(), 1 );

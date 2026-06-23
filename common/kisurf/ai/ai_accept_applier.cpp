@@ -29,7 +29,20 @@ std::string toUtf8String( const wxString& aText )
 }
 
 
-std::optional<wxString> latestInsufficientAcceptValidationReason(
+std::optional<wxString> acceptValidationReason( const nlohmann::json& aValidation )
+{
+    if( aValidation.contains( "accept_validation_reason" )
+        && aValidation["accept_validation_reason"].is_string() )
+    {
+        return wxString::FromUTF8(
+                aValidation["accept_validation_reason"].get_ref<const std::string&>().c_str() );
+    }
+
+    return std::nullopt;
+}
+
+
+std::optional<wxString> latestNonAcceptGradeValidationReason(
         const AI_EXECUTION_SESSION& aSession )
 {
     const std::vector<AI_SESSION_OPERATION_RECORD>& operations =
@@ -58,17 +71,25 @@ std::optional<wxString> latestInsufficientAcceptValidationReason(
             continue;
         }
 
-        if( validation["accept_validation_sufficient"].get<bool>() )
-            return std::nullopt;
-
-        if( validation.contains( "accept_validation_reason" )
-            && validation["accept_validation_reason"].is_string() )
+        if( !validation["accept_validation_sufficient"].get<bool>() )
         {
-            return wxString::FromUTF8(
-                    validation["accept_validation_reason"].get_ref<const std::string&>().c_str() );
+            if( std::optional<wxString> reason = acceptValidationReason( validation ) )
+                return reason;
+
+            return wxS( "latest validation result is not sufficient for accept" );
         }
 
-        return wxS( "latest validation result is not sufficient for accept" );
+        if( validation.contains( "preview_state_exact" )
+            && validation["preview_state_exact"].is_boolean()
+            && validation["preview_state_exact"].get<bool>() )
+        {
+            return std::nullopt;
+        }
+
+        if( std::optional<wxString> reason = acceptValidationReason( validation ) )
+            return reason;
+
+        return wxS( "latest validation did not prove exact preview state" );
     }
 
     return std::nullopt;
@@ -96,7 +117,7 @@ AI_ACCEPT_APPLY_RESULT AI_ACCEPT_APPLIER::Apply(
     }
 
     if( std::optional<wxString> reason =
-                latestInsufficientAcceptValidationReason( aSession ) )
+                latestNonAcceptGradeValidationReason( aSession ) )
     {
         return errorResult(
                 wxS( "validation_not_accept_grade" ),

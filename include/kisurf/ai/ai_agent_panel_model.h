@@ -9,6 +9,7 @@
 #include <kisurf/ai/ai_types.h>
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -40,6 +41,10 @@ public:
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void SetSuggestionProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider );
     void SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider );
+    void ConfigureNextActionServices( AI_SESSION_PREVIEW_SERVICE* aPreviewService,
+                                      AI_SESSION_VALIDATION_SERVICE* aValidationService );
+    void ConfigureNextActionCurrentContextSampler(
+            std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> aSampler );
     void ReloadDefaultProviders();
     void SetToolCallHandler( AI_TOOL_CALL_HANDLER* aHandler );
 
@@ -75,10 +80,13 @@ public:
     bool CanPreviewSuggestion( uint64_t aSuggestionId ) const;
     bool CanAcceptSuggestion( uint64_t aSuggestionId ) const;
     bool PreviewSuggestion( uint64_t aSuggestionId, AI_PREVIEW_MANAGER& aPreviewManager );
-    bool AcceptSuggestion( uint64_t aSuggestionId, AI_EDIT_SESSION& aEditSession );
+    bool AcceptSuggestion( uint64_t aSuggestionId, AI_EDIT_SESSION& aEditSession,
+                           const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );
     bool MarkSuggestionAccepted( uint64_t aSuggestionId );
     bool RejectSuggestion( uint64_t aSuggestionId );
+    bool ExpireSuggestion( uint64_t aSuggestionId );
     size_t ExpireSuggestions( const AI_CONTEXT_VERSION& aCurrentVersion );
+    size_t ExpireSuggestions( const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentVersion );
 
 private:
     AI_ACTIVITY_LOG                         m_ActivityLog;
@@ -93,4 +101,7 @@ private:
             AI_AGENT_WORKSPACE_CONTEXT_KIND::General;
     bool                                    m_BackgroundAgentEnabled = false;
     uint64_t                                m_LastRequestId = 0;
+    AI_SESSION_PREVIEW_SERVICE*             m_NextActionPreviewService = nullptr;
+    AI_SESSION_VALIDATION_SERVICE*          m_NextActionValidationService = nullptr;
+    std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> m_NextActionContextSampler;
 };

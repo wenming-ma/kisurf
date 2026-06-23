@@ -1,13 +1,23 @@
 #include <boost/test/unit_test.hpp>
 
+#include <kisurf/ai/ai_edit_session.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
+#include <kisurf/ai/ai_session_tool_call_handler.h>
+#include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 
+#include <json_common.h>
+
+#include <chrono>
 #include <deque>
 #include <memory>
+#include <thread>
 
 namespace
 {
+wxString publishReview();
+
+
 class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -42,6 +52,759 @@ public:
 };
 
 
+class TOOL_CALLING_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "tool calling next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need observation facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_observation" );
+                call.m_ToolName = wxS( "observation_read" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"reason_code\":\"tool_result_supported\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need validation facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{\"level\":\"drc_lite\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = wxS( "{\"decision_kind\":\"publish\","
+                                  "\"reason_code\":\"tool_review_passed\","
+                                  "\"review_basis\":{\"render_valid\":true,"
+                                  "\"validation_passed\":true,"
+                                  "\"budget_within_limits\":true,"
+                                  "\"self_review_passed\":true}}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    CANDIDATE_TOOL_NEXT_ACTION_PROVIDER( wxString aToolName,
+                                         wxString aOpportunityType,
+                                         int aSelectedCandidateIndex = -1 ) :
+            m_ToolName( std::move( aToolName ) ),
+            m_OpportunityType( std::move( aOpportunityType ) ),
+            m_SelectedCandidateIndex( aSelectedCandidateIndex )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "candidate tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need generated candidates." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_candidates" );
+                call.m_ToolName = m_ToolName;
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( m_SelectedCandidateIndex >= 0 )
+            {
+                response.m_Body = wxString::Format(
+                        wxS( "{\"decision_kind\":\"attempt\","
+                             "\"opportunity_type\":\"%s\","
+                             "\"selected_candidate_index\":%d,"
+                             "\"reason_code\":\"candidate_tool_result_supported\"}" ),
+                        m_OpportunityType, m_SelectedCandidateIndex );
+            }
+            else
+            {
+                response.m_Body = wxString::Format(
+                        wxS( "{\"decision_kind\":\"attempt\","
+                             "\"opportunity_type\":\"%s\","
+                             "\"reason_code\":\"candidate_tool_result_supported\"}" ),
+                        m_OpportunityType );
+            }
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    wxString                         m_ToolName;
+    wxString                         m_OpportunityType;
+    int                              m_SelectedCandidateIndex = -1;
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class APPLY_CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "apply candidate tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"apply_candidate_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need explicit hidden mutation facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_apply_candidate" );
+                call.m_ToolName = wxS( "shadow_apply_candidate" );
+                call.m_ArgumentsJson = wxS( "{\"candidate_index\":0}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "bounded script tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"bounded_script_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class SCRIPT_RETRY_REVIEW_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "script retry review next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"reason_code\":\"script_retry_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_UserText.Contains( wxS( "\"previous_attempts\"" ) ) )
+            {
+                response.m_Body = publishReview();
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need script attempt facts before retry." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = wxS( "{\"decision_kind\":\"rollback_retry\","
+                                  "\"reason_code\":\"inspect_script_result_on_retry\"}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "script then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"script_then_render_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need render facts after the script mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_after_script" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class REPAIR_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "repair then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"repair_then_render_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need repair execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_repair_plan" );
+                call.m_ToolName = wxS( "repair_apply_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1700000,\"y\":2500000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"repair_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need render facts after the repair mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_after_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class SCRIPT_THEN_VALIDATE_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "script then validate next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"script_then_validate_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need validation facts after the script mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_after_script" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class SCRIPT_ROLLBACK_VALIDATE_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "script rollback validate next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"script_rollback_validate_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Rollback the script batch before validation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_rollback_script" );
+                call.m_ToolName = wxS( "rollback_attempt" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"checkpoint_id\":1,"
+                             "\"tool_call_id\":\"call_script_plan\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need validation facts after rollback." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_after_rollback" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class RECORDING_EDIT_ADAPTER : public AI_EDIT_ADAPTER
+{
+public:
+    bool ApplyObject( const AI_OBJECT_REF& aObject ) override
+    {
+        m_AppliedObjects.push_back( aObject );
+        return true;
+    }
+
+    std::vector<AI_OBJECT_REF> m_AppliedObjects;
+};
+
+
+class ACCEPT_BLOCKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"issue_count\":0,"
+                     "\"accept_validation_sufficient\":false,"
+                     "\"accept_validation_reason\":\"accept-grade DRC required\"}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class INEXACT_ACCEPT_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"level\":\"full_drc\","
+                     "\"preview_state_exact\":false,"
+                     "\"accept_validation_sufficient\":true,"
+                     "\"accept_validation_reason\":\"native result was not exact\"}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class SLOW_PREVIEW_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+        std::this_thread::sleep_for( std::chrono::milliseconds( m_SleepMs ) );
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"issue_count\":0}}" );
+        return result;
+    }
+
+    int      m_RunCount = 0;
+    uint64_t m_SleepMs = 300;
+};
+
+
+class PASSING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION& aSession,
+            const wxString& ) override
+    {
+        ++m_RenderCount;
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_Ok = true;
+        result.m_PreviewId = 900 + m_RenderCount;
+        result.m_RenderedItemCount = aSession.ShadowBoard().LiveItemCount();
+        result.m_ResultJson =
+                wxS( "{\"status\":\"preview_rendered\","
+                     "\"render_valid\":true,"
+                     "\"native_preview\":true}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t ) override {}
+
+    int m_RenderCount = 0;
+};
+
+
+class PASSING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"issue_count\":0}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class TRACKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION& aSession, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+        m_LiveItemCounts.push_back( aSession.ShadowBoard().LiveItemCount() );
+        m_BoardIds.push_back( aSession.BoardId().ToStdString() );
+        m_CheckpointCounts.push_back( aSession.Checkpoints().size() );
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxString::Format(
+                        wxS( "{\"validation\":{\"status\":\"validated\","
+                             "\"issue_count\":0,"
+                             "\"shadow_live_item_count\":%zu}}" ),
+                        aSession.ShadowBoard().LiveItemCount() );
+        return result;
+    }
+
+    int                 m_RunCount = 0;
+    std::vector<size_t> m_LiveItemCounts;
+    std::vector<std::string> m_BoardIds;
+    std::vector<size_t> m_CheckpointCounts;
+};
+
+
+struct PUBLISH_READY_NEXT_ACTION_SERVICES
+{
+    PASSING_SESSION_VALIDATION_SERVICE m_Validation;
+    PASSING_SESSION_PREVIEW_SERVICE    m_Preview;
+};
+
+
 wxString viaDetails( int aX, int aY, const wxString& aNetName,
                      int aDiameter = 600000 )
 {
@@ -58,6 +821,24 @@ AI_OBJECT_REF viaRef( int aX, int aY, const wxString& aNetName = wxS( "GND" ) )
     return AI_OBJECT_REF( KIID(), PCB_VIA_T,
                           wxString::Format( wxS( "via:%d,%d" ), aX, aY ),
                           viaDetails( aX, aY, aNetName ) );
+}
+
+
+AI_CONTEXT_ANCHOR contextAnchor( const wxString& aId,
+                                 AI_CONTEXT_ANCHOR_KIND aKind,
+                                 const wxString& aLabel,
+                                 int aX,
+                                 int aY )
+{
+    AI_CONTEXT_ANCHOR anchor;
+    anchor.m_Id = aId;
+    anchor.m_Kind = aKind;
+    anchor.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    anchor.m_Label = aLabel;
+    anchor.m_Position = VECTOR2I( aX, aY );
+    anchor.m_HasPosition = true;
+    anchor.m_Confidence = 0.75;
+    return anchor;
 }
 
 
@@ -90,6 +871,189 @@ AI_SUGGESTION_TRIGGER makeMouseMoveTrigger()
     trigger.m_Activity.m_ActionName = wxS( "mouse.move" );
     return trigger;
 }
+
+
+wxString routingModeContext()
+{
+    return wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000,"
+                "\"start\":{\"x\":100,\"y\":200},"
+                "\"cursor\":{\"x\":260,\"y\":200}}" );
+}
+
+
+AI_SUGGESTION_TRIGGER makeRoutingTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 21;
+    trigger.m_ContextVersion.m_ViewRevision = 8;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson = routingModeContext();
+    trigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    trigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition = VECTOR2I( 240, 220 );
+    trigger.m_Activity.m_Sequence = 52;
+    trigger.m_Activity.m_ActionName = wxS( "pcbnew.InteractiveRouter.route" );
+    trigger.m_Reason = wxS( "routing active" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeAutofillTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 31;
+    trigger.m_ContextVersion.m_ViewRevision = 2;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+
+    AI_PANEL_STATE_RECORD panel;
+    panel.m_Id = wxS( "properties" );
+    panel.m_Title = wxS( "Properties" );
+    panel.m_FocusedControlId = wxS( "net_class" );
+    panel.m_FocusedControlLabel = wxS( "Net class" );
+    panel.m_Summary = wxS( "Net properties table" );
+    panel.m_StateJson = wxS( "{\"schema_version\":\"net-class-v1\","
+                             "\"columns\":[\"net\",\"class\"],"
+                             "\"row_count\":4,"
+                             "\"target_scope\":{\"kind\":\"cell\","
+                             "\"row\":1,\"column\":\"class\"},"
+                             "\"neighbor_values\":["
+                             "{\"row\":0,\"column\":\"class\","
+                             "\"value\":\"Default\"}],"
+                             "\"value_provenance\":{\"class\":\"project_default\"},"
+                             "\"validation_state\":{\"status\":\"needs_value\"}}" );
+    trigger.m_ContextSnapshot.m_PanelStates.push_back( panel );
+
+    trigger.m_Activity.m_Sequence = 62;
+    trigger.m_Activity.m_ActionName = wxS( "panel.properties.focusCell" );
+    trigger.m_Reason = wxS( "panel focus" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makePanelFillTriggerWithTargetScope()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 33;
+    trigger.m_ContextVersion.m_ViewRevision = 4;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Unknown;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+
+    AI_PANEL_STATE_RECORD panel;
+    panel.m_Id = wxS( "board_setup.clearance" );
+    panel.m_Title = wxS( "Board Setup" );
+    panel.m_FocusedControlId = wxS( "clearance.rules.row.default.class" );
+    panel.m_FocusedControlLabel = wxS( "Net class" );
+    panel.m_StateJson = wxS( "{\"schema_version\":\"net-class-v1\","
+                             "\"target_scope\":{\"kind\":\"column\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"column\":\"class\"},"
+                             "\"focused_cell\":{\"table_id\":\"clearance.rules\","
+                             "\"row_id\":\"row.default\","
+                             "\"column_id\":\"class\"},"
+                             "\"tables\":[{\"id\":\"clearance.rules\","
+                             "\"title\":\"Clearance rules\","
+                             "\"columns\":[{\"id\":\"class\","
+                             "\"label\":\"Class\"}],"
+                             "\"rows\":["
+                             "{\"id\":\"row.default\",\"label\":\"Default\","
+                             "\"cells\":{\"class\":\"Signal\"}},"
+                             "{\"id\":\"row.power\",\"label\":\"Power\","
+                             "\"cells\":{\"class\":\"\"}},"
+                             "{\"id\":\"row.gpio\",\"label\":\"GPIO\","
+                             "\"cells\":{\"class\":\"\"}}]}]}" );
+    trigger.m_ContextSnapshot.m_PanelStates.push_back( panel );
+
+    trigger.m_Activity.m_Sequence = 64;
+    trigger.m_Activity.m_ActionName = wxS( "panel.properties.focusColumn" );
+    trigger.m_Reason = wxS( "panel fill focus" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeChangedViaTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextVersion.m_ViewRevision = 6;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+    trigger.m_Activity.m_Sequence = 45;
+    trigger.m_Reason = wxS( "context advanced" );
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeViewportBoundViaTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    trigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition = VECTOR2I( 1200, 2200 );
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"viewport\":{\"center\":{\"x\":1000,\"y\":2000},"
+                 "\"zoom\":3.5,\"width\":640,\"height\":480},"
+                 "\"cursor_region\":{\"x\":1000,\"y\":2000,"
+                 "\"width\":500,\"height\":500}}" );
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeViewportDriftedViaTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeViewportBoundViaTrigger();
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"viewport\":{\"center\":{\"x\":9000,\"y\":2000},"
+                 "\"zoom\":3.5,\"width\":640,\"height\":480},"
+                 "\"cursor_region\":{\"x\":1000,\"y\":2000,"
+                 "\"width\":500,\"height\":500}}" );
+    return trigger;
+}
+
+
+AI_NEXT_ACTION_CONTEXT_VERSION makeDependencyContext(
+        const AI_SUGGESTION_TRIGGER& aTrigger )
+{
+    AI_NEXT_ACTION_CONTEXT_VERSION context;
+    context.m_ContextVersion = aTrigger.m_ContextVersion;
+    context.m_ToolModeVersion =
+            static_cast<uint64_t>( aTrigger.m_ContextSnapshot.m_ToolState.m_Kind );
+    context.m_UiFocusVersion =
+            static_cast<uint64_t>( aTrigger.m_ContextSnapshot.m_PanelStates.size() );
+    context.m_ActivitySequence = aTrigger.m_Activity.m_Sequence;
+    return context;
+}
+
+
+wxString publishReview()
+{
+    return wxS( "{\"decision_kind\":\"publish\","
+                "\"reason_code\":\"acceptable\","
+                "\"review_basis\":{\"render_valid\":true,"
+                "\"validation_passed\":true,"
+                "\"budget_within_limits\":true,"
+                "\"self_review_passed\":true}}" );
+}
+
+
+nlohmann::json providerRequestJson( const AI_PROVIDER_REQUEST& aRequest )
+{
+    return nlohmann::json::parse( aRequest.m_UserText.ToStdString() );
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNextActionRuntime )
@@ -120,16 +1084,305 @@ BOOST_AUTO_TEST_CASE( SchedulerDebouncesSameSemanticSlot )
 }
 
 
+BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY tools;
+    const wxString catalog = tools.ToolCatalogJson();
+
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"atomic\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"shadow_mutation\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"script\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_batch_composition\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"raw_board_access\":false" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"runtime_gate\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"publish_gated\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"requires_review_decision\":\"publish\"" ) ) );
+    BOOST_CHECK( !catalog.Contains( wxS( "\"can_publish\":true" ) ) );
+    BOOST_CHECK( !catalog.Contains( wxS( "\"name\":\"candidate.generate\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY tools;
+    nlohmann::json callable =
+            nlohmann::json::parse( tools.CallableToolCatalogJson().ToStdString() );
+
+    BOOST_REQUIRE( callable.is_array() );
+    BOOST_CHECK( !callable.empty() );
+
+    bool sawScriptTool = false;
+    bool sawRepairTool = false;
+
+    for( const nlohmann::json& tool : callable )
+    {
+        BOOST_REQUIRE( tool.is_object() );
+        BOOST_CHECK_EQUAL( tool.value( "type", std::string() ), "function" );
+        BOOST_REQUIRE( tool.contains( "function" ) );
+        BOOST_REQUIRE( tool["function"].is_object() );
+
+        const nlohmann::json& function = tool["function"];
+        BOOST_REQUIRE( function.contains( "name" ) );
+        BOOST_REQUIRE( function["name"].is_string() );
+        BOOST_CHECK( function["name"].get<std::string>().find( '.' )
+                     == std::string::npos );
+        BOOST_CHECK( function.contains( "description" ) );
+        BOOST_CHECK( function.contains( "parameters" ) );
+        BOOST_CHECK( function["parameters"].is_object() );
+        BOOST_CHECK( function["parameters"].contains( "type" ) );
+        BOOST_CHECK_EQUAL( function["parameters"]["type"].get<std::string>(),
+                           "object" );
+
+        if( function["name"].get<std::string>() == "script_run_bounded_plan" )
+            sawScriptTool = true;
+
+        if( function["name"].get<std::string>() == "repair_apply_bounded_plan" )
+            sawRepairTool = true;
+    }
+
+    BOOST_CHECK( sawScriptTool );
+    BOOST_CHECK( sawRepairTool );
+    BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
+            wxS( "publish_preview" ) ) );
+    BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
+            wxS( "publish.preview" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStateAttemptPolicy )
+{
+    auto* layoutProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"policy_probe\"}" ) } );
+    AI_NEXT_ACTION_RUNTIME layoutRuntime{ std::unique_ptr<AI_PROVIDER>( layoutProvider ) };
+
+    BOOST_CHECK( !layoutRuntime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( layoutProvider->m_Requests.size(), 1 );
+    BOOST_CHECK( layoutProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"attempt_policy\"" ) ) );
+    BOOST_CHECK( layoutProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"work_state\":\"layout\"" ) ) );
+    BOOST_CHECK( layoutProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"max_attempts\":3" ) ) );
+
+    auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"policy_probe\"}" ) } );
+    AI_NEXT_ACTION_RUNTIME routingRuntime{ std::unique_ptr<AI_PROVIDER>( routingProvider ) };
+
+    BOOST_CHECK( !routingRuntime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.size(), 1 );
+    BOOST_CHECK( routingProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"work_state\":\"routing\"" ) ) );
+    BOOST_CHECK( routingProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"max_attempts\":5" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
+{
+    auto* placementProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"packet_probe\"}" ) } );
+    AI_NEXT_ACTION_RUNTIME placementRuntime{
+            std::unique_ptr<AI_PROVIDER>( placementProvider ) };
+    AI_SUGGESTION_TRIGGER placementTrigger = makeViaTrigger();
+    placementTrigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    placementTrigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
+            VECTOR2I( 180, 80 );
+    placementTrigger.m_ContextSnapshot.m_Anchors.push_back(
+            contextAnchor( wxS( "place_candidate_1" ),
+                           AI_CONTEXT_ANCHOR_KIND::PlacementCandidate,
+                           wxS( "Place candidate 1" ), 220, 90 ) );
+
+    BOOST_CHECK( !placementRuntime.Update( placementTrigger ).has_value() );
+    BOOST_REQUIRE_EQUAL( placementProvider->m_Requests.size(), 1 );
+    BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"work_state_packet\"" ) ) );
+    BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"packet_kind\":\"placement\"" ) ) );
+    BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"placeable_kind\":\"via\"" ) ) );
+    BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"visible_object_count\":3" ) ) );
+
+    nlohmann::json placementRequest =
+            providerRequestJson( placementProvider->m_Requests.front() );
+    const nlohmann::json& placementPacket =
+            placementRequest["observation"]["structured_facts"]["work_state_packet"];
+    BOOST_REQUIRE( placementPacket.contains( "planning_target" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["planning_target"]["kind"].get<std::string>(),
+            "place_current_item" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["planning_target"]["placeable_kind"].get<std::string>(),
+            "via" );
+    BOOST_CHECK( placementPacket["planning_target"]["click_required_to_materialize"]
+                         .get<bool>() );
+    BOOST_REQUIRE( placementPacket.contains( "placement_anchors" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["placement_anchors"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_anchors"].at( 0 )["id"].get<std::string>(),
+            "place_candidate_1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_anchors"].at( 0 )["position"]["x"].get<int>(),
+            220 );
+    BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 3 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["visible_object_summaries"].at( 0 )["label"].get<std::string>(),
+            "via:100,50" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["visible_object_summaries"].at( 0 )["details"]["position"]["x"]
+                    .get<int>(),
+            100 );
+
+    auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"packet_probe\"}" ) } );
+    AI_NEXT_ACTION_RUNTIME routingRuntime{
+            std::unique_ptr<AI_PROVIDER>( routingProvider ) };
+    AI_SUGGESTION_TRIGGER routingTrigger = makeRoutingTrigger();
+    routingTrigger.m_ContextSnapshot.m_Anchors.push_back(
+            contextAnchor( wxS( "route_start" ),
+                           AI_CONTEXT_ANCHOR_KIND::RouteStart,
+                           wxS( "Route start" ), 100, 200 ) );
+    routingTrigger.m_ContextSnapshot.m_Anchors.push_back(
+            contextAnchor( wxS( "route_candidate_1" ),
+                           AI_CONTEXT_ANCHOR_KIND::RouteCandidate,
+                           wxS( "Route candidate 1" ), 320, 200 ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            viaRef( 400, 220, wxS( "GND" ) ) );
+
+    BOOST_CHECK( !routingRuntime.Update( routingTrigger ).has_value() );
+    BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.size(), 1 );
+    BOOST_CHECK( routingProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"packet_kind\":\"routing\"" ) ) );
+    BOOST_CHECK( routingProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"routing_active\":true" ) ) );
+
+    nlohmann::json routingRequest =
+            providerRequestJson( routingProvider->m_Requests.front() );
+    const nlohmann::json& routingPacket =
+            routingRequest["observation"]["structured_facts"]["work_state_packet"];
+    BOOST_REQUIRE( routingPacket.contains( "planning_target" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["planning_target"]["kind"].get<std::string>(),
+            "next_landing_from_current_route_head" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["planning_target"]["net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK( routingPacket["planning_target"]["cursor_is_sorting_hint"]
+                         .get<bool>() );
+    BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_route_segment"]["start"]["x"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_route_segment"]["end"]["x"].get<int>(),
+            260 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_route_segment"]["end_source"].get<std::string>(),
+            "mode_context.cursor" );
+    BOOST_REQUIRE( routingPacket.contains( "route_anchors" ) );
+    BOOST_REQUIRE_EQUAL( routingPacket["route_anchors"].size(), 2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["route_anchors"].at( 1 )["id"].get<std::string>(),
+            "route_candidate_1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
+            320 );
+    BOOST_REQUIRE( routingPacket.contains( "visible_object_summaries" ) );
+    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["visible_object_summaries"].at( 0 )["details"]["net_name"]
+                    .get<std::string>(),
+            "GND" );
+
+    auto* autofillProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"packet_probe\"}" ) } );
+    AI_NEXT_ACTION_RUNTIME autofillRuntime{
+            std::unique_ptr<AI_PROVIDER>( autofillProvider ) };
+
+    BOOST_CHECK( !autofillRuntime.Update( makeAutofillTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( autofillProvider->m_Requests.size(), 1 );
+    BOOST_CHECK( autofillProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"packet_kind\":\"structured_surface\"" ) ) );
+    BOOST_CHECK( autofillProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"surface_count\":1" ) ) );
+    BOOST_CHECK( autofillProvider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"focused_control_id\":\"net_class\"" ) ) );
+
+    nlohmann::json autofillRequest =
+            providerRequestJson( autofillProvider->m_Requests.front() );
+    const nlohmann::json& packet =
+            autofillRequest["observation"]["structured_facts"]["work_state_packet"];
+
+    BOOST_REQUIRE( packet.contains( "schema_version" ) );
+    BOOST_REQUIRE( packet.contains( "target_scope" ) );
+    BOOST_REQUIRE( packet.contains( "neighbor_values" ) );
+    BOOST_REQUIRE( packet.contains( "value_provenance" ) );
+    BOOST_REQUIRE( packet.contains( "validation_state" ) );
+    BOOST_CHECK_EQUAL( packet["schema_version"].get<std::string>(),
+                       "net-class-v1" );
+    BOOST_CHECK_EQUAL( packet["target_scope"]["kind"].get<std::string>(),
+                       "cell" );
+    BOOST_CHECK_EQUAL( packet["target_scope"]["column"].get<std::string>(),
+                       "class" );
+    BOOST_CHECK_EQUAL( packet["neighbor_values"].at( 0 )["value"].get<std::string>(),
+                       "Default" );
+    BOOST_CHECK_EQUAL( packet["value_provenance"]["class"].get<std::string>(),
+                       "project_default" );
+    BOOST_CHECK_EQUAL( packet["validation_state"]["status"].get<std::string>(),
+                       "needs_value" );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesViewportAndCursorRegionFingerprints )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"fingerprint_probe\"}" ) } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViewportBoundViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 1 );
+    BOOST_CHECK( provider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"viewport_fingerprint\":\"fnv1a64:" ) ) );
+    BOOST_CHECK( provider->m_Requests.front().m_UserText.Contains(
+            wxS( "\"cursor_region_fingerprint\":\"fnv1a64:" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"attempt\","
                    "\"opportunity_type\":\"placement\","
                    "\"reason_code\":\"likely_helpful\"}" ),
-              wxS( "{\"decision_kind\":\"publish\","
-                   "\"reason_code\":\"acceptable\"}" ) } );
+              publishReview() } );
 
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
@@ -143,8 +1396,20 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_DisableDefaultTools );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
-            wxS( "candidate.generate" ) ) );
-    BOOST_CHECK( provider->m_Requests.at( 0 ).m_ToolCatalogJson.Contains(
+            wxS( "placement.generate_via_pattern_candidates" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "context_snapshot" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "visible_objects" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "via:100,50" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "dependency_fingerprint" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "publish.preview" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_ToolCatalogJson.Contains(
+            wxS( "publish.preview" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(
             wxS( "publish.preview" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
             wxS( "validate.hidden_attempt" ) ) );
@@ -155,9 +1420,14 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "attempt_id" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "preview_lease" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "preview_id" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "touched_object_set_fingerprint" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "fnv1a64:" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "tool_results" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "session_journal" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "pcb.create_via" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "placement.generate_via_pattern_candidates" ) ) );
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK_NE( runtime.Attempts().front().m_HiddenSessionId, 0 );
     BOOST_CHECK_NE( runtime.Attempts().front().m_HiddenStepId, 0 );
@@ -175,6 +1445,339 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
+{
+    auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 4 );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 4 );
+
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionDecision );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionDecision );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ToolCallId,
+                       wxString( wxS( "call_observation" ) ) );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ToolName,
+                       wxString( wxS( "observation_read" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_Executed );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"observation\"" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"visible_objects\"" ) ) );
+
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( provider->m_Requests.at( 3 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 3 ).m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 3 ).m_ToolResults.front().m_ToolCallId,
+                       wxString( wxS( "call_validate" ) ) );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 3 ).m_ToolResults.front().m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 3 ).m_ToolResults.front().m_Executed );
+    BOOST_CHECK( provider->m_Requests.at( 3 ).m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"validate.hidden_attempt\"" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 3 ).m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"service_connected\":true" ) ) );
+
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"provider_tool_results\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"call_validate\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
+{
+    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "placement_generate_via_pattern_candidates" ),
+            wxS( "placement" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 1 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId, wxString( wxS( "call_candidates" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "placement_generate_via_pattern_candidates" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"tool\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"status\":\"candidates_generated\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"candidate_count\":1" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"candidates\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"source_tool\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"arguments\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"operation\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
+
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
+            wxS( "placement.generate_via_pattern_candidates" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "placement.generate_via_pattern_candidates" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsOutOfRangeSelectedCandidateIndex )
+{
+    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "placement_generate_via_pattern_candidates" ),
+            wxS( "placement" ),
+            7 );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( runtime.Attempts().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_LlmDecisionJson.Contains(
+            wxS( "\"selected_candidate_index\":7" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesShadowApplyCandidateToolAgainstHiddenAttempt )
+{
+    auto* provider = new APPLY_CANDIDATE_TOOL_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId,
+                       wxString( wxS( "call_apply_candidate" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "shadow_apply_candidate" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"tool\":\"shadow.apply_candidate\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"candidate_applied\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"candidate_index\":0" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"checkpoint_id\":" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"session_journal\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"mutation_applied\":true" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"pcb.create_via\"" ) ) );
+
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"provider_tool_results\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"call_apply_candidate\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
+{
+    auto* provider = new BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId,
+                       wxString( wxS( "call_script_plan" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"tool\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"script_plan_executed\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"checkpoint_id\":" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"session_journal\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"lowered_operations\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"script_step_count\":1" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"raw_board_access\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"pcb.create_via\"" ) ) );
+
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"provider_tool_results\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"call_script_plan\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"provider_tool_results\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"call_script_plan\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"lowered_operations\"" ) ) );
+
+    const wxString& mergedJournal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( mergedJournal.Contains( wxS( "\"script_via_1\"" ) ) );
+    BOOST_CHECK( mergedJournal.Contains(
+            wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( mergedJournal.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_script_plan\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeHiddenAttemptExecutesAtomicOperationIntoShadowJournal )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    const wxString journal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( journal.Contains( wxS( "\"kind\":\"pcb.create_via\"" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "\"created_handles\":[{\"" ) ) );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ToolRoundCount, 3 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_MutationCount, 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_RenderCount, 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ValidationCount, 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_CreatedObjectCount, 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectCount, 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectSetJson.Contains(
+            wxS( "ai://session/" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "budget_counters" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "touched_object_set" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWhenNativeBudgetCountersExceedPolicy )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+    SLOW_PREVIEW_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE         previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_GE( runtime.Attempts().front().m_BudgetCounters.m_WallTimeMs,
+                    validationService.m_SleepMs );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeCandidateGenerationRecordsWorkStateSelectedTool )
+{
+    auto* placementProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES placementServices;
+    AI_NEXT_ACTION_RUNTIME placementRuntime{
+            std::unique_ptr<AI_PROVIDER>( placementProvider ),
+            &placementServices.m_Validation,
+            &placementServices.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> placement =
+            placementRuntime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( placement.has_value() );
+    BOOST_CHECK( placement->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"candidate_generation\"" ) ) );
+    BOOST_CHECK( placement->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selection_mode\":\"work_state_selected\"" ) ) );
+    BOOST_CHECK( placement->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_CHECK( !placement->m_RuntimeProvenanceJson.Contains(
+            wxS( "compatibility_fanout" ) ) );
+
+    auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"routing\"}" ),
+              publishReview() } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES routingServices;
+    AI_NEXT_ACTION_RUNTIME routingRuntime{
+            std::unique_ptr<AI_PROVIDER>( routingProvider ),
+            &routingServices.m_Validation,
+            &routingServices.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> routing =
+            routingRuntime.Update( makeRoutingTrigger() );
+    BOOST_REQUIRE( routing.has_value() );
+    BOOST_CHECK( routing->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"routing.generate_segment_candidates\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRollbackRetryRecordsCheckpointRollback )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
@@ -186,11 +1789,337 @@ BOOST_AUTO_TEST_CASE( RuntimeRollbackRetryRecordsCheckpointRollback )
     AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
 
     BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
-    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 2 );
     BOOST_CHECK( runtime.Attempts().front().m_RollbackJson.Contains(
             wxS( "rollback.attempt" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_RollbackJson.Contains(
             wxS( "rolled_back" ) ) );
+    BOOST_CHECK( runtime.Attempts().back().m_RollbackJson.IsEmpty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRollbackRetryContinuesBoundedInnerLoop )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"rollback_retry\","
+                   "\"reason_code\":\"revise_candidate\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 2 );
+    BOOST_CHECK( runtime.Attempts().front().m_RollbackJson.Contains(
+            wxS( "rollback.attempt" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_RollbackJson.Contains(
+            wxS( "rolled_back" ) ) );
+    BOOST_CHECK( runtime.Attempts().back().m_RollbackJson.IsEmpty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Steps().front().m_AttemptIds.size(), 2 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeReviewTurnReceivesPriorAttemptFeedbackAfterRollbackRetry )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"rollback_retry\","
+                   "\"reason_code\":\"revise_candidate\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
+
+    const AI_PROVIDER_REQUEST& secondReviewRequest = provider->m_Requests[2];
+    BOOST_CHECK( secondReviewRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( secondReviewRequest.m_UserText.Contains(
+            wxS( "\"previous_attempts\"" ) ) );
+    BOOST_CHECK( secondReviewRequest.m_UserText.Contains(
+            wxS( "\"rollback\"" ) ) );
+    BOOST_CHECK( secondReviewRequest.m_UserText.Contains(
+            wxS( "\"rollback.attempt\"" ) ) );
+    BOOST_CHECK( secondReviewRequest.m_UserText.Contains(
+            wxS( "\"previous_review_decision\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeReviewRetrySeesMergedScriptAttemptJournal )
+{
+    auto* provider = new SCRIPT_RETRY_REVIEW_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 2 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& retryReviewRequest = provider->m_Requests.back();
+    BOOST_CHECK( retryReviewRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( retryReviewRequest.m_UserText.Contains(
+            wxS( "\"previous_attempts\"" ) ) );
+    BOOST_CHECK( retryReviewRequest.m_UserText.Contains(
+            wxS( "\"session_journal\"" ) ) );
+    BOOST_CHECK( retryReviewRequest.m_UserText.Contains(
+            wxS( "\"script_via_1\"" ) ) );
+    BOOST_CHECK( retryReviewRequest.m_UserText.Contains(
+            wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( retryReviewRequest.m_UserText.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_script_plan\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRenderToolSeesScriptJournalWithinSameReviewLoop )
+{
+    auto* provider = new SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_after_script" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"render.hidden_attempt\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains( wxS( "\"script_via_1\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_script_plan\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ToolRoundCount,
+                       5 );
+
+    nlohmann::json mergedJournal = nlohmann::json::parse(
+            runtime.Attempts().front().m_JournalJson.ToStdString() );
+    BOOST_REQUIRE( mergedJournal.contains( "merged_tool_batches" ) );
+    BOOST_REQUIRE( mergedJournal["merged_tool_batches"].is_array() );
+    BOOST_CHECK_EQUAL( mergedJournal["merged_tool_batches"].size(), 1 );
+
+    size_t mergedScriptOperationCount = 0;
+
+    for( const nlohmann::json& operation : mergedJournal["operations"] )
+    {
+        if( operation.is_object()
+            && operation.value( "merged_from_tool_call_id", std::string() )
+                       == "call_script_plan" )
+        {
+            ++mergedScriptOperationCount;
+        }
+    }
+
+    BOOST_CHECK_EQUAL( mergedScriptOperationCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRepairToolWritesActiveFrameAndFeedsRender )
+{
+    auto* provider = new REPAIR_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult =
+            publishRequest.m_ToolResults.at( 0 );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolCallId,
+                       wxString( wxS( "call_repair_plan" ) ) );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolName,
+                       wxString( wxS( "repair_apply_bounded_plan" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"repair.apply_bounded_plan\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"active_attempt_frame\":true" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"render.hidden_attempt\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains( wxS( "\"repair_via_1\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"repair.apply_bounded_plan\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_repair_plan\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    const wxString& journal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( journal.Contains( wxS( "\"repair_via_1\"" ) ) );
+    BOOST_CHECK( journal.Contains(
+            wxS( "\"merged_from_tool\":\"repair.apply_bounded_plan\"" ) ) );
+    BOOST_CHECK( journal.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_repair_plan\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidateToolRefreshesAttemptSessionAfterScriptInSameReviewLoop )
+{
+    auto* provider = new SCRIPT_THEN_VALIDATE_NEXT_ACTION_PROVIDER();
+
+    TRACKING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE     previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    BOOST_REQUIRE_EQUAL( validationService.m_LiveItemCounts.size(), 2 );
+    BOOST_CHECK_EQUAL( validationService.m_LiveItemCounts.front(), 1 );
+    BOOST_CHECK_EQUAL( validationService.m_LiveItemCounts.back(), 2 );
+    BOOST_REQUIRE_EQUAL( validationService.m_BoardIds.size(), 2 );
+    BOOST_CHECK_EQUAL( validationService.m_BoardIds.front(),
+                       "next-action-hidden" );
+    BOOST_CHECK_EQUAL( validationService.m_BoardIds.back(),
+                       "next-action-hidden" );
+    BOOST_REQUIRE_EQUAL( validationService.m_CheckpointCounts.size(), 2 );
+    BOOST_CHECK_EQUAL( validationService.m_CheckpointCounts.front(), 1 );
+    BOOST_CHECK_GE( validationService.m_CheckpointCounts.back(), 2 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+    const AI_TOOL_CALL_RECORD& validationResult =
+            publishRequest.m_ToolResults.at( 1 );
+
+    BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
+                       wxString( wxS( "call_validate_after_script" ) ) );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"validate.hidden_attempt\"" ) ) );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"shadow_live_item_count\":2" ) ) );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_MutationCount,
+                       2 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_CreatedObjectCount,
+                       2 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectCount,
+                       2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRollbackToolRestoresAttemptJournalBeforeValidationInSameReviewLoop )
+{
+    auto* provider = new SCRIPT_ROLLBACK_VALIDATE_NEXT_ACTION_PROVIDER();
+
+    TRACKING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE     previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
+
+    BOOST_REQUIRE_EQUAL( validationService.m_LiveItemCounts.size(), 2 );
+    BOOST_CHECK_EQUAL( validationService.m_LiveItemCounts.front(), 1 );
+    BOOST_CHECK_EQUAL( validationService.m_LiveItemCounts.back(), 1 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
+
+    const AI_TOOL_CALL_RECORD& rollbackResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( rollbackResult.m_ToolCallId,
+                       wxString( wxS( "call_rollback_script" ) ) );
+    BOOST_CHECK( rollbackResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"rollback.attempt\"" ) ) );
+    BOOST_CHECK( rollbackResult.m_ResultJson.Contains(
+            wxS( "\"status\":\"rolled_back\"" ) ) );
+    BOOST_CHECK( rollbackResult.m_ResultJson.Contains(
+            wxS( "\"rolled_back_tool_call_id\":\"call_script_plan\"" ) ) );
+
+    const AI_TOOL_CALL_RECORD& validationResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
+                       wxString( wxS( "call_validate_after_rollback" ) ) );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"shadow_live_item_count\":1" ) ) );
+    BOOST_CHECK( !validationResult.m_ResultJson.Contains(
+            wxS( "script_via_1" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_MutationCount,
+                       1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_CreatedObjectCount,
+                       1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectCount,
+                       1 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "script_via_1" ) ) );
 }
 
 
@@ -202,7 +2131,10 @@ BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWithoutReviewApproval )
               wxS( "{\"decision_kind\":\"abandon\","
                    "\"reason_code\":\"low_confidence\"}" ) } );
 
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
 
     BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
     BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
@@ -212,13 +2144,167 @@ BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWithoutReviewApproval )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenReviewOmitsGateBasis )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"missing_objective_basis\"}" ) } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWithoutNativeRenderAndValidationFacts )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_RenderOutputsJson.Contains(
+            wxS( "\"tool\":\"render.hidden_attempt\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "\"tool\":\"validate.hidden_attempt\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenDecisionOpportunityMismatchesWorkState )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"routing\","
+                   "\"reason_code\":\"wrong_context\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"placement.generate_via_pattern_candidates\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksPlacementPublishWhenDecisionNetMismatchesCandidate )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"target_net\":\"VCC\","
+                   "\"reason_code\":\"wrong_net\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
+            wxS( "\"net\":\"GND\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksRoutingPublishWhenDecisionLayerMismatchesCandidate )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"routing\","
+                   "\"target_net\":\"GND\","
+                   "\"target_layer\":\"B.Cu\","
+                   "\"reason_code\":\"wrong_layer\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
+            wxS( "\"layer\":\"F.Cu\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksSurfacePublishWhenDecisionTargetScopeMismatchesCandidate )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"structured_surface\","
+                   "\"target_scope\":{\"kind\":\"column\","
+                   "\"panel_id\":\"board_setup.clearance\","
+                   "\"table_id\":\"clearance.rules\","
+                   "\"column\":\"clearance\"},"
+                   "\"reason_code\":\"wrong_surface_column\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makePanelFillTriggerWithTargetScope() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"surface.generate_fill_candidates\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
+            wxS( "\"column_id\":\"class\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeWaitDecisionDoesNotRunAttemptOrReview )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
                    "\"reason_code\":\"user_busy\"}" ) } );
 
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
 
     BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
     BOOST_CHECK_EQUAL( provider->m_CallCount, 1 );
@@ -234,10 +2320,12 @@ BOOST_AUTO_TEST_CASE( RuntimeExpiresPublishedPreviewWhenContextChanges )
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"attempt\","
                    "\"opportunity_type\":\"placement\"}" ),
-              wxS( "{\"decision_kind\":\"publish\","
-                   "\"reason_code\":\"acceptable\"}" ) } );
+              publishReview() } );
 
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
@@ -251,6 +2339,340 @@ BOOST_AUTO_TEST_CASE( RuntimeExpiresPublishedPreviewWhenContextChanges )
     std::optional<AI_SUGGESTION_RECORD> stored = runtime.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( stored.has_value() );
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExpiresPublishedPreviewWhenDependencyFingerprintChanges )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViewportBoundViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    AI_SUGGESTION_TRIGGER driftedTrigger = makeViewportDriftedViaTrigger();
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted =
+            AiNextActionContextVersionFromSnapshot( driftedTrigger.m_ContextSnapshot,
+                                                    trigger.m_Activity.m_Sequence );
+
+    BOOST_CHECK_EQUAL( runtime.ExpireStale( drifted ), 1 );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( !runtime.CanAccept( suggestion->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWhenPublishTimeContextDrifted )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted = makeDependencyContext( trigger );
+    drifted.m_ActivitySequence += 1;
+    runtime.SetCurrentContextSampler(
+            [drifted]()
+            {
+                return drifted;
+            } );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePublishesWhenPublishTimeContextStillMatches )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    AI_NEXT_ACTION_CONTEXT_VERSION current = makeDependencyContext( trigger );
+    runtime.SetCurrentContextSampler(
+            [current]()
+            {
+                return current;
+            } );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( runtime.CanAccept( suggestion->m_Id ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenCurrentContextDrifted )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+    AI_CONTEXT_VERSION     drifted = suggestion->m_ContextVersion;
+    drifted.m_DocumentRevision += 1;
+
+    BOOST_CHECK( !runtime.Accept( suggestion->m_Id, edit, drifted ) );
+    BOOST_CHECK( editAdapter.m_AppliedObjects.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenDependencyFingerprintDrifted )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted = makeDependencyContext( trigger );
+    drifted.m_ActivitySequence += 1;
+
+    BOOST_CHECK( !runtime.Accept( suggestion->m_Id, edit, drifted ) );
+    BOOST_CHECK( editAdapter.m_AppliedObjects.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenViewportFingerprintDrifted )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViewportBoundViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+    AI_SUGGESTION_TRIGGER driftedTrigger = makeViewportDriftedViaTrigger();
+    AI_NEXT_ACTION_CONTEXT_VERSION drifted =
+            AiNextActionContextVersionFromSnapshot( driftedTrigger.m_ContextSnapshot,
+                                                    trigger.m_Activity.m_Sequence );
+
+    BOOST_CHECK( !runtime.Accept( suggestion->m_Id, edit, drifted ) );
+    BOOST_CHECK( editAdapter.m_AppliedObjects.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotAcceptGrade )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+    ACCEPT_BLOCKING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE           previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK( runtime.CanAccept( suggestion->m_Id ) );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+
+    BOOST_CHECK( !runtime.Accept( suggestion->m_Id, edit,
+                                  makeDependencyContext( trigger ) ) );
+    BOOST_CHECK( editAdapter.m_AppliedObjects.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotExactPreviewState )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+    INEXACT_ACCEPT_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE           previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+    BOOST_CHECK( runtime.CanAccept( suggestion->m_Id ) );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+
+    BOOST_CHECK( !runtime.Accept( suggestion->m_Id, edit,
+                                  makeDependencyContext( trigger ) ) );
+    BOOST_CHECK( editAdapter.m_AppliedObjects.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stored =
+            runtime.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stored.has_value() );
+    BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeSupersedesPreviousRuntimePreviewLeaseOnNewPublish )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( first.has_value() );
+    BOOST_CHECK( runtime.CanAccept( first->m_Id ) );
+
+    std::optional<AI_SUGGESTION_RECORD> second =
+            runtime.Update( makeChangedViaTrigger() );
+    BOOST_REQUIRE( second.has_value() );
+
+    std::optional<AI_SUGGESTION_RECORD> storedFirst =
+            runtime.FindSuggestion( first->m_Id );
+    std::optional<AI_SUGGESTION_RECORD> storedSecond =
+            runtime.FindSuggestion( second->m_Id );
+    BOOST_REQUIRE( storedFirst.has_value() );
+    BOOST_REQUIRE( storedSecond.has_value() );
+
+    BOOST_CHECK( storedFirst->m_Status == AI_SUGGESTION_STATUS::Superseded );
+    BOOST_CHECK( !runtime.CanAccept( first->m_Id ) );
+    BOOST_CHECK( !runtime.CanPreview( first->m_Id ) );
+    BOOST_CHECK( storedFirst->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"active\":false" ) ) );
+
+    BOOST_CHECK( storedSecond->m_Status == AI_SUGGESTION_STATUS::Pending );
+    BOOST_CHECK( runtime.CanAccept( second->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeDoesNotRepublishRejectedRuntimeFingerprint )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( first.has_value() );
+
+    AI_SUGGESTION_RECORD duplicatePublish = *first;
+    BOOST_REQUIRE( runtime.Reject( first->m_Id ) );
+
+    std::optional<AI_SUGGESTION_RECORD> duplicate =
+            runtime.AddPublishedSuggestion( duplicatePublish );
+
+    BOOST_CHECK( !duplicate.has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Suggestions().size(), 1 );
+    BOOST_CHECK( runtime.Suggestions().front().m_Status
+                 == AI_SUGGESTION_STATUS::Rejected );
+    BOOST_CHECK( !runtime.LatestActiveSuggestionId().has_value() );
 }
 
 

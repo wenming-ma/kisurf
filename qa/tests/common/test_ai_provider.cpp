@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <json_common.h>
+#include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_provider.h>
 
 #include <wx/utils.h>
@@ -707,6 +708,108 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderUsesRequestSpecificToolCatalog )
     AI_PROVIDER_RESPONSE response = provider.Generate( request );
 
     BOOST_CHECK_EQUAL( response.m_RequestId, 24 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderKeepsRequestToolCatalogWhenDefaultToolsDisabled )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+
+                BOOST_REQUIRE( body.contains( "tools" ) );
+                BOOST_REQUIRE( body["tools"].is_array() );
+                BOOST_REQUIRE_EQUAL( body["tools"].size(), 1 );
+                BOOST_CHECK_EQUAL( body["tools"].at( 0 )["function"]["name"].get<std::string>(),
+                                   "script_run_bounded_plan" );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"ready\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 25;
+    request.m_UserText = wxS( "next action review" );
+    request.m_DisableDefaultTools = true;
+    request.m_ToolCatalogJson =
+            wxS( "[{\"type\":\"function\",\"function\":{\"name\":\"script_run_bounded_plan\","
+                 "\"description\":\"Run a bounded Next Action script plan.\","
+                 "\"parameters\":{\"type\":\"object\",\"properties\":{},"
+                 "\"additionalProperties\":false}}}]" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 25 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderAcceptsNextActionCallableToolCatalog )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+
+                BOOST_REQUIRE( body.contains( "tools" ) );
+                BOOST_REQUIRE( body["tools"].is_array() );
+                BOOST_CHECK( !body["tools"].empty() );
+
+                bool sawScriptTool = false;
+
+                for( const nlohmann::json& tool : body["tools"] )
+                {
+                    BOOST_REQUIRE( tool.is_object() );
+                    BOOST_CHECK_EQUAL( tool.value( "type", std::string() ), "function" );
+                    BOOST_REQUIRE( tool.contains( "function" ) );
+                    BOOST_REQUIRE( tool["function"].contains( "name" ) );
+
+                    const std::string name =
+                            tool["function"]["name"].get<std::string>();
+                    BOOST_CHECK( name.find( '.' ) == std::string::npos );
+                    BOOST_CHECK_NE( name, "publish_preview" );
+                    BOOST_CHECK_NE( name, "publish.preview" );
+
+                    if( name == "script_run_bounded_plan" )
+                        sawScriptTool = true;
+                }
+
+                BOOST_CHECK( sawScriptTool );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"ready\"}}]}" );
+                return true;
+            } );
+
+    AI_NEXT_ACTION_TOOL_REGISTRY tools;
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 26;
+    request.m_UserText = wxS( "next action decision" );
+    request.m_DisableDefaultTools = true;
+    request.m_ToolCatalogJson = tools.CallableToolCatalogJson();
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 26 );
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
 }
 
