@@ -1,7 +1,9 @@
 #include <kisurf_ai_pcb_context_adapter.h>
 
 #include <board.h>
+#include <board_connected_item.h>
 #include <board_design_settings.h>
+#include <connectivity/connectivity_algo.h>
 #include <connectivity/connectivity_data.h>
 #include <core/typeinfo.h>
 #include <footprint.h>
@@ -1149,18 +1151,80 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
                     "\"net_count\":0,\"node_count\":0,\"pad_count\":0,"
                     "\"ratsnest_unconnected_count\":0,"
                     "\"visible_ratsnest_unconnected_count\":0,"
-                    "\"local_ratsnest_line_count\":0}" );
+                    "\"local_ratsnest_line_count\":0,"
+                    "\"unconnected_edges\":[],"
+                    "\"unconnected_edge_sample_truncated\":false}" );
     }
+
+    constexpr size_t       maxUnconnectedEdgeSample = 32;
+    std::vector<wxString>  edgeEntries;
+    bool                   edgeSampleTruncated = false;
+
+    auto endpointJson =
+            []( const std::shared_ptr<const CN_ANCHOR>& aAnchor ) -> wxString
+            {
+                if( !aAnchor )
+                    return wxS( "{\"position\":null,\"item_uuid\":null,\"item_type\":null}" );
+
+                BOARD_CONNECTED_ITEM* item = aAnchor->Parent();
+
+                if( !item )
+                {
+                    return wxString::Format(
+                            wxS( "{\"position\":%s,\"item_uuid\":null,\"item_type\":null}" ),
+                            pointDetailsJson( aAnchor->Pos() ) );
+                }
+
+                return wxString::Format(
+                        wxS( "{\"position\":%s,\"item_uuid\":%s,\"item_type\":%d}" ),
+                        pointDetailsJson( aAnchor->Pos() ), quotedJson( item->m_Uuid.AsString() ),
+                        static_cast<int>( item->Type() ) );
+            };
+
+    connectivity->RunOnUnconnectedEdges(
+            [&]( CN_EDGE& aEdge ) -> bool
+            {
+                if( edgeEntries.size() >= maxUnconnectedEdgeSample )
+                {
+                    edgeSampleTruncated = true;
+                    return false;
+                }
+
+                const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
+                const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
+                int                                    netCode = NETINFO_LIST::UNCONNECTED;
+
+                if( sourceNode && sourceNode->Parent() )
+                    netCode = sourceNode->Parent()->GetNetCode();
+                else if( targetNode && targetNode->Parent() )
+                    netCode = targetNode->Parent()->GetNetCode();
+
+                wxString netName;
+
+                if( connectivity->HasNetNameForNetCode( netCode ) )
+                    netName = connectivity->GetNetNameForNetCode( netCode );
+
+                edgeEntries.push_back( wxString::Format(
+                        wxS( "{\"net_code\":%d,\"net_name\":%s,\"visible\":%s,"
+                             "\"source\":%s,\"target\":%s}" ),
+                        netCode, quotedJson( netName ), boolJson( aEdge.IsVisible() ),
+                        endpointJson( sourceNode ), endpointJson( targetNode ) ) );
+
+                return true;
+            } );
 
     return wxString::Format(
             wxS( "{\"source\":\"board_connectivity\",\"present\":true,"
                  "\"net_count\":%d,\"node_count\":%u,\"pad_count\":%u,"
                  "\"ratsnest_unconnected_count\":%u,"
                  "\"visible_ratsnest_unconnected_count\":%u,"
-                 "\"local_ratsnest_line_count\":%zu}" ),
+                 "\"local_ratsnest_line_count\":%zu,"
+                 "\"unconnected_edges\":%s,"
+                 "\"unconnected_edge_sample_truncated\":%s}" ),
             connectivity->GetNetCount(), connectivity->GetNodeCount(),
             connectivity->GetPadCount(), connectivity->GetUnconnectedCount( false ),
-            connectivity->GetUnconnectedCount( true ), connectivity->GetLocalRatsnest().size() );
+            connectivity->GetUnconnectedCount( true ), connectivity->GetLocalRatsnest().size(),
+            jsonArray( edgeEntries ), boolJson( edgeSampleTruncated ) );
 }
 
 

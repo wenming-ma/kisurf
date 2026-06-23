@@ -21,6 +21,7 @@
 #include <pcb_track.h>
 #include <project/net_settings.h>
 #include <settings/settings_manager.h>
+#include <set>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
 #include <zone.h>
@@ -280,6 +281,24 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_CHECK_EQUAL( connectivity["visible_ratsnest_unconnected_count"].get<int>(),
                        board.GetConnectivity()->GetUnconnectedCount( true ) );
     BOOST_CHECK_EQUAL( connectivity["local_ratsnest_line_count"].get<int>(), 0 );
+
+    BOOST_REQUIRE_EQUAL( connectivity["unconnected_edges"].size(), 1u );
+
+    nlohmann::json edge = connectivity["unconnected_edges"][0];
+    BOOST_CHECK_EQUAL( edge["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( edge["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( edge["visible"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( edge["source"]["item_type"].get<int>(), PCB_PAD_T );
+    BOOST_CHECK_EQUAL( edge["target"]["item_type"].get<int>(), PCB_PAD_T );
+
+    std::set<int> endpointXs = { edge["source"]["position"]["x"].get<int>(),
+                                 edge["target"]["position"]["x"].get<int>() };
+    std::set<int> endpointYs = { edge["source"]["position"]["y"].get<int>(),
+                                 edge["target"]["position"]["y"].get<int>() };
+
+    BOOST_CHECK( endpointXs == std::set<int>( { 0, 100000 } ) );
+    BOOST_CHECK( endpointYs == std::set<int>( { 0 } ) );
+    BOOST_CHECK_EQUAL( connectivity["unconnected_edge_sample_truncated"].get<bool>(), false );
 }
 
 
