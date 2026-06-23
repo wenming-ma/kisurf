@@ -316,6 +316,19 @@ bool isBoundedPlanMutationTool( const std::string& aToolName )
 }
 
 
+bool isSurfaceRepairPatchTool( const std::string& aToolName )
+{
+    return aToolName == "surface.repair_patch";
+}
+
+
+bool isHiddenMutationBatchTool( const std::string& aToolName )
+{
+    return isBoundedPlanMutationTool( aToolName )
+           || isSurfaceRepairPatchTool( aToolName );
+}
+
+
 bool jsonStringFieldEquals( const nlohmann::json& aObject, const char* aKey,
                             const wxString& aExpected )
 {
@@ -1119,7 +1132,7 @@ nlohmann::json rollbackMergedToolBatch(
              it != mergedToolBatches.rend(); ++it )
         {
             if( it->is_object()
-                && isBoundedPlanMutationTool(
+                && isHiddenMutationBatchTool(
                         it->value( "tool", std::string() ) )
                 && it->contains( "tool_call_id" )
                 && ( *it )["tool_call_id"].is_string() )
@@ -1470,7 +1483,7 @@ void attachReviewProviderToolResultsToAttempt(
 
         const std::string resultTool = result.value( "tool", std::string() );
 
-        if( !isBoundedPlanMutationTool( resultTool )
+        if( !isHiddenMutationBatchTool( resultTool )
             || result.value( "status", std::string() ) != "script_plan_executed"
             || !result.contains( "session_journal" )
             || !result["session_journal"].is_object() )
@@ -3678,6 +3691,18 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "role", "checkpoint_rollback" },
                 { "side_effect", "shadow_mutation" },
                 { "can_publish", false } },
+              { { "name", "surface.repair_patch" },
+                { "layer", "integrated" },
+                { "role", "surface_repair" },
+                { "work_state", "structured_surface" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "surface.apply_patch" },
+                { "max_steps", 1 } },
               { { "name", "repair.apply_bounded_plan" },
                 { "layer", "integrated" },
                 { "role", "bounded_repair" },
@@ -3771,6 +3796,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "When omitted, the latest merged script batch is restored." } };
                     parameters["required"] = nlohmann::json::array(
                             { "checkpoint_id" } );
+                }
+                else if( isSurfaceRepairPatchTool( aName ) )
+                {
+                    parameters["properties"]["surface_id"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Structured surface id to patch, such as a table, "
+                                "property panel, dialog, or rule form surface." } };
+                    parameters["properties"]["table_id"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional table id inside the structured surface." } };
+                    parameters["properties"]["target_scope"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Optional normalized scope chosen by the model, "
+                                "for example a row, column, cell range, or panel field." } };
+                    parameters["properties"]["patch"] =
+                            { { "type", "object" },
+                              { "description",
+                                "SurfacePatch object. It must contain operations, "
+                                "ops, or changes describing typed surface edits." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias for this patch attempt." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "surface_id", "patch" } );
                 }
                 else if( isBoundedPlanMutationTool( aName ) )
                 {
@@ -4094,6 +4147,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "repair.apply_bounded_plan" );
                 }
 
+                if( name == "surface_repair_patch"
+                    || name == "surface.repair_patch" )
+                {
+                    return std::string( "surface.repair_patch" );
+                }
+
                 return std::string();
             };
 
@@ -4239,7 +4298,7 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                            std::move( mutation ) );
     }
 
-    if( isBoundedPlanMutationTool( toolName ) )
+    if( isHiddenMutationBatchTool( toolName ) )
     {
         const std::string boundedPlanToolName = toolName;
 
@@ -4247,12 +4306,34 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         {
             return makeResult(
                     false, false, wxS( "missing_attempt_context" ),
-                    wxS( "bounded plan mutation requires an active attempt." ),
+                    wxS( "hidden mutation batch requires an active attempt." ),
                     { { "tool", boundedPlanToolName },
                       { "status", "missing_attempt_context" } } );
         }
 
         nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+
+        if( isSurfaceRepairPatchTool( toolName ) )
+        {
+            if( !args.contains( "surface_id" ) || !args["surface_id"].is_string()
+                || !args.contains( "patch" ) || !args["patch"].is_object() )
+            {
+                return makeResult(
+                        false, false, wxS( "malformed_arguments" ),
+                        wxS( "surface.repair_patch requires surface_id and patch." ),
+                        { { "tool", boundedPlanToolName },
+                          { "status", "malformed_arguments" } } );
+            }
+
+            nlohmann::json operation =
+                    { { "kind", "surface.apply_patch" },
+                      { "arguments", args } };
+            args =
+                    { { "plan",
+                        { { "operations",
+                            nlohmann::json::array( { std::move( operation ) } ) } } },
+                      { "max_steps", 1 } };
+        }
 
         if( !args.contains( "plan" ) || !args["plan"].is_object()
             || !args["plan"].contains( "operations" )

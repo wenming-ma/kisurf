@@ -514,6 +514,88 @@ public:
 };
 
 
+class SURFACE_REPAIR_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "surface repair patch then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"attempt\","
+                         "\"opportunity_type\":\"structured_surface\","
+                         "\"selected_candidate_index\":0,"
+                         "\"target_scope\":{\"kind\":\"column\","
+                         "\"panel_id\":\"board_setup.clearance\","
+                         "\"surface_id\":\"board_setup.clearance\","
+                         "\"table_id\":\"clearance.rules\","
+                         "\"column\":\"class\"},"
+                         "\"reason_code\":\"surface_repair_patch_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need SurfacePatch repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_surface_repair" );
+                call.m_ToolName = wxS( "surface_repair_patch" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"target_scope\":{\"kind\":\"column\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"column\":\"class\"},"
+                             "\"patch\":{\"kind\":\"SurfacePatch\","
+                             "\"operations\":["
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.power\","
+                             "\"column_id\":\"class\",\"value\":\"Power\"},"
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.gpio\","
+                             "\"column_id\":\"class\",\"value\":\"GPIO\"}]},"
+                             "\"alias\":\"surface_repair_fill_class\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered surface repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_surface_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1284,6 +1366,8 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_batch_composition\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"surface.repair_patch\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"surface_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"raw_board_access\":false" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"direct_publish\":false" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"runtime_gate\"" ) ) );
@@ -1306,8 +1390,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     bool sawScriptTool = false;
     bool sawRepairTool = false;
+    bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
+    bool sawSurfaceRepairRequiredPatch = false;
 
     for( const nlohmann::json& tool : callable )
     {
@@ -1358,12 +1444,47 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
         if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
+
+        if( functionName == "surface_repair_patch" )
+        {
+            sawSurfaceRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+
+            bool hasSurfaceId = false;
+            bool hasPatch = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "surface_id" )
+                    {
+                        hasSurfaceId = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "patch" )
+                    {
+                        hasPatch = true;
+                    }
+                }
+            }
+
+            sawSurfaceRepairRequiredPatch = hasSurfaceId && hasPatch;
+        }
     }
 
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawRepairTool );
+    BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
+    BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
@@ -2105,6 +2226,64 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"attempt_session_journal\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
+{
+    auto* provider = new SURFACE_REPAIR_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makePanelFillTriggerWithTargetScope() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult =
+            publishRequest.m_ToolResults.at( 0 );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolCallId,
+                       wxString( wxS( "call_surface_repair" ) ) );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolName,
+                       wxString( wxS( "surface_repair_patch" ) ) );
+    BOOST_CHECK( repairResult.m_Allowed );
+    BOOST_CHECK( repairResult.m_Executed );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"surface.repair_patch\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"surface.apply_patch\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"surface_repair_fill_class\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_surface_repair" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"surface_patch_previews\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"surface_patch_preview\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"surface_repair_fill_class\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
 }
 
 
