@@ -340,12 +340,19 @@ bool isRoutingRepairSegmentTool( const std::string& aToolName )
 }
 
 
+bool isRoutingRepairPolylineTool( const std::string& aToolName )
+{
+    return aToolName == "routing.repair_polyline";
+}
+
+
 bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
            || isPlacementRepairViaTool( aToolName )
            || isPlacementRepairMoveItemsTool( aToolName )
-           || isRoutingRepairSegmentTool( aToolName );
+           || isRoutingRepairSegmentTool( aToolName )
+           || isRoutingRepairPolylineTool( aToolName );
 }
 
 
@@ -3857,6 +3864,18 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_journal", true },
                 { "lowers_to", "pcb.create_track_segment" },
                 { "max_steps", 1 } },
+              { { "name", "routing.repair_polyline" },
+                { "layer", "integrated" },
+                { "role", "routing_repair" },
+                { "work_state", "routing" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.create_track_polyline" },
+                { "max_steps", 1 } },
               { { "name", "surface.repair_patch" },
                 { "layer", "integrated" },
                 { "role", "surface_repair" },
@@ -4048,6 +4067,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description", "Optional provenance metadata." } };
                     parameters["required"] = nlohmann::json::array(
                             { "start", "end", "layer", "net", "width" } );
+                }
+                else if( isRoutingRepairPolylineTool( aName ) )
+                {
+                    parameters["properties"]["points"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Ordered route polyline points using integer internal coordinates." },
+                              { "items", { { "type", "object" } } },
+                              { "minItems", 2 } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description", "Routing layer for all polyline segments." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description", "Net assigned to the polyline segments." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Track width in internal units." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias prefix for the repaired polyline." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "points", "layer", "net", "width" } );
                 }
                 else if( isSurfaceRepairPatchTool( aName ) )
                 {
@@ -4417,6 +4464,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "routing.repair_segment" );
                 }
 
+                if( name == "routing_repair_polyline"
+                    || name == "routing.repair_polyline" )
+                {
+                    return std::string( "routing.repair_polyline" );
+                }
+
                 if( name == "surface_repair_patch"
                     || name == "surface.repair_patch" )
                 {
@@ -4633,6 +4686,22 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                 malformedMessage =
                         wxS( "routing.repair_segment requires start, end, "
                              "layer, net, and width." );
+            }
+            else if( isRoutingRepairPolylineTool( toolName ) )
+            {
+                operationKind = "pcb.create_track_polyline";
+                malformed = !args.contains( "points" )
+                             || !args["points"].is_array()
+                             || args["points"].size() < 2
+                             || !args.contains( "layer" )
+                             || !args["layer"].is_string()
+                             || !args.contains( "net" )
+                             || !args["net"].is_string()
+                             || !args.contains( "width" )
+                             || !args["width"].is_number_integer();
+                malformedMessage =
+                        wxS( "routing.repair_polyline requires points, layer, "
+                             "net, and width." );
             }
             else
             {
