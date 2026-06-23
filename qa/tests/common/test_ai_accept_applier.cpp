@@ -3,6 +3,7 @@
 #include <kisurf/ai/ai_accept_applier.h>
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_execution_session.h>
+#include <kisurf/ai/ai_structured_surface_apply_adapter.h>
 
 #include <utility>
 
@@ -345,6 +346,79 @@ BOOST_AUTO_TEST_CASE( ReplaySkipsObservationRecordsButKeepsThemInJournal )
                  == AI_SESSION_OPERATION_KIND::CreateVia );
     BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
     BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayAppliesStructuredSurfaceChanges )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "surface patch accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":["
+                 "{\"op\":\"set_cell\",\"row_id\":\"row.power\","
+                 "\"column_id\":\"class\",\"value\":\"Power\"},"
+                 "{\"op\":\"set_field\",\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]},"
+                 "\"alias\":\"surface_patch_fill_class\"}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"tables\":"
+                 "{\"clearance.rules\":{\"rows\":{\"row.power\":{\"cells\":"
+                 "{\"class\":\"Signal\"}}}}}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK( !result.m_BoardMutated );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"class\":\"Power\"" ) ) );
+    BOOST_CHECK( surfaceState.Contains(
+            wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsUnknownPatchOperationAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "bad surface patch" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"delete_project\","
+                 "\"target\":\"all\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"fields\":"
+                 "{\"default_clearance\":\"0.15mm\"}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "Unsupported SurfacePatch op" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
 }
 
 
