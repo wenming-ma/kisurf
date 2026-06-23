@@ -1540,6 +1540,62 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
+{
+    auto* placementProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "placement_generate_via_pattern_candidates" ),
+            wxS( "placement" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES placementServices;
+    AI_NEXT_ACTION_RUNTIME placementRuntime{
+            std::unique_ptr<AI_PROVIDER>( placementProvider ),
+            &placementServices.m_Validation,
+            &placementServices.m_Preview };
+
+    BOOST_REQUIRE( placementRuntime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( placementProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL( placementProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    nlohmann::json placementResult = nlohmann::json::parse(
+            placementProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( placementResult["candidates"].size(), 1 );
+    const nlohmann::json& placementLanding =
+            placementResult["candidates"].at( 0 )["landing_facts"];
+    BOOST_CHECK_EQUAL( placementLanding["kind"].get<std::string>(),
+                       "placement_landing" );
+    BOOST_CHECK_EQUAL( placementLanding["position"]["x"].get<int>(), 400 );
+    BOOST_CHECK_EQUAL( placementLanding["net"].get<std::string>(), "GND" );
+    BOOST_CHECK( !placementLanding["source"].get<std::string>().empty() );
+
+    auto* routingProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_segment_candidates" ),
+            wxS( "routing" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES routingServices;
+    AI_NEXT_ACTION_RUNTIME routingRuntime{
+            std::unique_ptr<AI_PROVIDER>( routingProvider ),
+            &routingServices.m_Validation,
+            &routingServices.m_Preview };
+
+    BOOST_REQUIRE( routingRuntime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( routingProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    nlohmann::json routingResult = nlohmann::json::parse(
+            routingProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( routingResult["candidates"].size(), 1 );
+    const nlohmann::json& routingLanding =
+            routingResult["candidates"].at( 0 )["landing_facts"];
+    BOOST_CHECK_EQUAL( routingLanding["kind"].get<std::string>(),
+                       "routing_landing" );
+    BOOST_CHECK_EQUAL( routingLanding["point"]["x"].get<int>(), 260 );
+    BOOST_CHECK_EQUAL( routingLanding["net"].get<std::string>(), "GND" );
+    BOOST_CHECK_EQUAL( routingLanding["layer"].get<std::string>(), "F.Cu" );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRejectsOutOfRangeSelectedCandidateIndex )
 {
     auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(

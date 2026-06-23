@@ -2642,6 +2642,46 @@ nlohmann::json objectFromJsonText( const wxString& aJsonText )
 }
 
 
+nlohmann::json pointJson( const VECTOR2I& aPoint )
+{
+    return { { "x", aPoint.x }, { "y", aPoint.y } };
+}
+
+
+nlohmann::json candidateLandingFactsJson(
+        const AI_SUGGESTION_RECORD& aCandidate )
+{
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( aCandidate.m_ArgumentsJson );
+
+    if( !operation )
+        return nlohmann::json::object();
+
+    if( operation->IsPlaceViaPreview() )
+    {
+        return { { "kind", "placement_landing" },
+                 { "source", "operation.position" },
+                 { "position", pointJson( operation->m_Position ) },
+                 { "net", toUtf8String( operation->m_NetName ) },
+                 { "diameter", operation->m_Diameter },
+                 { "drill", operation->m_Drill } };
+    }
+
+    if( operation->IsRouteSegmentPreview() )
+    {
+        return { { "kind", "routing_landing" },
+                 { "source", "operation.end" },
+                 { "point", pointJson( operation->m_End ) },
+                 { "start", pointJson( operation->m_Start ) },
+                 { "net", toUtf8String( operation->m_NetName ) },
+                 { "layer", toUtf8String( operation->m_LayerName ) },
+                 { "width", operation->m_Width } };
+    }
+
+    return nlohmann::json::object();
+}
+
+
 nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
                                     size_t aIndex )
 {
@@ -2659,6 +2699,11 @@ nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
 
     if( arguments.contains( "operation" ) )
         record["operation"] = arguments["operation"];
+
+    nlohmann::json landingFacts = candidateLandingFactsJson( aCandidate );
+
+    if( !landingFacts.empty() )
+        record["landing_facts"] = std::move( landingFacts );
 
     return record;
 }
