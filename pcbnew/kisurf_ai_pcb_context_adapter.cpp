@@ -1,8 +1,10 @@
 #include <kisurf_ai_pcb_context_adapter.h>
 
 #include <board.h>
+#include <board_design_settings.h>
 #include <core/typeinfo.h>
 #include <footprint.h>
+#include <netclass.h>
 #include <netinfo.h>
 #include <pad.h>
 #include <pcb_barcode.h>
@@ -15,6 +17,7 @@
 #include <pcb_textbox.h>
 #include <pcb_target.h>
 #include <pcb_track.h>
+#include <project/net_settings.h>
 #include <zone.h>
 
 #include <utility>
@@ -1056,6 +1059,35 @@ wxString boxDetailsJson( const BOX2I& aBox )
 }
 
 
+wxString makeClearanceSourcesJson( const BOARD& aBoard )
+{
+    const BOARD_DESIGN_SETTINGS& settings = aBoard.GetDesignSettings();
+    wxString                     defaultNetclassJson = wxS( "null" );
+
+    if( settings.m_NetSettings && settings.m_NetSettings->GetDefaultNetclass() )
+    {
+        std::shared_ptr<NETCLASS> defaultNetclass = settings.m_NetSettings->GetDefaultNetclass();
+
+        defaultNetclassJson = wxString::Format(
+                wxS( "{\"name\":%s,\"clearance\":%d,\"track_width\":%d,"
+                     "\"via_diameter\":%d,\"via_drill\":%d}" ),
+                quotedJson( defaultNetclass->GetName() ),
+                static_cast<int>( defaultNetclass->GetClearance() ),
+                static_cast<int>( defaultNetclass->GetTrackWidth() ),
+                static_cast<int>( defaultNetclass->GetViaDiameter() ),
+                static_cast<int>( defaultNetclass->GetViaDrill() ) );
+    }
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board_design_settings\",\"minimum_clearance\":%d,"
+                 "\"copper_edge_clearance\":%d,\"hole_clearance\":%d,"
+                 "\"default_netclass\":%s}" ),
+            static_cast<int>( settings.m_MinClearance ),
+            static_cast<int>( settings.m_CopperEdgeClearance ),
+            static_cast<int>( settings.m_HoleClearance ), defaultNetclassJson );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -1117,10 +1149,11 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"footprint_count\":%zu,\"pad_count\":%zu,\"track_count\":%zu,"
                  "\"arc_count\":%zu,\"via_count\":%zu,\"drawing_count\":%zu,"
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
-                 "\"board_edges_bbox\":%s}" ),
+                 "\"board_edges_bbox\":%s,\"clearance_sources\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
-            boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ) );
+            boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
+            makeClearanceSourcesJson( aBoard ) );
 }
 
 

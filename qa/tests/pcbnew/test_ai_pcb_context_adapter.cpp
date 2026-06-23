@@ -4,6 +4,7 @@
 #include <kisurf_ai_pcb_context_adapter.h>
 
 #include <board.h>
+#include <board_design_settings.h>
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -17,6 +18,7 @@
 #include <pcb_text.h>
 #include <pcb_textbox.h>
 #include <pcb_track.h>
+#include <project/net_settings.h>
 #include <zone.h>
 
 namespace
@@ -86,6 +88,13 @@ BOOST_AUTO_TEST_CASE( AdapterAddsBoardSummaryObservationFacts )
 {
     BOARD board;
     board.Add( new NETINFO_ITEM( &board, wxS( "/GND" ), 1 ) );
+    board.GetDesignSettings().m_MinClearance = 111000;
+    board.GetDesignSettings().m_CopperEdgeClearance = 222000;
+    board.GetDesignSettings().m_HoleClearance = 333000;
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetClearance( 444000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetTrackWidth( 555000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetViaDiameter( 666000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetViaDrill( 777000 );
 
     FOOTPRINT* footprint = new FOOTPRINT( &board );
     footprint->SetReference( wxS( "U1" ) );
@@ -123,6 +132,26 @@ BOOST_AUTO_TEST_CASE( AdapterAddsBoardSummaryObservationFacts )
     BOOST_CHECK_EQUAL( summary["track_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["zone_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["edge_cut_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["source"].get<std::string>(),
+                       "board_design_settings" );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["minimum_clearance"].get<int>(), 111000 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["copper_edge_clearance"].get<int>(), 222000 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["hole_clearance"].get<int>(), 333000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["name"].get<std::string>(),
+            "Default" );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["clearance"].get<int>(),
+            444000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["track_width"].get<int>(),
+            555000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["via_diameter"].get<int>(),
+            666000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["via_drill"].get<int>(),
+            777000 );
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["defined"].get<bool>(), true );
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["x"].get<int>(), 1000 );
     BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["y"].get<int>(), 2000 );
