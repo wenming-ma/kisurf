@@ -1989,6 +1989,186 @@ nlohmann::json visibleObjectSummariesJson(
 }
 
 
+void copyJsonFieldIfPresent( nlohmann::json& aTarget,
+                             const nlohmann::json& aSource,
+                             const char* aField )
+{
+    if( aSource.contains( aField ) && !aSource[aField].is_null() )
+        aTarget[aField] = aSource[aField];
+}
+
+
+nlohmann::json objectDetailsJson( const AI_OBJECT_REF& aObject )
+{
+    if( aObject.m_DetailsJson.IsEmpty() )
+        return nlohmann::json::object();
+
+    nlohmann::json details = objectFromJsonText( aObject.m_DetailsJson );
+    return details.is_object() ? details : nlohmann::json::object();
+}
+
+
+bool detailsKindEquals( const nlohmann::json& aDetails,
+                        const char* aKind )
+{
+    return aDetails.contains( "kind" ) && aDetails["kind"].is_string()
+           && aDetails["kind"].get<std::string>() == aKind;
+}
+
+
+nlohmann::json visibleObjectBaseFact( const AI_OBJECT_REF& aObject )
+{
+    return { { "source", "visible_object" },
+             { "label", toUtf8String( aObject.m_Label ) },
+             { "type", static_cast<int>( aObject.m_Type ) },
+             { "uuid", toUtf8String( aObject.m_Uuid.AsString() ) } };
+}
+
+
+nlohmann::json placementObstacleFactJson( const AI_OBJECT_REF& aObject )
+{
+    const nlohmann::json details = objectDetailsJson( aObject );
+
+    if( details.empty() )
+        return nlohmann::json::object();
+
+    if( aObject.m_Type == PCB_VIA_T || detailsKindEquals( details, "via" ) )
+    {
+        if( !details.contains( "position" ) )
+            return nlohmann::json::object();
+
+        nlohmann::json fact = visibleObjectBaseFact( aObject );
+        fact["kind"] = "via_obstacle";
+        copyJsonFieldIfPresent( fact, details, "position" );
+        copyJsonFieldIfPresent( fact, details, "diameter" );
+        copyJsonFieldIfPresent( fact, details, "drill" );
+        copyJsonFieldIfPresent( fact, details, "net_name" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layer_pair" );
+        return fact;
+    }
+
+    if( aObject.m_Type == PCB_FOOTPRINT_T || detailsKindEquals( details, "footprint" ) )
+    {
+        if( !details.contains( "bbox" ) )
+            return nlohmann::json::object();
+
+        nlohmann::json fact = visibleObjectBaseFact( aObject );
+        fact["kind"] = "footprint_obstacle";
+        copyJsonFieldIfPresent( fact, details, "reference" );
+        copyJsonFieldIfPresent( fact, details, "bbox" );
+        copyJsonFieldIfPresent( fact, details, "courtyard_bbox" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "side" );
+        return fact;
+    }
+
+    return nlohmann::json::object();
+}
+
+
+nlohmann::json placementObstacleFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    const size_t    count = std::min<size_t>( aObjects.size(), 32 );
+
+    for( size_t ii = 0; ii < count; ++ii )
+    {
+        nlohmann::json fact = placementObstacleFactJson( aObjects[ii] );
+
+        if( !fact.empty() )
+            facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
+bool isKeepoutDetails( const nlohmann::json& aDetails )
+{
+    if( detailsKindEquals( aDetails, "keepout" ) )
+        return true;
+
+    if( aDetails.contains( "rule" ) && aDetails["rule"].is_string()
+        && aDetails["rule"].get<std::string>().find( "keepout" )
+                   != std::string::npos )
+    {
+        return true;
+    }
+
+    if( aDetails.contains( "rule" ) && aDetails["rule"].is_string()
+        && aDetails["rule"].get<std::string>() == "no_placement" )
+    {
+        return true;
+    }
+
+    return aDetails.contains( "keepout" ) && aDetails["keepout"].is_boolean()
+           && aDetails["keepout"].get<bool>();
+}
+
+
+nlohmann::json placementKeepoutFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    const size_t    count = std::min<size_t>( aObjects.size(), 32 );
+
+    for( size_t ii = 0; ii < count; ++ii )
+    {
+        const AI_OBJECT_REF& object = aObjects[ii];
+        const nlohmann::json details = objectDetailsJson( object );
+
+        if( details.empty() || !isKeepoutDetails( details ) )
+            continue;
+
+        nlohmann::json fact = visibleObjectBaseFact( object );
+        fact["kind"] = "keepout";
+        copyJsonFieldIfPresent( fact, details, "rule" );
+        copyJsonFieldIfPresent( fact, details, "bbox" );
+        copyJsonFieldIfPresent( fact, details, "polygon" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layer_set" );
+        facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
+nlohmann::json placementFootprintGeometryFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    const size_t    count = std::min<size_t>( aObjects.size(), 32 );
+
+    for( size_t ii = 0; ii < count; ++ii )
+    {
+        const AI_OBJECT_REF& object = aObjects[ii];
+        const nlohmann::json details = objectDetailsJson( object );
+
+        if( details.empty()
+            || ( object.m_Type != PCB_FOOTPRINT_T
+                 && !detailsKindEquals( details, "footprint" ) ) )
+        {
+            continue;
+        }
+
+        nlohmann::json fact = visibleObjectBaseFact( object );
+        fact["kind"] = "footprint_geometry";
+        copyJsonFieldIfPresent( fact, details, "reference" );
+        copyJsonFieldIfPresent( fact, details, "bbox" );
+        copyJsonFieldIfPresent( fact, details, "courtyard_bbox" );
+        copyJsonFieldIfPresent( fact, details, "pads_bbox" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "side" );
+        facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
 const AI_PANEL_STATE_RECORD* focusedPanelState(
         const std::vector<AI_PANEL_STATE_RECORD>& aPanels )
 {
@@ -2170,6 +2350,12 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["placement_anchor_ids"] = anchorIdArrayJson( context.m_Anchors );
         packet["placement_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isPlacementPacketAnchor );
+        packet["placement_obstacle_facts"] =
+                placementObstacleFactsJson( context.m_VisibleObjects );
+        packet["placement_keepout_facts"] =
+                placementKeepoutFactsJson( context.m_VisibleObjects );
+        packet["placement_footprint_geometry_facts"] =
+                placementFootprintGeometryFactsJson( context.m_VisibleObjects );
     }
     else if( packetKind == "structured_surface" )
     {

@@ -824,6 +824,27 @@ AI_OBJECT_REF viaRef( int aX, int aY, const wxString& aNetName = wxS( "GND" ) )
 }
 
 
+AI_OBJECT_REF footprintRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_FOOTPRINT_T, wxS( "footprint:U1" ),
+            wxS( "{\"kind\":\"footprint\",\"reference\":\"U1\","
+                 "\"bbox\":{\"x\":150,\"y\":40,\"width\":100,\"height\":80},"
+                 "\"courtyard_bbox\":{\"x\":140,\"y\":30,\"width\":120,\"height\":100},"
+                 "\"layer\":\"F.Cu\"}" ) );
+}
+
+
+AI_OBJECT_REF keepoutRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_ZONE_T, wxS( "keepout:J1" ),
+            wxS( "{\"kind\":\"keepout\",\"rule\":\"no_placement\","
+                 "\"bbox\":{\"x\":210,\"y\":20,\"width\":90,\"height\":70},"
+                 "\"layer_set\":[\"F.Cu\",\"B.Cu\"]}" ) );
+}
+
+
 AI_CONTEXT_ANCHOR contextAnchor( const wxString& aId,
                                  AI_CONTEXT_ANCHOR_KIND aKind,
                                  const wxString& aLabel,
@@ -1207,6 +1228,8 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             contextAnchor( wxS( "place_candidate_1" ),
                            AI_CONTEXT_ANCHOR_KIND::PlacementCandidate,
                            wxS( "Place candidate 1" ), 220, 90 ) );
+    placementTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( footprintRef() );
+    placementTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( keepoutRef() );
 
     BOOST_CHECK( !placementRuntime.Update( placementTrigger ).has_value() );
     BOOST_REQUIRE_EQUAL( placementProvider->m_Requests.size(), 1 );
@@ -1217,7 +1240,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
             wxS( "\"placeable_kind\":\"via\"" ) ) );
     BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
-            wxS( "\"visible_object_count\":3" ) ) );
+            wxS( "\"visible_object_count\":5" ) ) );
 
     nlohmann::json placementRequest =
             providerRequestJson( placementProvider->m_Requests.front() );
@@ -1241,7 +1264,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_anchors"].at( 0 )["position"]["x"].get<int>(),
             220 );
     BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
-    BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 3 );
+    BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 5 );
     BOOST_CHECK_EQUAL(
             placementPacket["visible_object_summaries"].at( 0 )["label"].get<std::string>(),
             "via:100,50" );
@@ -1249,6 +1272,49 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["visible_object_summaries"].at( 0 )["details"]["position"]["x"]
                     .get<int>(),
             100 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_obstacle_facts" ) );
+    BOOST_REQUIRE_GE( placementPacket["placement_obstacle_facts"].size(), 4 );
+
+    bool sawViaObstacle = false;
+    bool sawFootprintObstacle = false;
+
+    for( const nlohmann::json& fact : placementPacket["placement_obstacle_facts"] )
+    {
+        if( fact.value( "kind", "" ) == "via_obstacle"
+            && fact["position"]["x"].get<int>() == 100
+            && fact["diameter"].get<int>() == 600000 )
+        {
+            sawViaObstacle = true;
+        }
+
+        if( fact.value( "kind", "" ) == "footprint_obstacle"
+            && fact.value( "reference", "" ) == "U1"
+            && fact["bbox"]["x"].get<int>() == 150 )
+        {
+            sawFootprintObstacle = true;
+        }
+    }
+
+    BOOST_CHECK( sawViaObstacle );
+    BOOST_CHECK( sawFootprintObstacle );
+    BOOST_REQUIRE( placementPacket.contains( "placement_keepout_facts" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["placement_keepout_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_keepout_facts"].at( 0 )["kind"].get<std::string>(),
+            "keepout" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_keepout_facts"].at( 0 )["bbox"]["width"].get<int>(),
+            90 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_footprint_geometry_facts" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["placement_footprint_geometry_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_footprint_geometry_facts"].at( 0 )["reference"]
+                    .get<std::string>(),
+            "U1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_footprint_geometry_facts"].at( 0 )
+                    ["courtyard_bbox"]["width"].get<int>(),
+            120 );
 
     auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
