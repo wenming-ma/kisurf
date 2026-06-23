@@ -246,6 +246,71 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
                          ["F.Cu", "B.Cu"])
         self.assertNotIn("layer", result["operations"][0]["arguments"])
 
+    def test_surface_patch_helper_emits_atomic_operation(self):
+        session = KiSurfSession()
+
+        with session.step("fill clearance class"):
+            session.apply_surface_patch(
+                surface_id="board_setup.clearance",
+                table_id="clearance.rules",
+                target_scope={
+                    "kind": "column",
+                    "surface_id": "board_setup.clearance",
+                    "table_id": "clearance.rules",
+                    "column": "class",
+                },
+                patch={
+                    "kind": "SurfacePatch",
+                    "operations": [
+                        {
+                            "op": "set_cell",
+                            "row_id": "row.power",
+                            "column_id": "class",
+                            "value": "Power",
+                        }
+                    ],
+                },
+                alias="surface_patch_fill_class",
+            )
+
+        result = session.to_result()
+
+        self.assertEqual(result["step_label"], "fill clearance class")
+        self.assertEqual(len(result["operations"]), 1)
+        operation = result["operations"][0]
+        self.assertEqual(operation["kind"], "surface.apply_patch")
+        self.assertEqual(operation["arguments"]["surface_id"], "board_setup.clearance")
+        self.assertEqual(operation["arguments"]["table_id"], "clearance.rules")
+        self.assertEqual(operation["arguments"]["alias"], "surface_patch_fill_class")
+        self.assertEqual(operation["arguments"]["patch"]["operations"][0]["value"], "Power")
+
+    def test_worker_maps_surface_patch_to_protobuf_operation_kind(self):
+        request = session_pb2.WorkerRequest(protocol="kisurf.ai.session.v1")
+        request.run_cell.session.id = 42
+        request.run_cell.session.board_id = "board-main"
+        request.run_cell.session.base_hash = "h0"
+        request.run_cell.cell.id = "surface-patch"
+        request.run_cell.cell.text = (
+            "session.apply_surface_patch(\n"
+            "    surface_id='board_setup.clearance',\n"
+            "    patch={'kind': 'SurfacePatch', 'operations': ["
+            "{'op': 'set_cell', 'row_id': 'row.power', "
+            "'column_id': 'class', 'value': 'Power'}]},\n"
+            "    alias='surface_patch_fill_class')\n"
+        )
+
+        response, should_exit = handle_worker_request(request, {})
+
+        self.assertFalse(should_exit)
+        self.assertEqual(response.protocol, "kisurf.ai.session.v1")
+        self.assertTrue(response.HasField("cell_result"))
+        self.assertTrue(response.cell_result.ok)
+        self.assertEqual(len(response.cell_result.operations), 1)
+        self.assertEqual(
+            response.cell_result.operations[0].kind,
+            session_pb2.SURFACE_APPLY_PATCH,
+        )
+
     def test_control_helpers_emit_checkpoint_and_rollback_operations(self):
         session = KiSurfSession()
 

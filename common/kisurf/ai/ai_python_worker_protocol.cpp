@@ -94,6 +94,7 @@ AI_SESSION_OPERATION_KIND operationKindFromProto(
     case OperationKind::PCB_REFILL_ZONES:            return AI_SESSION_OPERATION_KIND::RefillZones;
     case OperationKind::PCB_REBUILD_CONNECTIVITY:    return AI_SESSION_OPERATION_KIND::RebuildConnectivity;
     case OperationKind::PCB_RUN_VALIDATION:          return AI_SESSION_OPERATION_KIND::RunValidation;
+    case OperationKind::SURFACE_APPLY_PATCH:         return AI_SESSION_OPERATION_KIND::ApplySurfacePatch;
     case OperationKind::OPERATION_KIND_UNSPECIFIED:  return AI_SESSION_OPERATION_KIND::Unknown;
     case OperationKind::OperationKind_INT_MIN_SENTINEL_DO_NOT_USE_:
     case OperationKind::OperationKind_INT_MAX_SENTINEL_DO_NOT_USE_:

@@ -477,6 +477,7 @@ _OPERATION_KIND_BY_ID = {
     "pcb.refill_zones": session_pb2.PCB_REFILL_ZONES,
     "pcb.rebuild_connectivity": session_pb2.PCB_REBUILD_CONNECTIVITY,
     "pcb.run_validation": session_pb2.PCB_RUN_VALIDATION,
+    "surface.apply_patch": session_pb2.SURFACE_APPLY_PATCH,
 }
 
 

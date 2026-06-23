@@ -340,6 +340,37 @@ BOOST_AUTO_TEST_CASE( DecodeCellResultMapsPrimitiveMutationAndMaintenanceRequest
 }
 
 
+BOOST_AUTO_TEST_CASE( DecodeCellResultMapsSurfacePatchRequest )
+{
+    kiapi::ai::session::WorkerResponse response = makeCellResponse();
+    addOperation(
+            response.mutable_cell_result(),
+            static_cast<kiapi::ai::session::OperationKind>( 200 ),
+            "{\"surface_id\":\"board_setup.clearance\","
+            "\"patch\":{\"kind\":\"SurfacePatch\","
+            "\"operations\":[{\"op\":\"set_cell\",\"row_id\":\"row.power\","
+            "\"column_id\":\"class\",\"value\":\"Power\"}]},"
+            "\"alias\":\"surface_patch_fill_class\"}" );
+
+    wxString error;
+    AI_PYTHON_CELL_RESULT result =
+            AI_PYTHON_WORKER_PROTOCOL::DecodeCellResult( serialize( response ), &error );
+
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_CHECK( result.m_Ok );
+    BOOST_REQUIRE_EQUAL( result.m_Operations.size(), 1 );
+    BOOST_CHECK( result.m_Operations.front().m_Kind
+                 == AI_SESSION_OPERATION_KIND::ApplySurfacePatch );
+
+    nlohmann::json args = nlohmann::json::parse(
+            toStdString( result.m_Operations.front().m_ArgumentsJson ) );
+    BOOST_CHECK_EQUAL( args["surface_id"].get<std::string>(),
+                       "board_setup.clearance" );
+    BOOST_CHECK_EQUAL( args["alias"].get<std::string>(),
+                       "surface_patch_fill_class" );
+}
+
+
 BOOST_AUTO_TEST_CASE( DecodeCellResultMapsSdkControlRequests )
 {
     kiapi::ai::session::WorkerResponse response = makeCellResponse();
