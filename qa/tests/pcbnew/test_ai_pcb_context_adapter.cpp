@@ -829,6 +829,60 @@ BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToFootprintsAndPads )
 }
 
 
+BOOST_AUTO_TEST_CASE( AdapterAddsFootprintGeometryExtents )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U10" ) );
+    footprint->SetLayer( F_Cu );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetPosition( VECTOR2I( 1000000, 2000000 ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 200000, 400000 ) );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
+    pad->SetLayerSet( PAD::SMDMask() );
+    footprint->Add( pad );
+
+    PCB_SHAPE* courtyard = new PCB_SHAPE( footprint, SHAPE_T::POLY );
+    courtyard->SetLayer( F_CrtYd );
+    courtyard->SetWidth( 50000 );
+    courtyard->SetPolyPoints( {
+            VECTOR2I( 800000, 1700000 ),
+            VECTOR2I( 1300000, 1700000 ),
+            VECTOR2I( 1300000, 2300000 ),
+            VECTOR2I( 800000, 2300000 ),
+    } );
+    footprint->Add( courtyard );
+
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    nlohmann::json details = detailsForLabel( index.VisibleObjects(), wxS( "U10" ) );
+    const BOX2I footprintBBox = footprint->GetBoundingBox( false );
+    const BOX2I padsBBox = pad->GetBoundingBox();
+    const SHAPE_POLY_SET& courtyardPoly = footprint->GetCourtyard( F_CrtYd );
+    BOOST_REQUIRE( !courtyardPoly.IsEmpty() );
+    const BOX2I courtyardBBox = courtyardPoly.BBox();
+
+    BOOST_CHECK_EQUAL( details["bbox"]["x"].get<int>(), footprintBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["bbox"]["y"].get<int>(), footprintBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), footprintBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), footprintBBox.GetHeight() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["x"].get<int>(), padsBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["y"].get<int>(), padsBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["width"].get<int>(), padsBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["height"].get<int>(), padsBBox.GetHeight() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["x"].get<int>(), courtyardBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["y"].get<int>(), courtyardBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["width"].get<int>(), courtyardBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["height"].get<int>(), courtyardBBox.GetHeight() );
+}
+
+
 BOOST_AUTO_TEST_CASE( AdapterAddsPadAndViaSemanticAnchors )
 {
     BOARD board;

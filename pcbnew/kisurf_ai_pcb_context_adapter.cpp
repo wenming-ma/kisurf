@@ -79,6 +79,16 @@ wxString pointDetailsJson( const VECTOR2I& aPoint )
 }
 
 
+wxString boxRectDetailsJson( const BOX2I& aBox )
+{
+    return wxString::Format( wxS( "{\"x\":%d,\"y\":%d,\"width\":%d,\"height\":%d}" ),
+                             static_cast<int>( aBox.GetX() ),
+                             static_cast<int>( aBox.GetY() ),
+                             static_cast<int>( aBox.GetWidth() ),
+                             static_cast<int>( aBox.GetHeight() ) );
+}
+
+
 wxString anchorId( const wxString& aPrefix, const KIID& aUuid, const wxString& aRole )
 {
     return wxS( "pcb." ) + aPrefix + wxS( "." ) + aUuid.AsString() + wxS( "." ) + aRole;
@@ -315,17 +325,45 @@ wxString padContextLabel( const FOOTPRINT& aFootprint, const PAD& aPad )
 
 wxString makeFootprintDetailsJson( const FOOTPRINT& aFootprint )
 {
-    return wxString::Format( wxS( "{\"kind\":\"footprint\",\"reference\":%s,"
-                                  "\"value\":%s,\"footprint_id\":%s,\"position\":%s,"
-                                  "\"orientation_degrees\":%s,\"layer\":%s,"
-                                  "\"pad_count\":%u}" ),
-                             quotedJson( aFootprint.GetReference() ),
-                             quotedJson( aFootprint.GetValue() ),
-                             quotedJson( aFootprint.GetFPID().Format() ),
-                             pointDetailsJson( aFootprint.GetPosition() ),
-                             angleDetailsJson( aFootprint.GetOrientation() ),
-                             quotedJson( aFootprint.GetLayerName() ),
-                             aFootprint.GetPadCount() );
+    wxString details = wxString::Format(
+            wxS( "{\"kind\":\"footprint\",\"reference\":%s,"
+                 "\"value\":%s,\"footprint_id\":%s,\"position\":%s,"
+                 "\"orientation_degrees\":%s,\"layer\":%s,"
+                 "\"pad_count\":%u,\"bbox\":%s" ),
+            quotedJson( aFootprint.GetReference() ),
+            quotedJson( aFootprint.GetValue() ),
+            quotedJson( aFootprint.GetFPID().Format() ),
+            pointDetailsJson( aFootprint.GetPosition() ),
+            angleDetailsJson( aFootprint.GetOrientation() ),
+            quotedJson( aFootprint.GetLayerName() ),
+            aFootprint.GetPadCount(),
+            boxRectDetailsJson( aFootprint.GetBoundingBox( false ) ) );
+
+    bool   hasPadsBBox = false;
+    BOX2I  padsBBox;
+
+    for( PAD* pad : aFootprint.Pads() )
+    {
+        if( hasPadsBBox )
+            padsBBox.Merge( pad->GetBoundingBox() );
+        else
+        {
+            padsBBox = pad->GetBoundingBox();
+            hasPadsBBox = true;
+        }
+    }
+
+    if( hasPadsBBox )
+        details += wxS( ",\"pads_bbox\":" ) + boxRectDetailsJson( padsBBox );
+
+    const PCB_LAYER_ID courtyardLayer = aFootprint.GetLayer() == B_Cu ? B_CrtYd : F_CrtYd;
+    const SHAPE_POLY_SET& courtyard = aFootprint.GetCourtyard( courtyardLayer );
+
+    if( !courtyard.IsEmpty() )
+        details += wxS( ",\"courtyard_bbox\":" ) + boxRectDetailsJson( courtyard.BBox() );
+
+    details += wxS( "}" );
+    return details;
 }
 
 
