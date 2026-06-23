@@ -664,6 +664,98 @@ public:
 };
 
 
+class PLACEMENT_REPAIR_MOVE_ITEMS_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "placement repair move items then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"placement_move_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need placement via before move repair." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_repair_subject" );
+                call.m_ToolName = wxS( "placement_repair_via" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"position\":{\"x\":1800000,\"y\":2600000},"
+                             "\"net\":\"GND\","
+                             "\"diameter\":600000,"
+                             "\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"placement_repair_move_subject\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need move repair facts." );
+
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
+                        nullptr, false );
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_move_repair" );
+                call.m_ToolName = wxS( "placement_repair_move_items" );
+                call.m_ArgumentsJson = wxString::Format(
+                        wxS( "{\"handles\":[%s],"
+                             "\"delta\":{\"x\":250000,\"y\":-100000},"
+                             "\"alias\":\"placement_move_delta\"}" ),
+                        wxString::FromUTF8( handle.dump().c_str() ) );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need rendered move repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_placement_move_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class ROUTING_REPAIR_SEGMENT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1505,6 +1597,7 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_via\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_move_items\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"placement_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"routing.repair_segment\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"routing_repair\"" ) ) );
@@ -1533,11 +1626,13 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptTool = false;
     bool sawRepairTool = false;
     bool sawPlacementRepairTool = false;
+    bool sawPlacementMoveRepairTool = false;
     bool sawRoutingRepairTool = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
+    bool sawPlacementMoveRepairRequiredHandles = false;
     bool sawRoutingRepairRequiredSegment = false;
     bool sawSurfaceRepairRequiredPatch = false;
 
@@ -1623,6 +1718,38 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             sawPlacementRepairRequiredPosition = hasPosition && hasNet;
         }
 
+        if( functionName == "placement_repair_move_items" )
+        {
+            sawPlacementMoveRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasHandles = false;
+            bool hasDelta = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "handles" )
+                    {
+                        hasHandles = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "delta" )
+                    {
+                        hasDelta = true;
+                    }
+                }
+            }
+
+            sawPlacementMoveRepairRequiredHandles = hasHandles && hasDelta;
+        }
+
         if( functionName == "routing_repair_segment" )
         {
             sawRoutingRepairTool = true;
@@ -1699,11 +1826,13 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawRepairTool );
     BOOST_CHECK( sawPlacementRepairTool );
+    BOOST_CHECK( sawPlacementMoveRepairTool );
     BOOST_CHECK( sawRoutingRepairTool );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
+    BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
     BOOST_CHECK( sawRoutingRepairRequiredSegment );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
@@ -2592,6 +2721,66 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairViaToolLowersAndFeedsRender )
             wxS( "\"placement_repair_via_1\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"placement.repair_via\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePlacementRepairMoveItemsToolLowersAndFeedsRender )
+{
+    auto* provider = new PLACEMENT_REPAIR_MOVE_ITEMS_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
+
+    const AI_TOOL_CALL_RECORD& moveResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( moveResult.m_ToolCallId,
+                       wxString( wxS( "call_placement_move_repair" ) ) );
+    BOOST_CHECK_EQUAL( moveResult.m_ToolName,
+                       wxString( wxS( "placement_repair_move_items" ) ) );
+    BOOST_CHECK( moveResult.m_Allowed );
+    BOOST_CHECK( moveResult.m_Executed );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"placement.repair_move_items\"" ) ) );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.move_items\"" ) ) );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"placement_move_delta\"" ) ) );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"placement.repair_move_items\"" ) ) );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( moveResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_placement_move_repair" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"placement_repair_move_subject\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.move_items\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"x\":2050000" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"y\":2500000" ) ) );
 }
 
 

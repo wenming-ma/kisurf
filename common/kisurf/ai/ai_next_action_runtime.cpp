@@ -328,6 +328,12 @@ bool isPlacementRepairViaTool( const std::string& aToolName )
 }
 
 
+bool isPlacementRepairMoveItemsTool( const std::string& aToolName )
+{
+    return aToolName == "placement.repair_move_items";
+}
+
+
 bool isRoutingRepairSegmentTool( const std::string& aToolName )
 {
     return aToolName == "routing.repair_segment";
@@ -338,6 +344,7 @@ bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
            || isPlacementRepairViaTool( aToolName )
+           || isPlacementRepairMoveItemsTool( aToolName )
            || isRoutingRepairSegmentTool( aToolName );
 }
 
@@ -3826,6 +3833,18 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_journal", true },
                 { "lowers_to", "pcb.create_via" },
                 { "max_steps", 1 } },
+              { { "name", "placement.repair_move_items" },
+                { "layer", "integrated" },
+                { "role", "placement_repair" },
+                { "work_state", "placement" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.move_items" },
+                { "max_steps", 1 } },
               { { "name", "routing.repair_segment" },
                 { "layer", "integrated" },
                 { "role", "routing_repair" },
@@ -3975,6 +3994,28 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description", "Optional provenance metadata." } };
                     parameters["required"] = nlohmann::json::array(
                             { "position", "net", "diameter", "drill", "layer_pair" } );
+                }
+                else if( isPlacementRepairMoveItemsTool( aName ) )
+                {
+                    parameters["properties"]["handles"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Session handles for hidden placement items to move. "
+                                "Use handles returned by earlier hidden attempt tools." },
+                              { "items", { { "type", "object" } } } };
+                    parameters["properties"]["delta"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Integer internal-coordinate movement delta with x and y." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias for this move repair batch." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "handles", "delta" } );
                 }
                 else if( isRoutingRepairSegmentTool( aName ) )
                 {
@@ -4364,6 +4405,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "placement.repair_via" );
                 }
 
+                if( name == "placement_repair_move_items"
+                    || name == "placement.repair_move_items" )
+                {
+                    return std::string( "placement.repair_move_items" );
+                }
+
                 if( name == "routing_repair_segment"
                     || name == "routing.repair_segment" )
                 {
@@ -4558,6 +4605,17 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                 malformedMessage =
                         wxS( "placement.repair_via requires position, net, "
                              "diameter, drill, and layer_pair." );
+            }
+            else if( isPlacementRepairMoveItemsTool( toolName ) )
+            {
+                operationKind = "pcb.move_items";
+                malformed = !args.contains( "handles" )
+                             || !args["handles"].is_array()
+                             || args["handles"].empty()
+                             || !args.contains( "delta" )
+                             || !args["delta"].is_object();
+                malformedMessage =
+                        wxS( "placement.repair_move_items requires handles and delta." );
             }
             else if( isRoutingRepairSegmentTool( toolName ) )
             {
