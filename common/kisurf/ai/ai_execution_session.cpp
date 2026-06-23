@@ -51,6 +51,7 @@ bool isMutationKind( AI_SESSION_OPERATION_KIND aKind )
     case AI_SESSION_OPERATION_KIND::RefillZones:
     case AI_SESSION_OPERATION_KIND::RebuildConnectivity:
     case AI_SESSION_OPERATION_KIND::RunValidation:
+    case AI_SESSION_OPERATION_KIND::ApplySurfacePatch:
         return true;
 
     case AI_SESSION_OPERATION_KIND::Unknown:
@@ -161,6 +162,9 @@ wxString AiSessionOperationKindId( AI_SESSION_OPERATION_KIND aKind )
 
     case AI_SESSION_OPERATION_KIND::RunValidation:
         return wxS( "pcb.run_validation" );
+
+    case AI_SESSION_OPERATION_KIND::ApplySurfacePatch:
+        return wxS( "surface.apply_patch" );
 
     case AI_SESSION_OPERATION_KIND::Unknown:
     default:

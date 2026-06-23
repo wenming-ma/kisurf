@@ -2752,6 +2752,9 @@ AI_SESSION_OPERATION_KIND sessionOperationKindFromId( const std::string& aKind )
     if( aKind == "pcb.run_validation" )
         return AI_SESSION_OPERATION_KIND::RunValidation;
 
+    if( aKind == "surface.apply_patch" )
+        return AI_SESSION_OPERATION_KIND::ApplySurfacePatch;
+
     return AI_SESSION_OPERATION_KIND::Unknown;
 }
 

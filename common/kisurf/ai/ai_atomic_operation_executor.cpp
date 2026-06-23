@@ -788,6 +788,79 @@ bool isSupportedValidationLevel( const wxString& aLevel )
 }
 
 
+size_t surfacePatchOperationCount( const nlohmann::json& aPatch )
+{
+    if( aPatch.contains( "operations" ) && aPatch["operations"].is_array() )
+        return aPatch["operations"].size();
+
+    if( aPatch.contains( "ops" ) && aPatch["ops"].is_array() )
+        return aPatch["ops"].size();
+
+    if( aPatch.contains( "changes" ) && aPatch["changes"].is_array() )
+        return aPatch["changes"].size();
+
+    return 0;
+}
+
+
+AI_ATOMIC_EXECUTION_RESULT applySurfacePatch( AI_EXECUTION_SESSION& aSession,
+                                              const nlohmann::json& aArgs )
+{
+    if( stringField( aArgs, "surface_id" ).IsEmpty() )
+    {
+        return errorResult( wxS( "invalid_arguments" ),
+                            wxS( "ApplySurfacePatch requires surface_id." ) );
+    }
+
+    if( !aArgs.contains( "patch" ) || !aArgs["patch"].is_object() )
+    {
+        return errorResult( wxS( "invalid_arguments" ),
+                            wxS( "ApplySurfacePatch requires a patch object." ) );
+    }
+
+    const nlohmann::json& patch = aArgs["patch"];
+    const size_t          operationCount = surfacePatchOperationCount( patch );
+
+    if( operationCount == 0 )
+    {
+        return errorResult(
+                wxS( "invalid_arguments" ),
+                wxS( "ApplySurfacePatch requires at least one patch operation." ) );
+    }
+
+    nlohmann::json resultJson =
+            { { "operation", "surface.apply_patch" },
+              { "status", "surface_patch_recorded" },
+              { "surface_id", aArgs["surface_id"] },
+              { "patch", patch },
+              { "patch_operation_count", operationCount },
+              { "shadow_only", true },
+              { "board_mutated", false },
+              { "direct_publish", false },
+              { "publish_allowed", false } };
+
+    if( aArgs.contains( "table_id" ) )
+        resultJson["table_id"] = aArgs["table_id"];
+
+    if( aArgs.contains( "target_scope" ) )
+        resultJson["target_scope"] = aArgs["target_scope"];
+
+    if( aArgs.contains( "alias" ) )
+        resultJson["alias"] = aArgs["alias"];
+
+    std::vector<wxString> warnings = {
+        wxS( "SurfacePatch is recorded in the hidden session journal; native "
+             "structured-surface apply is not connected yet." )
+    };
+
+    AI_ATOMIC_EXECUTION_RESULT result;
+    appendRecord( aSession, result, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+                  aArgs, {}, {}, warnings, fromJson( resultJson ) );
+    result.m_Ok = true;
+    return result;
+}
+
+
 std::vector<wxString> maintenanceWarnings( AI_SESSION_OPERATION_KIND aKind,
                                            const nlohmann::json& aArgs )
 {
@@ -1179,6 +1252,9 @@ AI_ATOMIC_EXECUTION_RESULT AI_ATOMIC_OPERATION_EXECUTOR::Execute(
     case AI_SESSION_OPERATION_KIND::SetItemProperties:
     case AI_SESSION_OPERATION_KIND::SetMetadata:
         return mutateHandles( aSession, aKind, args );
+
+    case AI_SESSION_OPERATION_KIND::ApplySurfacePatch:
+        return applySurfacePatch( aSession, args );
 
     case AI_SESSION_OPERATION_KIND::RefillZones:
     case AI_SESSION_OPERATION_KIND::RebuildConnectivity:

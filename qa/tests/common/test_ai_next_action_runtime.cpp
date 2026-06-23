@@ -295,6 +295,79 @@ public:
 };
 
 
+class SURFACE_PATCH_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "surface patch script next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"attempt\","
+                         "\"opportunity_type\":\"structured_surface\","
+                         "\"selected_candidate_index\":0,"
+                         "\"target_scope\":{\"kind\":\"column\","
+                         "\"panel_id\":\"board_setup.clearance\","
+                         "\"surface_id\":\"board_setup.clearance\","
+                         "\"table_id\":\"clearance.rules\","
+                         "\"column\":\"class\"},"
+                         "\"reason_code\":\"surface_patch_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need SurfacePatch lowering facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_surface_patch" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{"
+                             "\"kind\":\"surface.apply_patch\","
+                             "\"arguments\":{"
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"target_scope\":{\"kind\":\"column\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"column\":\"class\"},"
+                             "\"patch\":{\"kind\":\"SurfacePatch\","
+                             "\"operations\":["
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.power\","
+                             "\"column_id\":\"class\",\"value\":\"Power\"},"
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.gpio\","
+                             "\"column_id\":\"class\",\"value\":\"GPIO\"}]},"
+                             "\"alias\":\"surface_patch_fill_class\"}}]},"
+                             "\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SCRIPT_RETRY_REVIEW_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1822,6 +1895,52 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
             wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
     BOOST_CHECK( mergedJournal.Contains(
             wxS( "\"merged_from_tool_call_id\":\"call_script_plan\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeLowersSurfacePatchPlanIntoHiddenAttemptJournal )
+{
+    auto* provider = new SURFACE_PATCH_SCRIPT_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makePanelFillTriggerWithTargetScope() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId,
+                       wxString( wxS( "call_surface_patch" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"script_plan_executed\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"kind\":\"surface.apply_patch\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"patch_operation_count\":2" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"surface_patch_fill_class\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"direct_publish\":false" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    const wxString& journal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( journal.Contains( wxS( "\"kind\":\"surface.apply_patch\"" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "\"surface_patch_fill_class\"" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "\"patch_operation_count\":2" ) ) );
+    BOOST_CHECK( journal.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_surface_patch\"" ) ) );
 }
 
 
