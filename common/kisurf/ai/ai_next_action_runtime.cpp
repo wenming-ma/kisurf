@@ -2216,6 +2216,190 @@ nlohmann::json placementFootprintGeometryFactsJson(
 }
 
 
+struct LOCALITY_REGION
+{
+    int            m_Left = 0;
+    int            m_Top = 0;
+    int            m_Width = 0;
+    int            m_Height = 0;
+    nlohmann::json m_Record = nlohmann::json::object();
+};
+
+
+bool jsonNumberAsInt( const nlohmann::json& aObject, const char* aField, int& aValue )
+{
+    if( !aObject.contains( aField ) || !aObject[aField].is_number() )
+        return false;
+
+    aValue = aObject[aField].get<int>();
+    return true;
+}
+
+
+nlohmann::json bboxRecordJson( int aLeft, int aTop, int aWidth, int aHeight )
+{
+    return { { "x", aLeft },
+             { "y", aTop },
+             { "width", aWidth },
+             { "height", aHeight } };
+}
+
+
+std::optional<LOCALITY_REGION> localityRegionFromObject( const char* aSource,
+                                                         const nlohmann::json& aObject )
+{
+    int centerX = 0;
+    int centerY = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aObject, "width", width )
+        || !jsonNumberAsInt( aObject, "height", height )
+        || width <= 0 || height <= 0 )
+    {
+        return std::nullopt;
+    }
+
+    if( aObject.contains( "center" ) && aObject["center"].is_object() )
+    {
+        const nlohmann::json& center = aObject["center"];
+
+        if( !jsonNumberAsInt( center, "x", centerX )
+            || !jsonNumberAsInt( center, "y", centerY ) )
+        {
+            return std::nullopt;
+        }
+    }
+    else
+    {
+        if( !jsonNumberAsInt( aObject, "x", centerX )
+            || !jsonNumberAsInt( aObject, "y", centerY ) )
+        {
+            return std::nullopt;
+        }
+    }
+
+    LOCALITY_REGION region;
+    region.m_Left = centerX - width / 2;
+    region.m_Top = centerY - height / 2;
+    region.m_Width = width;
+    region.m_Height = height;
+    region.m_Record = { { "source", aSource },
+                        { "bbox", bboxRecordJson( region.m_Left, region.m_Top,
+                                                   region.m_Width, region.m_Height ) },
+                        { "raw", aObject } };
+    return region;
+}
+
+
+std::optional<LOCALITY_REGION> localityRegionForToolState(
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    if( std::optional<nlohmann::json> region =
+                toolContextObjectField( aToolState, "cursor_region" ) )
+    {
+        if( std::optional<LOCALITY_REGION> locality =
+                    localityRegionFromObject( "cursor_region", *region ) )
+        {
+            return locality;
+        }
+    }
+
+    if( std::optional<nlohmann::json> viewport =
+                toolContextObjectField( aToolState, "viewport" ) )
+    {
+        if( std::optional<LOCALITY_REGION> locality =
+                    localityRegionFromObject( "viewport", *viewport ) )
+        {
+            return locality;
+        }
+    }
+
+    return std::nullopt;
+}
+
+
+bool pointIntersectsRegion( const nlohmann::json& aPoint,
+                            const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+
+    if( !jsonNumberAsInt( aPoint, "x", x )
+        || !jsonNumberAsInt( aPoint, "y", y ) )
+    {
+        return false;
+    }
+
+    return x >= aRegion.m_Left && x < aRegion.m_Left + aRegion.m_Width
+           && y >= aRegion.m_Top && y < aRegion.m_Top + aRegion.m_Height;
+}
+
+
+bool bboxIntersectsRegion( const nlohmann::json& aBbox,
+                           const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aBbox, "x", x )
+        || !jsonNumberAsInt( aBbox, "y", y )
+        || !jsonNumberAsInt( aBbox, "width", width )
+        || !jsonNumberAsInt( aBbox, "height", height ) )
+    {
+        return false;
+    }
+
+    return x < aRegion.m_Left + aRegion.m_Width
+           && x + width > aRegion.m_Left
+           && y < aRegion.m_Top + aRegion.m_Height
+           && y + height > aRegion.m_Top;
+}
+
+
+bool factIntersectsRegion( const nlohmann::json& aFact,
+                           const LOCALITY_REGION& aRegion )
+{
+    if( aFact.contains( "bbox" ) && aFact["bbox"].is_object()
+        && bboxIntersectsRegion( aFact["bbox"], aRegion ) )
+    {
+        return true;
+    }
+
+    if( aFact.contains( "position" ) && aFact["position"].is_object()
+        && pointIntersectsRegion( aFact["position"], aRegion ) )
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObjects,
+                                       const LOCALITY_REGION& aRegion )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    nlohmann::json candidates = placementObstacleFactsJson( aObjects );
+
+    for( nlohmann::json keepout : placementKeepoutFactsJson( aObjects ) )
+        candidates.push_back( std::move( keepout ) );
+
+    for( nlohmann::json fact : candidates )
+    {
+        if( !factIntersectsRegion( fact, aRegion ) )
+            continue;
+
+        fact["locality_source"] = aRegion.m_Record["source"];
+        facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
 const AI_PANEL_STATE_RECORD* focusedPanelState(
         const std::vector<AI_PANEL_STATE_RECORD>& aPanels )
 {
@@ -2570,6 +2754,14 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 visibleObjectSummariesJson( context.m_VisibleObjects ) },
               { "selected_object_count", context.m_SelectedObjects.size() },
               { "anchor_count", context.m_Anchors.size() } };
+
+    if( std::optional<LOCALITY_REGION> locality =
+                localityRegionForToolState( context.m_ToolState ) )
+    {
+        packet["locality_region"] = locality->m_Record;
+        packet["local_obstacle_facts"] =
+                localObstacleFactsJson( context.m_VisibleObjects, *locality );
+    }
 
     if( packetKind == "routing" )
     {

@@ -11,6 +11,7 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <set>
 #include <thread>
 
 namespace
@@ -1998,6 +1999,11 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     placementTrigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
     placementTrigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
             VECTOR2I( 180, 80 );
+    placementTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"cursor_region\":{\"x\":140,\"y\":80,"
+                 "\"width\":100,\"height\":100},"
+                 "\"viewport\":{\"center\":{\"x\":180,\"y\":80},"
+                 "\"zoom\":3.0,\"width\":600,\"height\":400}}" );
     placementTrigger.m_ContextSnapshot.m_Anchors.push_back(
             contextAnchor( wxS( "place_candidate_1" ),
                            AI_CONTEXT_ANCHOR_KIND::PlacementCandidate,
@@ -2089,6 +2095,26 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_footprint_geometry_facts"].at( 0 )
                     ["courtyard_bbox"]["width"].get<int>(),
             120 );
+    BOOST_REQUIRE( placementPacket.contains( "locality_region" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["locality_region"]["source"].get<std::string>(),
+            "cursor_region" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["locality_region"]["bbox"]["x"].get<int>(),
+            90 );
+    BOOST_REQUIRE( placementPacket.contains( "local_obstacle_facts" ) );
+
+    std::set<std::string> localObstacleLabels;
+
+    for( const nlohmann::json& fact : placementPacket["local_obstacle_facts"] )
+        localObstacleLabels.insert( fact["label"].get<std::string>() );
+
+    BOOST_CHECK( localObstacleLabels.find( "via:100,50" )
+                 != localObstacleLabels.end() );
+    BOOST_CHECK( localObstacleLabels.find( "footprint:U1" )
+                 != localObstacleLabels.end() );
+    BOOST_CHECK( localObstacleLabels.find( "via:300,50" )
+                 == localObstacleLabels.end() );
 
     auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
