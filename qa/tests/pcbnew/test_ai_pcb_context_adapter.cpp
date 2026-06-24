@@ -137,6 +137,26 @@ const nlohmann::json* findWorstConstraintByType( const nlohmann::json& aConstrai
 }
 
 
+const nlohmann::json* findPairConstraintByLabels( const nlohmann::json& aConstraints,
+                                                  const std::string& aLabelA,
+                                                  const std::string& aLabelB )
+{
+    for( const nlohmann::json& constraint : aConstraints )
+    {
+        const std::string source = constraint["source_item"]["label"].get<std::string>();
+        const std::string target = constraint["target_item"]["label"].get<std::string>();
+
+        if( ( source == aLabelA && target == aLabelB )
+            || ( source == aLabelB && target == aLabelA ) )
+        {
+            return &constraint;
+        }
+    }
+
+    return nullptr;
+}
+
+
 const nlohmann::json* findComponentContainingLabel( const nlohmann::json& aComponents,
                                                     const std::string& aLabel )
 {
@@ -1200,6 +1220,78 @@ BOOST_AUTO_TEST_CASE( AdapterAddsEffectiveConstraintObservationFacts )
     BOOST_CHECK( ( *physicalHole )["name"].get<std::string>().find(
                          "AI Physical Hole Clearance" )
                  != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPairSpecificEffectiveConstraintFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+
+    std::shared_ptr<NETCLASS> power = std::make_shared<NETCLASS>( wxS( "Power" ) );
+    power->SetClearance( 910000 );
+    settings.m_NetSettings->SetNetclass( power->GetName(), power );
+
+    std::shared_ptr<NETCLASS> logic = std::make_shared<NETCLASS>( wxS( "Logic" ) );
+    logic->SetClearance( 120000 );
+    settings.m_NetSettings->SetNetclass( logic->GetName(), logic );
+
+    NETINFO_ITEM* pwr = new NETINFO_ITEM( &board, wxS( "/PWR" ), 1 );
+    pwr->SetNetClass( power );
+    board.Add( pwr );
+
+    NETINFO_ITEM* sig = new NETINFO_ITEM( &board, wxS( "/SIG" ), 2 );
+    sig->SetNetClass( logic );
+    board.Add( sig );
+
+    PCB_TRACK* pwrTrack = new PCB_TRACK( &board );
+    pwrTrack->SetStart( VECTOR2I( 0, 0 ) );
+    pwrTrack->SetEnd( VECTOR2I( 1000, 0 ) );
+    pwrTrack->SetLayer( F_Cu );
+    pwrTrack->SetWidth( 150000 );
+    pwrTrack->SetNetCode( 1 );
+    board.Add( pwrTrack );
+
+    PCB_TRACK* sigTrack = new PCB_TRACK( &board );
+    sigTrack->SetStart( VECTOR2I( 0, 500000 ) );
+    sigTrack->SetEnd( VECTOR2I( 1000, 500000 ) );
+    sigTrack->SetLayer( F_Cu );
+    sigTrack->SetWidth( 150000 );
+    sigTrack->SetNetCode( 2 );
+    board.Add( sigTrack );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( wxFileName() );
+    settings.m_DRCEngine = engine;
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["pair_effective_constraint_sample_truncated"].get<bool>(),
+                       false );
+    BOOST_REQUIRE_GE( effective["pair_effective_constraints"].size(), 1u );
+
+    const nlohmann::json* pairConstraint =
+            findPairConstraintByLabels( effective["pair_effective_constraints"],
+                                        "track:0,0->1000,0",
+                                        "track:0,500000->1000,500000" );
+
+    BOOST_REQUIRE( pairConstraint );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["type"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["layer"].get<std::string>(), "F.Cu" );
+
+    std::set<std::string> pairNets = {
+        ( *pairConstraint )["source_item"]["net"].get<std::string>(),
+        ( *pairConstraint )["target_item"]["net"].get<std::string>()
+    };
+
+    BOOST_CHECK( pairNets.find( "/PWR" ) != pairNets.end() );
+    BOOST_CHECK( pairNets.find( "/SIG" ) != pairNets.end() );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["min"].get<int>(), 910000 );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["has_min"].get<bool>(), true );
 }
 
 

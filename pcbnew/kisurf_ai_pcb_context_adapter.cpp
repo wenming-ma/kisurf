@@ -1838,17 +1838,154 @@ wxString worstConstraintJson( DRC_CONSTRAINT_T aType, const DRC_CONSTRAINT& aCon
 }
 
 
-wxString makeEffectiveConstraintFactsJson( const BOARD_DESIGN_SETTINGS& aSettings )
+wxString pairConstraintItemJson( const BOARD_CONNECTED_ITEM& aItem )
 {
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s,"
+                 "\"net_code\":%d,\"net\":%s,\"layers\":%s}" ),
+            quotedJson( aItem.m_Uuid.AsString() ), static_cast<int>( aItem.Type() ),
+            quotedJson( connectedItemKindToken( aItem ) ),
+            quotedJson( connectedItemLabel( aItem ) ), aItem.GetNetCode(),
+            quotedJson( aItem.GetNetname() ),
+            layerSetDetailsJson( aItem, aItem.GetLayerSet() ) );
+}
+
+
+bool firstCommonCopperLayer( const BOARD& aBoard, const BOARD_CONNECTED_ITEM& aItemA,
+                             const BOARD_CONNECTED_ITEM& aItemB, PCB_LAYER_ID& aLayer )
+{
+    LSET commonLayers = aItemA.GetLayerSet() & aItemB.GetLayerSet()
+                        & LSET::AllCuMask( aBoard.GetCopperLayerCount() );
+
+    for( PCB_LAYER_ID layer : commonLayers.Seq() )
+    {
+        aLayer = layer;
+        return true;
+    }
+
+    return false;
+}
+
+
+wxString pairEffectiveConstraintJson( const BOARD& aBoard, const BOARD_CONNECTED_ITEM& aItemA,
+                                      const BOARD_CONNECTED_ITEM& aItemB, PCB_LAYER_ID aLayer,
+                                      DRC_CONSTRAINT_T aType,
+                                      const DRC_CONSTRAINT& aConstraint )
+{
+    return wxString::Format(
+            wxS( "{\"type\":%s,\"enum\":%d,\"layer\":%s,"
+                 "\"source_item\":%s,\"target_item\":%s,"
+                 "\"name\":%s,\"value\":%s}" ),
+            quotedJson( drcConstraintTypeToken( aType ) ), static_cast<int>( aType ),
+            quotedJson( aBoard.GetLayerName( aLayer ) ), pairConstraintItemJson( aItemA ),
+            pairConstraintItemJson( aItemB ), quotedJson( aConstraint.GetName() ),
+            minOptMaxJson( aConstraint.GetValue() ) );
+}
+
+
+void appendPairConstraintItem( std::vector<const BOARD_CONNECTED_ITEM*>& aItems,
+                               const BOARD_CONNECTED_ITEM* aItem )
+{
+    constexpr size_t maxPairInputItems = 64;
+
+    if( !aItem || aItem->GetNetCode() == NETINFO_LIST::UNCONNECTED )
+        return;
+
+    if( !aItem->IsOnCopperLayer() )
+        return;
+
+    if( aItems.size() >= maxPairInputItems )
+        return;
+
+    aItems.push_back( aItem );
+}
+
+
+std::vector<const BOARD_CONNECTED_ITEM*> collectPairConstraintItems( const BOARD& aBoard )
+{
+    std::vector<const BOARD_CONNECTED_ITEM*> items;
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+        appendPairConstraintItem( items, track );
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
+        for( PAD* pad : footprint->Pads() )
+            appendPairConstraintItem( items, pad );
+
+        for( ZONE* zone : footprint->Zones() )
+            appendPairConstraintItem( items, zone );
+    }
+
+    for( ZONE* zone : aBoard.Zones() )
+        appendPairConstraintItem( items, zone );
+
+    return items;
+}
+
+
+std::vector<wxString> makePairEffectiveConstraintEntries( const BOARD& aBoard,
+                                                          DRC_ENGINE& aEngine,
+                                                          bool& aTruncated )
+{
+    constexpr size_t      maxPairConstraintSample = 32;
+    std::vector<wxString> entries;
+
+    std::vector<const BOARD_CONNECTED_ITEM*> items = collectPairConstraintItems( aBoard );
+
+    for( size_t i = 0; i < items.size(); ++i )
+    {
+        for( size_t j = i + 1; j < items.size(); ++j )
+        {
+            const BOARD_CONNECTED_ITEM* itemA = items[i];
+            const BOARD_CONNECTED_ITEM* itemB = items[j];
+
+            if( !itemA || !itemB || itemA->GetNetCode() == itemB->GetNetCode() )
+                continue;
+
+            PCB_LAYER_ID layer = UNDEFINED_LAYER;
+
+            if( !firstCommonCopperLayer( aBoard, *itemA, *itemB, layer ) )
+                continue;
+
+            DRC_CONSTRAINT constraint =
+                    aEngine.EvalRules( CLEARANCE_CONSTRAINT, itemA, itemB, layer );
+
+            if( constraint.IsNull() || !constraint.GetValue().HasMin() )
+                continue;
+
+            if( entries.size() >= maxPairConstraintSample )
+            {
+                aTruncated = true;
+                return entries;
+            }
+
+            entries.push_back( pairEffectiveConstraintJson( aBoard, *itemA, *itemB, layer,
+                                                            CLEARANCE_CONSTRAINT,
+                                                            constraint ) );
+        }
+    }
+
+    return entries;
+}
+
+
+wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
+{
+    const BOARD_DESIGN_SETTINGS& aSettings = aBoard.GetDesignSettings();
     constexpr size_t      maxWorstConstraintSample = 32;
     std::vector<wxString> worstConstraintEntries;
+    std::vector<wxString> pairConstraintEntries;
     bool                  worstConstraintSampleTruncated = false;
+    bool                  pairConstraintSampleTruncated = false;
 
     if( !aSettings.m_DRCEngine )
     {
         return wxS( "{\"drc_engine_present\":false,\"rules_valid\":false,"
                     "\"worst_constraints\":[],"
-                    "\"worst_constraint_sample_truncated\":false}" );
+                    "\"worst_constraint_sample_truncated\":false,"
+                    "\"pair_effective_constraints\":[],"
+                    "\"pair_effective_constraint_sample_truncated\":false}" );
     }
 
     static const DRC_CONSTRAINT_T queryTypes[] = {
@@ -1881,13 +2018,21 @@ wxString makeEffectiveConstraintFactsJson( const BOARD_DESIGN_SETTINGS& aSetting
             worstConstraintEntries.push_back( worstConstraintJson( type, constraint ) );
     }
 
+    pairConstraintEntries =
+            makePairEffectiveConstraintEntries( aBoard, *aSettings.m_DRCEngine,
+                                                pairConstraintSampleTruncated );
+
     return wxString::Format(
             wxS( "{\"drc_engine_present\":true,\"rules_valid\":%s,"
                  "\"worst_constraints\":%s,"
-                 "\"worst_constraint_sample_truncated\":%s}" ),
+                 "\"worst_constraint_sample_truncated\":%s,"
+                 "\"pair_effective_constraints\":%s,"
+                 "\"pair_effective_constraint_sample_truncated\":%s}" ),
             boolJson( aSettings.m_DRCEngine->RulesValid() ),
             jsonArray( worstConstraintEntries ),
-            boolJson( worstConstraintSampleTruncated ) );
+            boolJson( worstConstraintSampleTruncated ),
+            jsonArray( pairConstraintEntries ),
+            boolJson( pairConstraintSampleTruncated ) );
 }
 
 
@@ -1937,7 +2082,7 @@ wxString makeConstraintFactsJson( const BOARD& aBoard )
                  "\"effective_constraints\":%s}" ),
             makeConstraintMinimumsJson( aBoard.GetDesignSettings() ), ruleAreaCount,
             keepoutCount, jsonArray( keepoutEntries ), boolJson( keepoutSampleTruncated ),
-            makeEffectiveConstraintFactsJson( aBoard.GetDesignSettings() ) );
+            makeEffectiveConstraintFactsJson( aBoard ) );
 }
 
 
