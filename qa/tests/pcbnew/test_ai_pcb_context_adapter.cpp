@@ -137,6 +137,22 @@ const nlohmann::json* findWorstConstraintByType( const nlohmann::json& aConstrai
 }
 
 
+const nlohmann::json* findComponentContainingLabel( const nlohmann::json& aComponents,
+                                                    const std::string& aLabel )
+{
+    for( const nlohmann::json& component : aComponents )
+    {
+        for( const nlohmann::json& item : component["items"] )
+        {
+            if( item["label"].get<std::string>() == aLabel )
+                return &component;
+        }
+    }
+
+    return nullptr;
+}
+
+
 void appendRectangle( ZONE& aZone )
 {
     aZone.AppendCorner( VECTOR2I( 0, 0 ), -1 );
@@ -443,6 +459,67 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_name"].get<std::string>(), "/SIG" );
     BOOST_CHECK_EQUAL( topology["unconnected_edge_sample_truncated"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* left = new FOOTPRINT( &board );
+    left->SetReference( wxS( "U1" ) );
+    addRoundPad( *left, wxS( "1" ), VECTOR2I( 0, 0 ), 1 );
+    board.Add( left );
+
+    FOOTPRINT* right = new FOOTPRINT( &board );
+    right->SetReference( wxS( "U2" ) );
+    addRoundPad( *right, wxS( "1" ), VECTOR2I( 100000, 0 ), 1 );
+    board.Add( right );
+
+    FOOTPRINT* isolated = new FOOTPRINT( &board );
+    isolated->SetReference( wxS( "U3" ) );
+    addRoundPad( *isolated, wxS( "1" ), VECTOR2I( 300000, 0 ), 1 );
+    board.Add( isolated );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 100000, 0 ) );
+    track->SetLayer( F_Cu );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    BOOST_REQUIRE( board.BuildConnectivity() );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+
+    nlohmann::json topology = ( *sigFact )["topology"];
+    BOOST_CHECK_EQUAL( topology["component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( topology["component_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( topology["components"].size(), 2u );
+
+    const nlohmann::json* routedComponent =
+            findComponentContainingLabel( topology["components"], "track:0,0->100000,0" );
+    const nlohmann::json* isolatedComponent =
+            findComponentContainingLabel( topology["components"], "U3.1" );
+
+    BOOST_REQUIRE( routedComponent );
+    BOOST_REQUIRE( isolatedComponent );
+    BOOST_CHECK_EQUAL( ( *routedComponent )["item_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( ( *isolatedComponent )["item_count"].get<int>(), 1 );
+
+    BOOST_REQUIRE_EQUAL( topology["ratsnest_component_edges"].size(), 1u );
+    BOOST_CHECK_NE(
+            topology["ratsnest_component_edges"][0]["source_component"].get<int>(),
+            topology["ratsnest_component_edges"][0]["target_component"].get<int>() );
+    BOOST_CHECK_EQUAL(
+            topology["ratsnest_component_edge_sample_truncated"].get<bool>(), false );
 }
 
 

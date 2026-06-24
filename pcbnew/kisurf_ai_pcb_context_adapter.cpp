@@ -27,6 +27,8 @@
 #include <project/project_local_settings.h>
 #include <zone.h>
 
+#include <map>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -1276,6 +1278,118 @@ std::vector<wxString> makeNetItemGraphEntries( const BOARD& aBoard, int aNetCode
 }
 
 
+struct NET_COMPONENT_FACTS
+{
+    std::vector<wxString>                    m_ComponentEntries;
+    std::map<const BOARD_CONNECTED_ITEM*, int> m_ItemToComponent;
+    size_t                                  m_ComponentCount = 0;
+    bool                                    m_ComponentSampleTruncated = false;
+};
+
+
+wxString componentItemJson( const BOARD_CONNECTED_ITEM& aItem )
+{
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s}" ),
+            quotedJson( aItem.m_Uuid.AsString() ), static_cast<int>( aItem.Type() ),
+            quotedJson( connectedItemKindToken( aItem ) ),
+            quotedJson( connectedItemLabel( aItem ) ) );
+}
+
+
+wxString componentJson( int aIndex, const std::vector<BOARD_CONNECTED_ITEM*>& aItems )
+{
+    std::vector<wxString> itemEntries;
+    BOX2I                 bbox;
+    bool                  hasBBox = false;
+
+    for( const BOARD_CONNECTED_ITEM* item : aItems )
+    {
+        if( !item )
+            continue;
+
+        itemEntries.push_back( componentItemJson( *item ) );
+
+        if( hasBBox )
+            bbox.Merge( item->GetBoundingBox() );
+        else
+        {
+            bbox = item->GetBoundingBox();
+            hasBBox = true;
+        }
+    }
+
+    return wxString::Format(
+            wxS( "{\"index\":%d,\"item_count\":%zu,\"bbox\":%s,\"items\":%s}" ),
+            aIndex, aItems.size(),
+            hasBBox ? boxRectDetailsJson( bbox ) : wxString( wxS( "null" ) ),
+            jsonArray( itemEntries ) );
+}
+
+
+NET_COMPONENT_FACTS makeNetComponentFacts(
+        const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode )
+{
+    constexpr size_t maxComponentSample = 64;
+
+    NET_COMPONENT_FACTS facts;
+
+    if( !aConnectivity )
+        return facts;
+
+    const std::vector<KICAD_T> graphTypes = {
+        PCB_PAD_T, PCB_TRACE_T, PCB_ARC_T, PCB_VIA_T, PCB_ZONE_T, PCB_SHAPE_T
+    };
+
+    std::vector<BOARD_CONNECTED_ITEM*> netItems =
+            aConnectivity->GetNetItems( aNetCode, graphTypes );
+    std::set<const BOARD_CONNECTED_ITEM*> assignedItems;
+
+    for( BOARD_CONNECTED_ITEM* item : netItems )
+    {
+        if( !item || assignedItems.find( item ) != assignedItems.end() )
+            continue;
+
+        std::vector<BOARD_CONNECTED_ITEM*> clusterItems =
+                aConnectivity->GetConnectedItems( item );
+        std::set<BOARD_CONNECTED_ITEM*> uniqueClusterItems;
+
+        for( BOARD_CONNECTED_ITEM* clusterItem : clusterItems )
+        {
+            if( clusterItem && clusterItem->GetNetCode() == aNetCode )
+                uniqueClusterItems.insert( clusterItem );
+        }
+
+        if( uniqueClusterItems.empty() )
+            uniqueClusterItems.insert( item );
+
+        std::vector<BOARD_CONNECTED_ITEM*> componentItems;
+
+        for( BOARD_CONNECTED_ITEM* clusterItem : uniqueClusterItems )
+        {
+            componentItems.push_back( clusterItem );
+            assignedItems.insert( clusterItem );
+        }
+
+        const int componentIndex = static_cast<int>( facts.m_ComponentCount );
+        ++facts.m_ComponentCount;
+
+        for( BOARD_CONNECTED_ITEM* componentItem : componentItems )
+            facts.m_ItemToComponent[componentItem] = componentIndex;
+
+        if( facts.m_ComponentEntries.size() >= maxComponentSample )
+        {
+            facts.m_ComponentSampleTruncated = true;
+            continue;
+        }
+
+        facts.m_ComponentEntries.push_back( componentJson( componentIndex, componentItems ) );
+    }
+
+    return facts;
+}
+
+
 int edgeNetCode( const CN_EDGE& aEdge )
 {
     const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
@@ -1353,6 +1467,64 @@ std::vector<wxString> makeNetUnconnectedEdgeEntries(
 }
 
 
+int componentIndexForAnchor(
+        const std::shared_ptr<const CN_ANCHOR>& aAnchor,
+        const std::map<const BOARD_CONNECTED_ITEM*, int>& aItemToComponent )
+{
+    if( !aAnchor || !aAnchor->Parent() )
+        return -1;
+
+    const auto it = aItemToComponent.find( aAnchor->Parent() );
+
+    if( it == aItemToComponent.end() )
+        return -1;
+
+    return it->second;
+}
+
+
+std::vector<wxString> makeRatsnestComponentEdgeEntries(
+        const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode,
+        const std::map<const BOARD_CONNECTED_ITEM*, int>& aItemToComponent,
+        bool& aTruncated )
+{
+    constexpr size_t      maxComponentEdgeSample = 64;
+    std::vector<wxString> edgeEntries;
+
+    if( !aConnectivity )
+        return edgeEntries;
+
+    aConnectivity->RunOnUnconnectedEdges(
+            [&]( CN_EDGE& aEdge ) -> bool
+            {
+                if( edgeNetCode( aEdge ) != aNetCode )
+                    return true;
+
+                if( edgeEntries.size() >= maxComponentEdgeSample )
+                {
+                    aTruncated = true;
+                    return false;
+                }
+
+                const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
+                const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
+
+                edgeEntries.push_back( wxString::Format(
+                        wxS( "{\"net_code\":%d,\"visible\":%s,"
+                             "\"source_component\":%d,\"target_component\":%d,"
+                             "\"source\":%s,\"target\":%s}" ),
+                        aNetCode, boolJson( aEdge.IsVisible() ),
+                        componentIndexForAnchor( sourceNode, aItemToComponent ),
+                        componentIndexForAnchor( targetNode, aItemToComponent ),
+                        connectivityEndpointJson( sourceNode ), connectivityEndpointJson( targetNode ) ) );
+
+                return true;
+            } );
+
+    return edgeEntries;
+}
+
+
 wxString makeNetTopologyJson( const BOARD& aBoard,
                               const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity,
                               int aNetCode )
@@ -1364,11 +1536,17 @@ wxString makeNetTopologyJson( const BOARD& aBoard,
     int visibleUnconnectedEdgeCount = 0;
     bool itemSampleTruncated = false;
     bool edgeSampleTruncated = false;
+    bool componentEdgeSampleTruncated = false;
 
     std::vector<wxString> itemEntries =
             makeNetItemGraphEntries( aBoard, aNetCode, itemSampleTruncated );
     std::vector<wxString> edgeEntries =
             makeNetUnconnectedEdgeEntries( aConnectivity, aNetCode, edgeSampleTruncated );
+    NET_COMPONENT_FACTS componentFacts = makeNetComponentFacts( aConnectivity, aNetCode );
+    std::vector<wxString> componentEdgeEntries =
+            makeRatsnestComponentEdgeEntries( aConnectivity, aNetCode,
+                                              componentFacts.m_ItemToComponent,
+                                              componentEdgeSampleTruncated );
 
     aConnectivity->RunOnUnconnectedEdges(
             [&]( CN_EDGE& aEdge ) -> bool
@@ -1390,11 +1568,18 @@ wxString makeNetTopologyJson( const BOARD& aBoard,
                  "\"visible_unconnected_edge_count\":%d,"
                  "\"items\":%s,\"item_sample_truncated\":%s,"
                  "\"unconnected_edges\":%s,"
-                 "\"unconnected_edge_sample_truncated\":%s}" ),
+                 "\"unconnected_edge_sample_truncated\":%s,"
+                 "\"component_count\":%zu,"
+                 "\"components\":%s,\"component_sample_truncated\":%s,"
+                 "\"ratsnest_component_edges\":%s,"
+                 "\"ratsnest_component_edge_sample_truncated\":%s}" ),
             aConnectivity->GetNodeCount( aNetCode ), aConnectivity->GetPadCount( aNetCode ),
             unconnectedEdgeCount, visibleUnconnectedEdgeCount,
             jsonArray( itemEntries ), boolJson( itemSampleTruncated ),
-            jsonArray( edgeEntries ), boolJson( edgeSampleTruncated ) );
+            jsonArray( edgeEntries ), boolJson( edgeSampleTruncated ),
+            componentFacts.m_ComponentCount, jsonArray( componentFacts.m_ComponentEntries ),
+            boolJson( componentFacts.m_ComponentSampleTruncated ),
+            jsonArray( componentEdgeEntries ), boolJson( componentEdgeSampleTruncated ) );
 }
 
 
