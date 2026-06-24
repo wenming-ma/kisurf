@@ -6,6 +6,8 @@
 #include <board.h>
 #include <board_design_settings.h>
 #include <connectivity/connectivity_data.h>
+#include <drc/drc_engine.h>
+#include <drc/drc_rule.h>
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -116,6 +118,19 @@ const nlohmann::json* findObstacleByKindAndLabel( const nlohmann::json& aObstacl
         {
             return &obstacle;
         }
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findWorstConstraintByType( const nlohmann::json& aConstraints,
+                                                 const std::string& aType )
+{
+    for( const nlohmann::json& constraint : aConstraints )
+    {
+        if( constraint["type"].get<std::string>() == aType )
+            return &constraint;
     }
 
     return nullptr;
@@ -1067,6 +1082,47 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
     BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["tracks"].get<bool>(), true );
     BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["vias"].get<bool>(), true );
     BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["pads"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsEffectiveConstraintObservationFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+    const int              ruleClearance = 987654;
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "AI Physical Hole Clearance" ) );
+
+    DRC_CONSTRAINT constraint( PHYSICAL_HOLE_CLEARANCE_CONSTRAINT );
+    constraint.Value().SetMin( ruleClearance );
+    rule->AddConstraint( constraint );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( rule );
+    settings.m_DRCEngine = engine;
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["drc_engine_present"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( effective["rules_valid"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( effective["worst_constraint_sample_truncated"].get<bool>(), false );
+
+    const nlohmann::json* physicalHole =
+            findWorstConstraintByType( effective["worst_constraints"],
+                                       "physical_hole_clearance" );
+
+    BOOST_REQUIRE( physicalHole );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["enum"].get<int>(),
+                       static_cast<int>( PHYSICAL_HOLE_CLEARANCE_CONSTRAINT ) );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["value"]["min"].get<int>(), ruleClearance );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["value"]["has_min"].get<bool>(), true );
+    BOOST_CHECK( ( *physicalHole )["name"].get<std::string>().find(
+                         "AI Physical Hole Clearance" )
+                 != std::string::npos );
 }
 
 

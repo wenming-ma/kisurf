@@ -6,6 +6,8 @@
 #include <connectivity/connectivity_algo.h>
 #include <connectivity/connectivity_data.h>
 #include <core/typeinfo.h>
+#include <drc/drc_engine.h>
+#include <drc/drc_rule.h>
 #include <footprint.h>
 #include <netclass.h>
 #include <netinfo.h>
@@ -1608,6 +1610,102 @@ wxString makeKeepoutConstraintJson( const ZONE& aZone )
 }
 
 
+wxString drcConstraintTypeToken( DRC_CONSTRAINT_T aType )
+{
+    switch( aType )
+    {
+    case CLEARANCE_CONSTRAINT:                return wxS( "clearance" );
+    case PHYSICAL_CLEARANCE_CONSTRAINT:       return wxS( "physical_clearance" );
+    case HOLE_CLEARANCE_CONSTRAINT:           return wxS( "hole_clearance" );
+    case PHYSICAL_HOLE_CLEARANCE_CONSTRAINT:  return wxS( "physical_hole_clearance" );
+    case HOLE_TO_HOLE_CONSTRAINT:             return wxS( "hole_to_hole" );
+    case EDGE_CLEARANCE_CONSTRAINT:           return wxS( "edge_clearance" );
+    case COURTYARD_CLEARANCE_CONSTRAINT:      return wxS( "courtyard_clearance" );
+    case SILK_CLEARANCE_CONSTRAINT:           return wxS( "silk_clearance" );
+    case TRACK_WIDTH_CONSTRAINT:              return wxS( "track_width" );
+    case CONNECTION_WIDTH_CONSTRAINT:         return wxS( "connection_width" );
+    case VIA_DIAMETER_CONSTRAINT:             return wxS( "via_diameter" );
+    case HOLE_SIZE_CONSTRAINT:                return wxS( "hole_size" );
+    case ANNULAR_WIDTH_CONSTRAINT:            return wxS( "annular_width" );
+    default:                                  return wxS( "unknown" );
+    }
+}
+
+
+wxString minOptMaxJson( const MINOPTMAX<int>& aValue )
+{
+    return wxString::Format(
+            wxS( "{\"has_min\":%s,\"min\":%d,"
+                 "\"has_opt\":%s,\"opt\":%d,"
+                 "\"has_max\":%s,\"max\":%d}" ),
+            boolJson( aValue.HasMin() ), aValue.Min(),
+            boolJson( aValue.HasOpt() ), aValue.Opt(),
+            boolJson( aValue.HasMax() ), aValue.Max() );
+}
+
+
+wxString worstConstraintJson( DRC_CONSTRAINT_T aType, const DRC_CONSTRAINT& aConstraint )
+{
+    return wxString::Format(
+            wxS( "{\"type\":%s,\"enum\":%d,\"name\":%s,\"value\":%s}" ),
+            quotedJson( drcConstraintTypeToken( aType ) ), static_cast<int>( aType ),
+            quotedJson( aConstraint.GetName() ), minOptMaxJson( aConstraint.GetValue() ) );
+}
+
+
+wxString makeEffectiveConstraintFactsJson( const BOARD_DESIGN_SETTINGS& aSettings )
+{
+    constexpr size_t      maxWorstConstraintSample = 32;
+    std::vector<wxString> worstConstraintEntries;
+    bool                  worstConstraintSampleTruncated = false;
+
+    if( !aSettings.m_DRCEngine )
+    {
+        return wxS( "{\"drc_engine_present\":false,\"rules_valid\":false,"
+                    "\"worst_constraints\":[],"
+                    "\"worst_constraint_sample_truncated\":false}" );
+    }
+
+    static const DRC_CONSTRAINT_T queryTypes[] = {
+        CLEARANCE_CONSTRAINT,
+        PHYSICAL_CLEARANCE_CONSTRAINT,
+        HOLE_CLEARANCE_CONSTRAINT,
+        PHYSICAL_HOLE_CLEARANCE_CONSTRAINT,
+        HOLE_TO_HOLE_CONSTRAINT,
+        EDGE_CLEARANCE_CONSTRAINT,
+        COURTYARD_CLEARANCE_CONSTRAINT,
+        SILK_CLEARANCE_CONSTRAINT,
+        TRACK_WIDTH_CONSTRAINT,
+        CONNECTION_WIDTH_CONSTRAINT,
+        VIA_DIAMETER_CONSTRAINT,
+        HOLE_SIZE_CONSTRAINT,
+        ANNULAR_WIDTH_CONSTRAINT
+    };
+
+    for( DRC_CONSTRAINT_T type : queryTypes )
+    {
+        if( worstConstraintEntries.size() >= maxWorstConstraintSample )
+        {
+            worstConstraintSampleTruncated = true;
+            break;
+        }
+
+        DRC_CONSTRAINT constraint;
+
+        if( aSettings.m_DRCEngine->QueryWorstConstraint( type, constraint ) )
+            worstConstraintEntries.push_back( worstConstraintJson( type, constraint ) );
+    }
+
+    return wxString::Format(
+            wxS( "{\"drc_engine_present\":true,\"rules_valid\":%s,"
+                 "\"worst_constraints\":%s,"
+                 "\"worst_constraint_sample_truncated\":%s}" ),
+            boolJson( aSettings.m_DRCEngine->RulesValid() ),
+            jsonArray( worstConstraintEntries ),
+            boolJson( worstConstraintSampleTruncated ) );
+}
+
+
 wxString makeConstraintFactsJson( const BOARD& aBoard )
 {
     constexpr size_t      maxKeepoutSample = 64;
@@ -1650,9 +1748,11 @@ wxString makeConstraintFactsJson( const BOARD& aBoard )
     return wxString::Format(
             wxS( "{\"source\":\"board\",\"minimums\":%s,"
                  "\"rule_area_count\":%zu,\"keepout_count\":%zu,"
-                 "\"keepouts\":%s,\"keepout_sample_truncated\":%s}" ),
+                 "\"keepouts\":%s,\"keepout_sample_truncated\":%s,"
+                 "\"effective_constraints\":%s}" ),
             makeConstraintMinimumsJson( aBoard.GetDesignSettings() ), ruleAreaCount,
-            keepoutCount, jsonArray( keepoutEntries ), boolJson( keepoutSampleTruncated ) );
+            keepoutCount, jsonArray( keepoutEntries ), boolJson( keepoutSampleTruncated ),
+            makeEffectiveConstraintFactsJson( aBoard.GetDesignSettings() ) );
 }
 
 
