@@ -221,6 +221,11 @@ public:
         ++m_SetCellValueCount;
     }
 
+    std::vector<std::pair<int, int>> SelectedCells() const override
+    {
+        return m_SelectedCells;
+    }
+
     void SetRowLabel( int aRow, const wxString& aLabel )
     {
         m_RowLabels.at( aRow ) = aLabel;
@@ -234,6 +239,7 @@ public:
     std::vector<std::vector<wxString>> m_Cells;
     std::vector<wxString>              m_RowLabels;
     std::vector<wxString>              m_ColumnLabels;
+    std::vector<std::pair<int, int>>    m_SelectedCells;
     int                                m_SetCellValueCount = 0;
 };
 
@@ -292,8 +298,14 @@ public:
         ++m_SetFieldValueCount;
     }
 
+    wxString FocusedFieldId() const override
+    {
+        return m_FocusedFieldId;
+    }
+
     std::vector<std::pair<std::string, wxString>> m_Fields;
-    int                                          m_SetFieldValueCount = 0;
+    wxString                                      m_FocusedFieldId;
+    int                                           m_SetFieldValueCount = 0;
 };
 
 
@@ -715,6 +727,30 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsIntoGridStateBackend )
 }
 
 
+BOOST_AUTO_TEST_CASE( GridStateBackendDerivesSelectionGuardFromSelectedCells )
+{
+    auto gridIo = std::make_unique<RECORDING_GRID_IO>(
+            std::vector<std::vector<wxString>>{
+                    { wxS( "GND" ), wxS( "Signal" ) },
+                    { wxS( "VCC" ), wxS( "Power" ) } } );
+    gridIo->m_SelectedCells = { { 1, 1 }, { 0, 1 }, { 1, 1 } };
+
+    AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND backend(
+            std::move( gridIo ), wxS( "board_setup.netclasses" ),
+            wxS( "netclass.assignments" ) );
+
+    wxString stateJson;
+    wxString error;
+    AI_EXECUTION_SESSION session = makeSession();
+    BOOST_REQUIRE( backend.BeginSurfaceTransaction( session, stateJson, error ) );
+
+    BOOST_CHECK( stateJson.Contains(
+            wxS( "\"selection_fingerprint\":\"cells:r0:c1|r1:c1\"" ) ) );
+    BOOST_CHECK( stateJson.Contains(
+            wxS( "\"overlap_set\":[\"r0\",\"r1\"]" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( WxGridBackendImplementsStructuredSurfaceBackendContract )
 {
     BOOST_CHECK( ( std::is_base_of_v<AI_STRUCTURED_SURFACE_STATE_BACKEND,
@@ -766,6 +802,29 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsIntoFieldStateBackend )
                        wxString( wxS( "0.20mm" ) ) );
     BOOST_CHECK_EQUAL( fields->m_SetFieldValueCount, 1 );
     BOOST_CHECK_EQUAL( backend.SurfaceRevision(), 11 );
+}
+
+
+BOOST_AUTO_TEST_CASE( FieldStateBackendDerivesSelectionGuardFromFocusedField )
+{
+    auto fieldIo = std::make_unique<RECORDING_FIELD_IO>(
+            std::vector<std::pair<std::string, wxString>>{
+                    { "default_clearance", wxS( "0.15mm" ) },
+                    { "neckdown", wxS( "disabled" ) } } );
+    fieldIo->m_FocusedFieldId = wxS( "default_clearance" );
+
+    AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND backend(
+            std::move( fieldIo ), wxS( "board_setup.rules" ) );
+
+    wxString stateJson;
+    wxString error;
+    AI_EXECUTION_SESSION session = makeSession();
+    BOOST_REQUIRE( backend.BeginSurfaceTransaction( session, stateJson, error ) );
+
+    BOOST_CHECK( stateJson.Contains(
+            wxS( "\"selection_fingerprint\":\"field:default_clearance\"" ) ) );
+    BOOST_CHECK( stateJson.Contains(
+            wxS( "\"overlap_set\":[\"default_clearance\"]" ) ) );
 }
 
 

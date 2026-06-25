@@ -17,6 +17,7 @@
 
 #include <charconv>
 #include <memory>
+#include <set>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -98,6 +99,78 @@ bool jsonValuesEqual( const nlohmann::json& aExpected,
         return sortedArrayValueKeys( aExpected ) == sortedArrayValueKeys( aActual );
 
     return aExpected == aActual;
+}
+
+
+std::vector<std::pair<int, int>> normalizedSelectedCells(
+        const std::vector<std::pair<int, int>>& aCells,
+        int aRowCount, int aColumnCount )
+{
+    std::set<std::pair<int, int>> uniqueCells;
+
+    for( const std::pair<int, int>& cell : aCells )
+    {
+        if( cell.first >= 0 && cell.first < aRowCount
+            && cell.second >= 0 && cell.second < aColumnCount )
+        {
+            uniqueCells.insert( cell );
+        }
+    }
+
+    return { uniqueCells.begin(), uniqueCells.end() };
+}
+
+
+wxString gridSelectionFingerprint(
+        const std::vector<std::pair<int, int>>& aCells )
+{
+    if( aCells.empty() )
+        return wxEmptyString;
+
+    wxArrayString cellIds;
+
+    for( const std::pair<int, int>& cell : aCells )
+    {
+        cellIds.Add( wxString::Format( wxS( "r%d:c%d" ), cell.first,
+                                       cell.second ) );
+    }
+
+    if( cellIds.GetCount() == 1 )
+        return wxS( "cell:" ) + cellIds[0];
+
+    return wxS( "cells:" ) + wxJoin( cellIds, '|' );
+}
+
+
+std::vector<wxString> gridOverlapSet(
+        const std::vector<std::pair<int, int>>& aCells )
+{
+    std::set<int> rows;
+
+    for( const std::pair<int, int>& cell : aCells )
+        rows.insert( cell.first );
+
+    std::vector<wxString> overlap;
+
+    for( int row : rows )
+        overlap.push_back( wxString::Format( wxS( "r%d" ), row ) );
+
+    return overlap;
+}
+
+
+void addOverlapSetJson( nlohmann::json& aSurface,
+                        const std::vector<wxString>& aOverlapSet )
+{
+    if( aOverlapSet.empty() )
+        return;
+
+    nlohmann::json overlap = nlohmann::json::array();
+
+    for( const wxString& item : aOverlapSet )
+        overlap.push_back( toUtf8String( item ) );
+
+    aSurface["overlap_set"] = overlap;
 }
 
 
@@ -449,6 +522,59 @@ public:
         m_Grid.SaveEditControlValue();
     }
 
+    std::vector<std::pair<int, int>> SelectedCells() const override
+    {
+        std::vector<std::pair<int, int>> cells;
+
+        const wxGridCellCoordsArray selectedCells = m_Grid.GetSelectedCells();
+
+        for( const wxGridCellCoords& cell : selectedCells )
+            cells.emplace_back( cell.GetRow(), cell.GetCol() );
+
+        const wxGridCellCoordsArray topLeft =
+                m_Grid.GetSelectionBlockTopLeft();
+        const wxGridCellCoordsArray bottomRight =
+                m_Grid.GetSelectionBlockBottomRight();
+
+        for( size_t i = 0; i < topLeft.size() && i < bottomRight.size(); ++i )
+        {
+            for( int row = topLeft[i].GetRow(); row <= bottomRight[i].GetRow(); ++row )
+            {
+                for( int col = topLeft[i].GetCol(); col <= bottomRight[i].GetCol(); ++col )
+                    cells.emplace_back( row, col );
+            }
+        }
+
+        const wxArrayInt selectedRows = m_Grid.GetSelectedRows();
+
+        for( unsigned int rowIndex = 0; rowIndex < selectedRows.GetCount(); ++rowIndex )
+        {
+            const int row = selectedRows[rowIndex];
+
+            for( int col = 0; col < m_Grid.GetNumberCols(); ++col )
+                cells.emplace_back( row, col );
+        }
+
+        const wxArrayInt selectedCols = m_Grid.GetSelectedCols();
+
+        for( unsigned int colIndex = 0; colIndex < selectedCols.GetCount(); ++colIndex )
+        {
+            const int col = selectedCols[colIndex];
+
+            for( int row = 0; row < m_Grid.GetNumberRows(); ++row )
+                cells.emplace_back( row, col );
+        }
+
+        if( cells.empty() && m_Grid.GetGridCursorRow() >= 0
+            && m_Grid.GetGridCursorCol() >= 0 )
+        {
+            cells.emplace_back( m_Grid.GetGridCursorRow(),
+                                m_Grid.GetGridCursorCol() );
+        }
+
+        return normalizedSelectedCells( cells, RowCount(), ColumnCount() );
+    }
+
 private:
     wxGrid& m_Grid;
 };
@@ -506,6 +632,16 @@ public:
     bool HasField( const wxString& aFieldId ) const override
     {
         return m_PropertyGrid.GetProperty( aFieldId ) != nullptr;
+    }
+
+    wxString FocusedFieldId() const override
+    {
+        wxPGProperty* property = m_PropertyGrid.GetSelection();
+
+        if( !property )
+            return wxEmptyString;
+
+        return property->GetName();
     }
 
 private:
@@ -609,6 +745,11 @@ bool AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::BeginSurfaceTransaction(
     if( m_GridIo->IsCellEditControlShown() )
         m_GridIo->SaveEditControlValue();
 
+    const std::vector<std::pair<int, int>> selectedCells =
+            normalizedSelectedCells( m_GridIo->SelectedCells(),
+                                     m_GridIo->RowCount(),
+                                     m_GridIo->ColumnCount() );
+
     nlohmann::json state = nlohmann::json::object();
     nlohmann::json& surface = state["surfaces"][toUtf8String( m_SurfaceId )];
     surface["kind"] = "grid";
@@ -618,18 +759,22 @@ bool AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::BeginSurfaceTransaction(
         surface["schema_version"] = toUtf8String( m_SchemaVersion );
 
     if( !m_SelectionFingerprint.empty() )
+    {
         surface["selection_fingerprint"] =
                 toUtf8String( m_SelectionFingerprint );
+    }
+    else
+    {
+        const wxString fingerprint = gridSelectionFingerprint( selectedCells );
+
+        if( !fingerprint.empty() )
+            surface["selection_fingerprint"] = toUtf8String( fingerprint );
+    }
 
     if( !m_OverlapSet.empty() )
-    {
-        nlohmann::json overlap = nlohmann::json::array();
-
-        for( const wxString& item : m_OverlapSet )
-            overlap.push_back( toUtf8String( item ) );
-
-        surface["overlap_set"] = overlap;
-    }
+        addOverlapSetJson( surface, m_OverlapSet );
+    else
+        addOverlapSetJson( surface, gridOverlapSet( selectedCells ) );
 
     nlohmann::json& table = surface["tables"][toUtf8String( m_TableId )];
     table["kind"] = "grid";
@@ -892,18 +1037,20 @@ bool AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::BeginSurfaceTransaction(
         surface["schema_version"] = toUtf8String( m_SchemaVersion );
 
     if( !m_SelectionFingerprint.empty() )
+    {
         surface["selection_fingerprint"] =
                 toUtf8String( m_SelectionFingerprint );
+    }
+    else if( !m_FieldIo->FocusedFieldId().empty() )
+    {
+        surface["selection_fingerprint"] =
+                toUtf8String( wxS( "field:" ) + m_FieldIo->FocusedFieldId() );
+    }
 
     if( !m_OverlapSet.empty() )
-    {
-        nlohmann::json overlap = nlohmann::json::array();
-
-        for( const wxString& item : m_OverlapSet )
-            overlap.push_back( toUtf8String( item ) );
-
-        surface["overlap_set"] = overlap;
-    }
+        addOverlapSetJson( surface, m_OverlapSet );
+    else if( !m_FieldIo->FocusedFieldId().empty() )
+        addOverlapSetJson( surface, { m_FieldIo->FocusedFieldId() } );
 
     const wxArrayString fieldIds = m_FieldIo->FieldIds();
 
