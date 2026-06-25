@@ -988,6 +988,12 @@ bool toolRecordIsExecutedHiddenMutation( const nlohmann::json& aToolRecord )
     const std::string     resultTool =
             result.value( "tool", std::string() );
 
+    if( resultTool == "shadow.apply_candidate" )
+    {
+        return result.value( "status", std::string() ) == "candidate_applied"
+               && result.value( "mutation_applied", false );
+    }
+
     return isHiddenMutationBatchTool( resultTool )
            && result.value( "status", std::string() ) == "script_plan_executed"
            && result.value( "mutation_applied", false );
@@ -1054,6 +1060,54 @@ bool reviewRenderHintsSatisfied( const wxString& aReviewJson )
             renderHintActive = true;
 
         if( renderHintActive && toolRecordIsExecutedHiddenMutation( toolRecord ) )
+        {
+            const std::string toolCallId =
+                    toolRecord.value( "tool_call_id", std::string() );
+
+            if( toolCallId.empty() )
+                renderPendingWithoutToolId = true;
+            else
+                pendingMutationToolCallIds.insert( toolCallId );
+        }
+    }
+
+    return pendingMutationToolCallIds.empty()
+           && !renderPendingWithoutToolId;
+}
+
+
+bool reviewHiddenMutationRenderFreshnessSatisfied( const wxString& aReviewJson )
+{
+    nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
+
+    if( !reviewTrace.contains( "provider_tool_results" )
+        || !reviewTrace["provider_tool_results"].is_array() )
+    {
+        return true;
+    }
+
+    bool                  renderPendingWithoutToolId = false;
+    std::set<std::string> pendingMutationToolCallIds;
+
+    for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object() )
+            continue;
+
+        if( toolRecordIsExecutedRender( toolRecord ) )
+        {
+            pendingMutationToolCallIds.clear();
+            renderPendingWithoutToolId = false;
+            continue;
+        }
+
+        const std::string rolledBackToolCallId =
+                toolRecordRolledBackToolCallId( toolRecord );
+
+        if( !rolledBackToolCallId.empty() )
+            pendingMutationToolCallIds.erase( rolledBackToolCallId );
+
+        if( toolRecordIsExecutedHiddenMutation( toolRecord ) )
         {
             const std::string toolCallId =
                     toolRecord.value( "tool_call_id", std::string() );
@@ -9647,6 +9701,10 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
 
     if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult, wxS( "review_basis_failed" ) );
+
+    if( !reviewHiddenMutationRenderFreshnessSatisfied( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult,
+                          wxS( "render_freshness_failed" ) );
 
     if( !reviewRenderHintsSatisfied( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult,
