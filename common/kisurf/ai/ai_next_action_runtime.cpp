@@ -180,10 +180,26 @@ bool validationSubfactBlocksPublish( const nlohmann::json& aFact )
         return true;
     }
 
-    if( aFact.contains( "status" ) && aFact["status"].is_string()
-        && textContainsBlockingStatus( aFact["status"].get<std::string>() ) )
+    if( aFact.contains( "status" ) && aFact["status"].is_string() )
     {
-        return true;
+        std::string status = aFact["status"].get<std::string>();
+
+        std::transform( status.begin(), status.end(), status.begin(),
+                        []( unsigned char c )
+                        {
+                            return static_cast<char>( std::tolower( c ) );
+                        } );
+
+        if( textContainsBlockingStatus( status )
+            || status == "stale"
+            || status == "out_of_date"
+            || status == "dirty"
+            || status == "incomplete"
+            || status == "required"
+            || status == "needs_rebuild" )
+        {
+            return true;
+        }
     }
 
     return false;

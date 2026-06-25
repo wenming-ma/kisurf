@@ -1779,6 +1779,34 @@ public:
 };
 
 
+class STALE_DERIVED_STATE_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"grade\":\"preview\","
+                     "\"issue_count\":0,"
+                     "\"rule_load\":{\"status\":\"loaded\"},"
+                     "\"connectivity\":{\"status\":\"stale\","
+                     "\"message\":\"connectivity graph needs rebuild\"},"
+                     "\"refill\":{\"status\":\"required\","
+                     "\"message\":\"zone refill is required before preview\"}}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
 class TRACKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -5356,6 +5384,40 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenValidationRuleLoadBlocksPublish )
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
             wxS( "\"rule_load\"" ) ) );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenDerivedValidationStateIsStale )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    STALE_DERIVED_STATE_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE               previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "validation_gate_failed" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "\"connectivity\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "\"stale\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "\"refill\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
+            wxS( "\"required\"" ) ) );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }
 
