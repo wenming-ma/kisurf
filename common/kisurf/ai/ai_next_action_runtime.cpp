@@ -991,11 +991,7 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 
         if( toolRecord.contains( "result" )
             && jsonContainsValidationBeforePublishHint( toolRecord["result"] ) )
-        {
-            validationPending = true;
             validationHintActive = true;
-            continue;
-        }
 
         if( validationHintActive
             && toolRecordIsExecutedHiddenMutation( toolRecord ) )
