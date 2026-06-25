@@ -4189,7 +4189,8 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
                     .get<std::string>(),
             "pcb.create_track_polyline" );
     BOOST_CHECK_EQUAL(
-            replacePathCandidate["plan"]["operations"].at( 1 )["points"].size(),
+            replacePathCandidate["plan"]["operations"].at( 1 )["arguments"]
+                    ["points"].size(),
             3 );
 
     auto* constraintRerouteProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
@@ -4249,6 +4250,10 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
             constraintCandidate["plan"]["operations"].at( 1 )["kind"]
                     .get<std::string>(),
             "pcb.create_track_polyline" );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["plan"]["operations"].at( 1 )["arguments"]
+                    ["points"].size(),
+            3 );
 
     auto* parallelProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_parallel_segment_candidates" ),
