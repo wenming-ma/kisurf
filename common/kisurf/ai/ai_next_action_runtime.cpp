@@ -388,6 +388,12 @@ bool isRoutingReplacePathCandidateTool( const std::string& aToolName )
 }
 
 
+bool isRoutingConstraintAwareRerouteCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "routing.generate_constraint_aware_reroute_candidates";
+}
+
+
 bool isPlacementFootprintTransformCandidateTool( const std::string& aToolName )
 {
     return aToolName == "placement.generate_footprint_transform_candidates";
@@ -4891,6 +4897,66 @@ nlohmann::json routingReplacePathCandidatePayloadJson(
 }
 
 
+nlohmann::json routingConstraintAwareRerouteCandidatePayloadJson(
+        const nlohmann::json& aArgs )
+{
+    if( !aArgs.contains( "constraints" ) || !aArgs["constraints"].is_object() )
+    {
+        return { { "tool",
+                   "routing.generate_constraint_aware_reroute_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_constraint_aware_reroute_candidates "
+                   "requires constraints." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    nlohmann::json replacePayload =
+            routingReplacePathCandidatePayloadJson( aArgs );
+
+    if( replacePayload.value( "status", std::string() )
+        == "malformed_arguments" )
+    {
+        replacePayload["tool"] =
+                "routing.generate_constraint_aware_reroute_candidates";
+        return replacePayload;
+    }
+
+    nlohmann::json& candidate = replacePayload["candidates"].at( 0 );
+    nlohmann::json  facts = candidate["replace_path_facts"];
+    facts["constraints"] = aArgs["constraints"];
+    facts["generation_strategy"] = "constraint_aware_delete_then_create_polyline";
+    facts["validation_hint"] = "run_validate_hidden_attempt_before_publish";
+
+    candidate["source_tool"] =
+            "routing.generate_constraint_aware_reroute_candidates";
+    candidate["title"] = "Constraint-aware reroute";
+    candidate["body"] =
+            "Candidate bounded plan for a replacement route path with explicit "
+            "constraint facts for model review.";
+    candidate["operation"] = "constraint_aware_reroute_plan";
+    candidate["constraint_aware_reroute_facts"] = facts;
+    candidate["arguments"]["operation"] = "constraint_aware_reroute_plan";
+    candidate["arguments"]["source_tool"] =
+            "routing.generate_constraint_aware_reroute_candidates";
+    candidate["arguments"]["candidate_strategy"] =
+            "constraint_aware_delete_then_create_polyline";
+    candidate["arguments"]["constraint_aware_reroute_facts"] = facts;
+    candidate["plan"]["operations"].at( 0 )["metadata"]["source_tool"] =
+            "routing.generate_constraint_aware_reroute_candidates";
+    candidate["plan"]["operations"].at( 1 )["metadata"]["source_tool"] =
+            "routing.generate_constraint_aware_reroute_candidates";
+    candidate["landing_facts"]["source"] =
+            "constraint_reroute.replacement_points.end";
+    replacePayload["tool"] =
+            "routing.generate_constraint_aware_reroute_candidates";
+
+    return replacePayload;
+}
+
+
 nlohmann::json metadataJson( const std::map<wxString, wxString>& aMetadata )
 {
     nlohmann::json metadata = nlohmann::json::object();
@@ -5798,6 +5864,14 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_replace_path_library" },
                 { "can_publish", false } },
+              { { "name", "routing.generate_constraint_aware_reroute_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "routing" },
+                { "side_effect", "read_only" },
+                { "candidate_source",
+                  "internal_constraint_aware_reroute_library" },
+                { "can_publish", false } },
               { { "name", "surface.generate_fill_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -6082,6 +6156,36 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                     parameters["required"] = nlohmann::json::array(
                             { "replace_handles", "replacement_points", "net",
                               "layer", "width" } );
+                }
+                else if( isRoutingConstraintAwareRerouteCandidateTool( aName ) )
+                {
+                    parameters["properties"]["replace_handles"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Existing session handles to delete as part of the "
+                                "constraint-aware reroute candidate." } };
+                    parameters["properties"]["replacement_points"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Replacement polyline points, at least start and end." } };
+                    parameters["properties"]["constraints"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Constraint facts, for example clearance, keepout, "
+                                "or DRC-lite source facts used by the model." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description", "Target net for the reroute." } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description", "Target routing layer for the reroute." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Replacement track width." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "replace_handles", "replacement_points",
+                              "constraints", "net", "layer", "width" } );
                 }
                 else if( isPlacementRepairViaTool( aName ) )
                 {
@@ -6566,6 +6670,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                             "routing.generate_replace_path_candidates" );
                 }
 
+                if( name == "routing_generate_constraint_aware_reroute_candidates"
+                    || name == "routing.generate_constraint_aware_reroute_candidates" )
+                {
+                    return std::string(
+                            "routing.generate_constraint_aware_reroute_candidates" );
+                }
+
                 if( name == "surface_generate_fill_candidates"
                     || name == "surface.generate_fill_candidates" )
                 {
@@ -6795,6 +6906,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         const wxString message =
                 malformed
                         ? wxString( wxS( "routing.generate_replace_path_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
+    }
+
+    if( toolName == "routing.generate_constraint_aware_reroute_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                routingConstraintAwareRerouteCandidatePayloadJson( args );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "routing.generate_constraint_aware_reroute_candidates "
                                          "received malformed arguments." ) )
                         : wxString( wxS( "Candidates generated." ) );
 
