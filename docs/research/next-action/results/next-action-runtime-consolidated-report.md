@@ -333,7 +333,7 @@ flowchart TD
 
 - `include/kisurf/ai/ai_next_action_runtime.h`：定义 context version、semantic event、observation packet、runtime step、attempt record、LLM decision/review/publish decision、preview lease、accept token、runtime / scheduler / tool registry contract。
 - `common/kisurf/ai/ai_next_action_runtime.cpp`：实现 scheduler、tool registry、runtime update loop、attempt/review/publish、accept/reject/expire。
-- `common/kisurf/ai/ai_next_action_provider.cpp`：旧 via pattern、routing segment、panel table provider 目前仍作为 candidate 来源存在；它们不能再被视为最终 publisher。
+- `common/kisurf/ai/ai_next_action_candidate_library.cpp`：旧 via pattern、routing segment、panel table 逻辑目前已收敛成 candidate-library 来源；它们不能再被视为最终 publisher。
 - `common/kisurf/ai/ai_agent_panel_model.cpp`：把背景建议入口从 UI/panel 模型接入 Next Action runtime。
 - `qa/tests/common/test_ai_next_action_runtime.cpp`：覆盖 scheduler debounce、LLM decision/review gate、retry rollback、context expire 等核心 runtime 行为。
 

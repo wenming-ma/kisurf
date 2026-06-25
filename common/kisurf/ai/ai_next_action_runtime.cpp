@@ -12,7 +12,7 @@
 
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_execution_session.h>
-#include <kisurf/ai/ai_next_action_provider.h>
+#include <kisurf/ai/ai_next_action_candidate_library.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>

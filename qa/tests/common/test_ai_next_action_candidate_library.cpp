@@ -1,6 +1,6 @@
 #include <boost/test/unit_test.hpp>
 
-#include <kisurf/ai/ai_next_action_provider.h>
+#include <kisurf/ai/ai_next_action_candidate_library.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 
 namespace
@@ -143,7 +143,7 @@ AI_SUGGESTION_TRIGGER makePanelTableTrigger(
 }
 } // namespace
 
-BOOST_AUTO_TEST_SUITE( AiNextActionProvider )
+BOOST_AUTO_TEST_SUITE( AiNextActionCandidateLibrary )
 
 
 BOOST_AUTO_TEST_CASE( ThreeHorizontalViasSuggestNextViaPreview )

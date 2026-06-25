@@ -142,7 +142,7 @@ set( KICOMMON_SRCS
     kisurf/ai/ai_edit_session.cpp
     kisurf/ai/ai_atomic_operation_executor.cpp
     kisurf/ai/ai_execution_session.cpp
-    kisurf/ai/ai_next_action_provider.cpp
+    kisurf/ai/ai_next_action_candidate_library.cpp
     kisurf/ai/ai_next_action_runtime.cpp
     kisurf/ai/ai_preview_manager.cpp
     kisurf/ai/ai_provider.cpp

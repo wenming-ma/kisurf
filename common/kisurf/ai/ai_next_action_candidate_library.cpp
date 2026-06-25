@@ -8,7 +8,7 @@
  * Foundation, either version 3 of the License, or (at your option) any later version.
  */
 
-#include <kisurf/ai/ai_next_action_provider.h>
+#include <kisurf/ai/ai_next_action_candidate_library.h>
 
 #include <algorithm>
 #include <cstdint>
