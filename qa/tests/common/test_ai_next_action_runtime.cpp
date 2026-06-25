@@ -5752,6 +5752,15 @@ BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeNativeDrcItemBboxesForReview )
     BOOST_CHECK_EQUAL( issueFact["main_item_bbox"]["width"].get<int>(), 30 );
     BOOST_REQUIRE( issueFact.contains( "aux_item_bbox" ) );
     BOOST_CHECK_EQUAL( issueFact["aux_item_bbox"]["height"].get<int>(), 80 );
+    BOOST_REQUIRE( issueFact.contains( "main_aux_bbox_relation" ) );
+    const nlohmann::json& relation = issueFact["main_aux_bbox_relation"];
+    BOOST_CHECK_CLOSE( relation["center_delta"]["x"].get<double>(), 60.0,
+                       0.001 );
+    BOOST_CHECK_CLOSE( relation["center_delta"]["y"].get<double>(), 60.0,
+                       0.001 );
+    BOOST_CHECK_EQUAL( relation["spacing"]["x"].get<int>(), 10 );
+    BOOST_CHECK_EQUAL( relation["spacing"]["y"].get<int>(), 0 );
+    BOOST_CHECK( !relation["overlap"]["intersects"].get<bool>() );
     BOOST_CHECK_EQUAL( issueFact["layer_name"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }

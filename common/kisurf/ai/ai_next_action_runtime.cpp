@@ -65,6 +65,118 @@ bool sameVersion( const AI_CONTEXT_VERSION& aLeft, const AI_CONTEXT_VERSION& aRi
 }
 
 
+bool jsonIntegerField( const nlohmann::json& aObject, const char* aKey,
+                       int64_t& aValue )
+{
+    if( !aObject.is_object() || !aObject.contains( aKey )
+        || !aObject[aKey].is_number() )
+    {
+        return false;
+    }
+
+    aValue = aObject[aKey].get<int64_t>();
+    return true;
+}
+
+
+bool jsonBBoxFields( const nlohmann::json& aBox, int64_t& aX, int64_t& aY,
+                     int64_t& aWidth, int64_t& aHeight )
+{
+    if( !jsonIntegerField( aBox, "x", aX )
+        || !jsonIntegerField( aBox, "y", aY ) )
+    {
+        return false;
+    }
+
+    if( !jsonIntegerField( aBox, "width", aWidth )
+        && !jsonIntegerField( aBox, "w", aWidth ) )
+    {
+        return false;
+    }
+
+    if( !jsonIntegerField( aBox, "height", aHeight )
+        && !jsonIntegerField( aBox, "h", aHeight ) )
+    {
+        return false;
+    }
+
+    return aWidth >= 0 && aHeight >= 0;
+}
+
+
+void addMainAuxBBoxRelationFact( const nlohmann::json& aIssue,
+                                 nlohmann::json& aFact )
+{
+    if( !aIssue.contains( "main_item_bbox" )
+        || !aIssue.contains( "aux_item_bbox" ) )
+    {
+        return;
+    }
+
+    int64_t mainX = 0;
+    int64_t mainY = 0;
+    int64_t mainWidth = 0;
+    int64_t mainHeight = 0;
+    int64_t auxX = 0;
+    int64_t auxY = 0;
+    int64_t auxWidth = 0;
+    int64_t auxHeight = 0;
+
+    if( !jsonBBoxFields( aIssue["main_item_bbox"], mainX, mainY,
+                         mainWidth, mainHeight )
+        || !jsonBBoxFields( aIssue["aux_item_bbox"], auxX, auxY,
+                            auxWidth, auxHeight ) )
+    {
+        return;
+    }
+
+    const int64_t mainRight = mainX + mainWidth;
+    const int64_t mainBottom = mainY + mainHeight;
+    const int64_t auxRight = auxX + auxWidth;
+    const int64_t auxBottom = auxY + auxHeight;
+
+    auto axisSpacing =
+            []( int64_t aLeft, int64_t aRight, int64_t bLeft, int64_t bRight )
+            {
+                if( aRight < bLeft )
+                    return bLeft - aRight;
+
+                if( bRight < aLeft )
+                    return aLeft - bRight;
+
+                return int64_t( 0 );
+            };
+
+    const int64_t overlapX =
+            std::max<int64_t>( 0, std::min( mainRight, auxRight )
+                                      - std::max( mainX, auxX ) );
+    const int64_t overlapY =
+            std::max<int64_t>( 0, std::min( mainBottom, auxBottom )
+                                      - std::max( mainY, auxY ) );
+    const int64_t spacingX = axisSpacing( mainX, mainRight, auxX, auxRight );
+    const int64_t spacingY =
+            axisSpacing( mainY, mainBottom, auxY, auxBottom );
+    const double mainCenterX = static_cast<double>( mainX ) + mainWidth / 2.0;
+    const double mainCenterY = static_cast<double>( mainY ) + mainHeight / 2.0;
+    const double auxCenterX = static_cast<double>( auxX ) + auxWidth / 2.0;
+    const double auxCenterY = static_cast<double>( auxY ) + auxHeight / 2.0;
+
+    aFact["main_aux_bbox_relation"] = {
+        { "main_center", { { "x", mainCenterX }, { "y", mainCenterY } } },
+        { "aux_center", { { "x", auxCenterX }, { "y", auxCenterY } } },
+        { "center_delta",
+          { { "x", auxCenterX - mainCenterX },
+            { "y", auxCenterY - mainCenterY } } },
+        { "spacing",
+          { { "x", spacingX }, { "y", spacingY },
+            { "manhattan", spacingX + spacingY } } },
+        { "overlap",
+          { { "x", overlapX }, { "y", overlapY },
+            { "intersects", overlapX > 0 && overlapY > 0 } } }
+    };
+}
+
+
 bool isActive( const AI_SUGGESTION_RECORD& aSuggestion )
 {
     return aSuggestion.m_Status == AI_SUGGESTION_STATUS::Pending
@@ -7111,6 +7223,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
 
                 if( issue.contains( "aux_item_bbox" ) )
                     fact["aux_item_bbox"] = issue["aux_item_bbox"];
+
+                addMainAuxBBoxRelationFact( issue, fact );
 
                 issueGeometryFacts.push_back( std::move( fact ) );
 
