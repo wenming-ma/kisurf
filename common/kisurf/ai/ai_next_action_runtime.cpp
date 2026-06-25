@@ -2637,7 +2637,7 @@ ATTEMPT_BUDGET_POLICY attemptPolicyForWorkState( const wxString& aWorkState )
         return { 5, 12, 16, 6, 6, 250 };
 
     if( workState == wxS( "layout" ) || workState == wxS( "placement" ) )
-        return { 3, 8, 8, 4, 4, 250 };
+        return { 3, 12, 8, 4, 4, 250 };
 
     if( workState == wxS( "autofill" ) || workState == wxS( "panel" )
         || workState == wxS( "structured_surface" ) )
