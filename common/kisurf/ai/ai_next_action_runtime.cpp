@@ -6296,6 +6296,15 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 }
                 else if( aName == "validate.hidden_attempt" )
                 {
+                    parameters["properties"]["scope"] =
+                            { { "type", "string" },
+                              { "enum",
+                                nlohmann::json::array( { "session",
+                                                          "affected_area",
+                                                          "selection",
+                                                          "region" } ) },
+                              { "description",
+                                "Validation scope requested for the hidden attempt." } };
                     parameters["properties"]["level"] =
                             { { "type", "string" },
                               { "enum",
@@ -6896,14 +6905,48 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
 
 
 wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
-        const AI_EXECUTION_SESSION& aSession, const AI_SUGGESTION_RECORD& ) const
+        const AI_EXECUTION_SESSION& aSession, const AI_SUGGESTION_RECORD&,
+        const wxString& aRequestedValidationArgsJson ) const
 {
+    nlohmann::json requestedArgs = nlohmann::json::parse(
+            toUtf8String( aRequestedValidationArgsJson ), nullptr, false );
+    nlohmann::json validationArgs =
+            { { "scope", "session" }, { "level", "drc_lite" } };
+
+    if( requestedArgs.is_object() )
+    {
+        const std::string level =
+                requestedArgs.value( "level", std::string() );
+
+        if( level == "geometry" || level == "drc_lite"
+            || level == "full_drc" )
+        {
+            validationArgs["level"] = level;
+        }
+
+        const std::string scope =
+                requestedArgs.value( "scope", std::string() );
+
+        if( scope == "session" || scope == "affected_area"
+            || scope == "selection" || scope == "region" )
+        {
+            validationArgs["scope"] = scope;
+        }
+
+        for( const char* key : { "region", "handles", "gate" } )
+        {
+            if( requestedArgs.contains( key ) )
+                validationArgs[key] = requestedArgs[key];
+        }
+    }
+
+    const wxString validationArgsJson =
+            fromUtf8String( validationArgs.dump() );
+
     if( m_ValidationService )
     {
-        const wxString validationArgs =
-                wxS( "{\"scope\":\"session\",\"level\":\"drc_lite\"}" );
         AI_SESSION_VALIDATION_RESULT result =
-                m_ValidationService->RunValidation( aSession, validationArgs,
+                m_ValidationService->RunValidation( aSession, validationArgsJson,
                                                     wxS( "{}" ) );
         nlohmann::json serviceResult =
                 nlohmann::json::parse( toUtf8String( result.m_ResultJson ), nullptr,
@@ -6918,10 +6961,10 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
             warnings.push_back( toUtf8String( warning ) );
 
         nlohmann::json validation =
-                { { "tool", "validate.hidden_attempt" },
+                  { { "tool", "validate.hidden_attempt" },
                   { "service_connected", true },
                   { "validation_args",
-                    nlohmann::json::parse( toUtf8String( validationArgs ) ) },
+                    validationArgs },
                   { "status", result.m_Ok ? "validated" : "validation_failed" },
                   { "service_result", serviceResult },
                   { "warnings", std::move( warnings ) },
@@ -8041,7 +8084,8 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         }
 
         aAttempt->m_ValidationFactsJson =
-                ValidateAttempt( *session, aAttempt->m_Candidate );
+                ValidateAttempt( *session, aAttempt->m_Candidate,
+                                 aToolCall.m_ArgumentsJson );
         ++aAttempt->m_BudgetCounters.m_ValidationCount;
         syncAttemptBudgetCountersToProvenance( *aAttempt );
 

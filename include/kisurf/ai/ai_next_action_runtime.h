@@ -245,7 +245,9 @@ public:
     wxString RenderAttempt( const AI_EXECUTION_SESSION& aSession,
                             const AI_SUGGESTION_RECORD& aCandidate ) const;
     wxString ValidateAttempt( const AI_EXECUTION_SESSION& aSession,
-                              const AI_SUGGESTION_RECORD& aCandidate ) const;
+                              const AI_SUGGESTION_RECORD& aCandidate,
+                              const wxString& aRequestedValidationArgsJson =
+                                      wxEmptyString ) const;
     wxString RollbackAttempt( uint64_t aCheckpointId ) const;
     AI_TOOL_INVOCATION_RESULT HandleToolCall(
             const AI_PROVIDER_REQUEST& aRequest,

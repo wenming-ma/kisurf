@@ -99,6 +99,12 @@ public:
 class TOOL_CALLING_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
+    explicit TOOL_CALLING_NEXT_ACTION_PROVIDER(
+            wxString aValidationArgumentsJson = wxS( "{\"level\":\"drc_lite\"}" ) ) :
+            m_ValidationArgumentsJson( std::move( aValidationArgumentsJson ) )
+    {
+    }
+
     AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
     {
         ++m_CallCount;
@@ -139,7 +145,7 @@ public:
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_validate" );
                 call.m_ToolName = wxS( "validate_hidden_attempt" );
-                call.m_ArgumentsJson = wxS( "{\"level\":\"drc_lite\"}" );
+                call.m_ArgumentsJson = m_ValidationArgumentsJson;
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
@@ -159,6 +165,7 @@ public:
 
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    wxString                         m_ValidationArgumentsJson;
 };
 
 
@@ -1840,13 +1847,14 @@ class TRACKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
     AI_SESSION_VALIDATION_RESULT RunValidation(
-            const AI_EXECUTION_SESSION& aSession, const wxString&,
+            const AI_EXECUTION_SESSION& aSession, const wxString& aValidationArgs,
             const wxString& ) override
     {
         ++m_RunCount;
         m_LiveItemCounts.push_back( aSession.ShadowBoard().LiveItemCount() );
         m_BoardIds.push_back( aSession.BoardId().ToStdString() );
         m_CheckpointCounts.push_back( aSession.Checkpoints().size() );
+        m_ValidationArgs.push_back( aValidationArgs.ToStdString() );
 
         AI_SESSION_VALIDATION_RESULT result;
         result.m_Ok = true;
@@ -1863,6 +1871,7 @@ public:
     std::vector<size_t> m_LiveItemCounts;
     std::vector<std::string> m_BoardIds;
     std::vector<size_t> m_CheckpointCounts;
+    std::vector<std::string> m_ValidationArgs;
 };
 
 
@@ -5234,6 +5243,40 @@ BOOST_AUTO_TEST_CASE( RuntimeValidateToolRefreshesAttemptSessionAfterScriptInSam
                        2 );
     BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectCount,
                        2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidateToolPassesRequestedValidationArgs )
+{
+    auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER(
+            wxS( "{\"level\":\"full_drc\",\"scope\":\"affected_area\"}" ) );
+
+    TRACKING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE     previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( validationService.m_ValidationArgs.size(), 2 );
+
+    nlohmann::json toolValidationArgs = nlohmann::json::parse(
+            validationService.m_ValidationArgs.back() );
+
+    BOOST_CHECK_EQUAL( toolValidationArgs["level"].get<std::string>(),
+                       "full_drc" );
+    BOOST_CHECK_EQUAL( toolValidationArgs["scope"].get<std::string>(),
+                       "affected_area" );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 1 );
+    BOOST_CHECK( publishRequest.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"validation_args\"" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"full_drc\"" ) ) );
 }
 
 
