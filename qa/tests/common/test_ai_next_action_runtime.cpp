@@ -299,6 +299,95 @@ public:
 };
 
 
+class PLAN_CANDIDATE_RESULT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "plan candidate result next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxString::Format(
+                            wxS( "{\"decision_kind\":\"attempt\","
+                                 "\"opportunity_type\":\"routing\","
+                                 "\"selected_candidate_index\":0,"
+                                 "\"reason_code\":\"plan_candidate_tool_result\","
+                                 "\"provider_tool_results\":[{"
+                                 "\"request_id\":%llu,"
+                                 "\"tool_call_id\":\"call_plan_candidates\","
+                                 "\"tool_name\":\"routing_generate_polyline_plan_candidates\","
+                                 "\"arguments_json\":\"{}\","
+                                 "\"allowed\":true,"
+                                 "\"executed\":true,"
+                                 "\"error_code\":\"\","
+                                 "\"message\":\"Candidates generated.\","
+                                 "\"result\":{"
+                                 "\"tool\":\"routing.generate_polyline_plan_candidates\","
+                                 "\"status\":\"candidates_generated\","
+                                 "\"candidate_count\":1,"
+                                 "\"candidates\":[{"
+                                 "\"index\":0,"
+                                 "\"title\":\"Polyline plan route\","
+                                 "\"body\":\"Candidate bounded plan for a polyline route.\","
+                                 "\"source_tool\":\"routing.generate_polyline_plan_candidates\","
+                                 "\"context_kind\":\"routing\","
+                                 "\"preview_object_count\":1,"
+                                 "\"edit_object_count\":1,"
+                                 "\"operation\":\"polyline_route_plan\","
+                                 "\"arguments\":{"
+                                 "\"operation\":\"polyline_route_plan\","
+                                 "\"source_tool\":\"routing.generate_polyline_plan_candidates\","
+                                 "\"candidate_strategy\":\"tool_generated_plan\","
+                                 "\"plan\":{\"operations\":[{"
+                                 "\"kind\":\"pcb.create_track_polyline\","
+                                 "\"arguments\":{"
+                                 "\"points\":[{\"x\":10,\"y\":10},{\"x\":60,\"y\":40},{\"x\":110,\"y\":40}],"
+                                 "\"layer\":\"F.Cu\","
+                                 "\"net\":\"GND\","
+                                 "\"width\":150000,"
+                                 "\"alias\":\"plan_polyline\"}}]}},"
+                                 "\"plan\":{\"operations\":[{"
+                                 "\"kind\":\"pcb.create_track_polyline\","
+                                 "\"arguments\":{"
+                                 "\"points\":[{\"x\":10,\"y\":10},{\"x\":60,\"y\":40},{\"x\":110,\"y\":40}],"
+                                 "\"layer\":\"F.Cu\","
+                                 "\"net\":\"GND\","
+                                 "\"width\":150000,"
+                                 "\"alias\":\"plan_polyline\"}}]},"
+                                 "\"landing_facts\":{"
+                                 "\"kind\":\"routing_landing\","
+                                 "\"source\":\"polyline_plan.end\","
+                                 "\"point\":{\"x\":110,\"y\":40},"
+                                 "\"net\":\"GND\","
+                                 "\"layer\":\"F.Cu\","
+                                 "\"width\":150000},"
+                                 "\"publish_allowed\":false}]}}]}" ),
+                            static_cast<unsigned long long>( aRequest.m_RequestId ) );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class APPLY_CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -4993,6 +5082,42 @@ BOOST_AUTO_TEST_CASE( RuntimeAttemptsDecisionToolGeneratedCandidate )
             wxS( "pcb.create_track_segment" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
             wxS( "\"selected_tool\":\"routing.generate_parallel_segment_candidates\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeAttemptsDecisionToolGeneratedPlanCandidate )
+{
+    auto* provider = new PLAN_CANDIDATE_RESULT_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    nlohmann::json arguments = nlohmann::json::parse(
+            suggestion->m_ArgumentsJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( arguments["source_tool"].get<std::string>(),
+                       "routing.generate_polyline_plan_candidates" );
+    BOOST_REQUIRE( arguments.contains( "plan" ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    const AI_NEXT_ACTION_ATTEMPT_RECORD& attempt = runtime.Attempts().front();
+    BOOST_CHECK( attempt.m_Candidate.m_ArgumentsJson.Contains(
+            wxS( "polyline_route_plan" ) ) );
+    BOOST_CHECK( attempt.m_JournalJson.Contains(
+            wxS( "pcb.create_track_segment" ) ) );
+    BOOST_CHECK( attempt.m_JournalJson.Contains(
+            wxS( "plan_polyline:segment:0" ) ) );
+    BOOST_CHECK( attempt.m_JournalJson.Contains(
+            wxS( "plan_polyline:segment:1" ) ) );
+    BOOST_CHECK( attempt.m_ProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"routing.generate_polyline_plan_candidates\"" ) ) );
+    BOOST_CHECK( runtime.CanPreview( suggestion->m_Id ) );
 }
 
 

@@ -1325,6 +1325,20 @@ bool isNextActionRuntimeSuggestion( const AI_SUGGESTION_RECORD& aSuggestion )
 }
 
 
+bool hasNextActionRuntimePreviewArtifact(
+        const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
+
+    return provenance.is_object()
+           && provenance.value( "runtime", std::string() ) == "next_action"
+           && provenance.contains( "attempt" )
+           && provenance["attempt"].is_object()
+           && provenance["attempt"].contains( "session_journal" )
+           && provenance["attempt"]["session_journal"].is_object();
+}
+
+
 void deactivateRuntimePreviewLease( AI_SUGGESTION_RECORD& aSuggestion )
 {
     nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
@@ -5069,6 +5083,41 @@ bool operationCanBeAttemptedDirectly(
 }
 
 
+bool candidateArgumentsHaveExecutablePlan( const nlohmann::json& aArguments )
+{
+    if( !aArguments.is_object()
+        || !aArguments.contains( "plan" )
+        || !aArguments["plan"].is_object()
+        || !aArguments["plan"].contains( "operations" )
+        || !aArguments["plan"]["operations"].is_array()
+        || aArguments["plan"]["operations"].empty()
+        || aArguments["plan"]["operations"].size() > 32 )
+    {
+        return false;
+    }
+
+    for( const nlohmann::json& operation : aArguments["plan"]["operations"] )
+    {
+        if( !operation.is_object()
+            || !operation.contains( "kind" )
+            || !operation["kind"].is_string()
+            || sessionOperationKindFromId( operation["kind"].get<std::string>() )
+                       == AI_SESSION_OPERATION_KIND::Unknown )
+        {
+            return false;
+        }
+
+        if( operation.contains( "arguments" )
+            && !operation["arguments"].is_object() )
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
 std::optional<AI_SUGGESTION_RECORD> candidateRecordFromToolResultJson(
         const nlohmann::json& aRecord,
         const AI_OBSERVATION_PACKET& aObservation )
@@ -5085,6 +5134,13 @@ std::optional<AI_SUGGESTION_RECORD> candidateRecordFromToolResultJson(
     const std::string sourceTool =
             aRecord.value( "source_tool", std::string() );
 
+    if( aRecord.contains( "plan" ) && aRecord["plan"].is_object()
+        && ( !arguments.contains( "plan" )
+             || !arguments["plan"].is_object() ) )
+    {
+        arguments["plan"] = aRecord["plan"];
+    }
+
     if( !sourceTool.empty()
         && ( !arguments.contains( "source_tool" )
              || !arguments["source_tool"].is_string() ) )
@@ -5095,9 +5151,14 @@ std::optional<AI_SUGGESTION_RECORD> candidateRecordFromToolResultJson(
     const wxString argumentsJson = fromUtf8String( arguments.dump() );
     std::optional<AI_SUGGESTION_OPERATION> operation =
             ParseAiSuggestionOperation( argumentsJson );
+    const bool hasExecutablePlan =
+            candidateArgumentsHaveExecutablePlan( arguments );
 
-    if( !operation || !operationCanBeAttemptedDirectly( *operation ) )
+    if( ( !operation || !operationCanBeAttemptedDirectly( *operation ) )
+        && !hasExecutablePlan )
+    {
         return std::nullopt;
+    }
 
     AI_SUGGESTION_RECORD suggestion;
     suggestion.m_EditorKind = aObservation.m_ContextSnapshot.m_EditorKind;
@@ -9274,7 +9335,8 @@ bool AI_NEXT_ACTION_RUNTIME::CanPreview( uint64_t aSuggestionId ) const
 
     return suggestion && isActive( *suggestion )
            && ( !suggestion->m_PreviewObjects.empty()
-                || hasPreviewableOperation( *suggestion ) );
+                || hasPreviewableOperation( *suggestion )
+                || hasNextActionRuntimePreviewArtifact( *suggestion ) );
 }
 
 
@@ -9290,7 +9352,8 @@ bool AI_NEXT_ACTION_RUNTIME::CanAccept( uint64_t aSuggestionId ) const
         return !suggestion->m_Validation.HasBlockingIssue()
                && ( !suggestion->m_EditObjects.empty()
                     || hasPreviewableOperation( *suggestion )
-                    || hasActionPreviewOperation( *suggestion ) );
+                    || hasActionPreviewOperation( *suggestion )
+                    || hasNextActionRuntimePreviewArtifact( *suggestion ) );
     }
 
     return !suggestion->m_PreviewOnly
@@ -9938,25 +10001,64 @@ AI_NEXT_ACTION_ATTEMPT_RECORD AI_NEXT_ACTION_RUNTIME::buildAttempt(
     attempt.m_HiddenStepId =
             session->BeginStep( wxS( "next action hidden attempt" ) );
 
-    const AI_SESSION_OPERATION_KIND operationKind =
-            sessionOperationKindForCandidate( aCandidate );
     const wxString argumentsJson = aCandidate.m_ArgumentsJson.IsEmpty()
                                            ? wxString( wxS( "{}" ) )
                                            : aCandidate.m_ArgumentsJson;
-    AI_ATOMIC_EXECUTION_RESULT execution =
-            AI_ATOMIC_OPERATION_EXECUTOR::Execute( *session, operationKind,
-                                                   argumentsJson );
+    const nlohmann::json candidateArguments =
+            objectFromJsonText( argumentsJson );
 
-    if( !execution.m_Ok )
+    auto appendFailedOperation =
+            [&]( AI_SESSION_OPERATION_KIND aKind,
+                 const wxString& aArgumentsJson,
+                 const AI_ATOMIC_EXECUTION_RESULT& aExecution )
+            {
+                AI_SESSION_OPERATION_RECORD operation;
+                operation.m_Kind = aKind;
+                operation.m_ArgumentsJson = aArgumentsJson;
+                operation.m_ResultJson = aExecution.m_ResultJson.IsEmpty()
+                                                 ? wxString( wxS( "{}" ) )
+                                                 : aExecution.m_ResultJson;
+                operation.m_Warnings = aExecution.m_Warnings;
+                session->AppendOperation( std::move( operation ) );
+            };
+
+    if( candidateArgumentsHaveExecutablePlan( candidateArguments ) )
     {
-        AI_SESSION_OPERATION_RECORD operation;
-        operation.m_Kind = operationKind;
-        operation.m_ArgumentsJson = argumentsJson;
-        operation.m_ResultJson = execution.m_ResultJson.IsEmpty()
-                                         ? wxString( wxS( "{}" ) )
-                                         : execution.m_ResultJson;
-        operation.m_Warnings = execution.m_Warnings;
-        session->AppendOperation( std::move( operation ) );
+        for( const nlohmann::json& operation :
+             candidateArguments["plan"]["operations"] )
+        {
+            const AI_SESSION_OPERATION_KIND operationKind =
+                    sessionOperationKindFromId(
+                            operation["kind"].get<std::string>() );
+            const nlohmann::json operationArguments =
+                    operation.contains( "arguments" )
+                    && operation["arguments"].is_object()
+                            ? operation["arguments"]
+                            : nlohmann::json::object();
+            const wxString operationArgumentsJson =
+                    fromUtf8String( operationArguments.dump() );
+            AI_ATOMIC_EXECUTION_RESULT execution =
+                    AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                            *session, operationKind, operationArgumentsJson );
+
+            if( !execution.m_Ok )
+            {
+                appendFailedOperation( operationKind, operationArgumentsJson,
+                                       execution );
+                break;
+            }
+        }
+    }
+    else
+    {
+        const AI_SESSION_OPERATION_KIND operationKind =
+                sessionOperationKindForCandidate( aCandidate );
+        AI_ATOMIC_EXECUTION_RESULT execution =
+                AI_ATOMIC_OPERATION_EXECUTOR::Execute( *session, operationKind,
+                                                       argumentsJson );
+
+        if( !execution.m_Ok )
+            appendFailedOperation( operationKind, argumentsJson, execution );
     }
 
     AI_SESSION_OBSERVATION sessionObservation =
