@@ -57,6 +57,7 @@ set( QA_COMMON_SRCS
     test_ai_execution_session.cpp
     test_ai_shadow_board.cpp
     test_ai_preview_manager.cpp
+    test_ai_structured_surface_preview_adapter.cpp
     test_ai_next_action_candidate_library.cpp
     test_ai_suggestion_operations.cpp
     test_ai_semantic_tool_call_handler.cpp
