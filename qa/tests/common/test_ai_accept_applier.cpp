@@ -494,4 +494,111 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleSchemaVersionAndAborts )
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleSelectionFingerprintAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "stale surface selection" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"expected_selection_fingerprint\":\"cell:row.power:class\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{"
+                 "\"selection_fingerprint\":\"cell:row.gpio:class\","
+                 "\"fields\":{\"default_clearance\":\"0.15mm\"}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "stale selection fingerprint" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleOverlapSetAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "stale surface overlap set" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"expected_overlap_set\":[\"row.power\"],"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{"
+                 "\"overlap_set\":[\"row.power\",\"row.gpio\"],"
+                 "\"fields\":{\"default_clearance\":\"0.15mm\"}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "stale overlap set" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayAcceptsEquivalentOverlapSetOrdering )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "equivalent overlap set" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"expected_overlap_set\":[\"row.gpio\",\"row.power\"],"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{"
+                 "\"overlap_set\":[\"row.power\",\"row.gpio\"],"
+                 "\"fields\":{\"default_clearance\":\"0.15mm\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+    BOOST_CHECK( surfaceState.Contains(
+            wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
