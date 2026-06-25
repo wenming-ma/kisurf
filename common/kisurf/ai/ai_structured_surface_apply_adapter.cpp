@@ -80,6 +80,38 @@ const nlohmann::json* surfaceRevisionField( const nlohmann::json& aSurface )
 
     return nullptr;
 }
+
+
+const nlohmann::json* scalarMetadataField( const nlohmann::json& aObject,
+                                           const char* aKey )
+{
+    if( aObject.contains( aKey )
+        && ( aObject[aKey].is_string() || aObject[aKey].is_number() ) )
+    {
+        return &aObject[aKey];
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* schemaVersionField( const nlohmann::json& aSurface,
+                                          const nlohmann::json& aRoot )
+{
+    for( const char* key : { "schema_version", "schemaVersion" } )
+    {
+        if( const nlohmann::json* value = scalarMetadataField( aSurface, key ) )
+            return value;
+    }
+
+    for( const char* key : { "schema_version", "schemaVersion" } )
+    {
+        if( const nlohmann::json* value = scalarMetadataField( aRoot, key ) )
+            return value;
+    }
+
+    return nullptr;
+}
 }
 
 
@@ -204,6 +236,28 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
                                    *currentRevision ) )
         {
             aError = wxS( "SurfacePatch stale surface revision." );
+            return false;
+        }
+    }
+
+    if( args.contains( "expected_schema_version" ) )
+    {
+        const nlohmann::json* currentSchemaVersion = nullptr;
+
+        if( workingState.contains( "surfaces" )
+            && workingState["surfaces"].is_object()
+            && workingState["surfaces"].contains( surfaceId )
+            && workingState["surfaces"][surfaceId].is_object() )
+        {
+            currentSchemaVersion = schemaVersionField(
+                    workingState["surfaces"][surfaceId], workingState );
+        }
+
+        if( !currentSchemaVersion
+            || !scalarValuesEqual( args["expected_schema_version"],
+                                   *currentSchemaVersion ) )
+        {
+            aError = wxS( "SurfacePatch stale schema version." );
             return false;
         }
     }
