@@ -1763,6 +1763,9 @@ AI_SUGGESTION_TRIGGER makeAutofillTrigger()
     panel.m_FocusedControlLabel = wxS( "Net class" );
     panel.m_Summary = wxS( "Net properties table" );
     panel.m_StateJson = wxS( "{\"schema_version\":\"net-class-v1\","
+                             "\"surface_revision\":42,"
+                             "\"selection_fingerprint\":\"cell:1:class\","
+                             "\"overlap_set\":[\"row.default\",\"row.power\"],"
                              "\"columns\":[\"net\",\"class\"],"
                              "\"row_count\":4,"
                              "\"target_scope\":{\"kind\":\"cell\","
@@ -2555,6 +2558,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE( packet.contains( "validation_state" ) );
     BOOST_REQUIRE( packet.contains( "normalized_schema" ) );
     BOOST_REQUIRE( packet.contains( "field_origin_facts" ) );
+    BOOST_REQUIRE( packet.contains( "surface_guard_facts" ) );
     BOOST_CHECK_EQUAL( packet["schema_version"].get<std::string>(),
                        "net-class-v1" );
     BOOST_CHECK_EQUAL( packet["target_scope"]["kind"].get<std::string>(),
@@ -2592,6 +2596,34 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             packet["field_origin_facts"].at( 0 )["source"].get<std::string>(),
             "value_provenance" );
+    const nlohmann::json& guardFacts = packet["surface_guard_facts"];
+    BOOST_CHECK_EQUAL( guardFacts["surface_id"].get<std::string>(),
+                       "properties" );
+    BOOST_CHECK( guardFacts["has_complete_accept_guard"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            guardFacts["surface_revision"]["value"].get<int>(), 42 );
+    BOOST_CHECK_EQUAL(
+            guardFacts["surface_revision"]["source"].get<std::string>(),
+            "panel_state.state.surface_revision" );
+    BOOST_CHECK_EQUAL(
+            guardFacts["surface_revision"]["expected_argument"].get<std::string>(),
+            "expected_surface_revision" );
+    BOOST_CHECK_EQUAL(
+            guardFacts["schema_version"]["value"].get<std::string>(),
+            "net-class-v1" );
+    BOOST_CHECK_EQUAL(
+            guardFacts["schema_version"]["source"].get<std::string>(),
+            "panel_state.state.schema_version" );
+    BOOST_CHECK_EQUAL(
+            guardFacts["selection_fingerprint"]["value"].get<std::string>(),
+            "cell:1:class" );
+    BOOST_CHECK_EQUAL(
+            guardFacts["selection_fingerprint"]["expected_argument"].get<std::string>(),
+            "expected_selection_fingerprint" );
+    BOOST_REQUIRE_EQUAL( guardFacts["overlap_set"]["value"].size(), 2 );
+    BOOST_CHECK_EQUAL(
+            guardFacts["overlap_set"]["expected_argument"].get<std::string>(),
+            "expected_overlap_set" );
 }
 
 

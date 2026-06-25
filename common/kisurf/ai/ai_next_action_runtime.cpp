@@ -3023,6 +3023,83 @@ nlohmann::json fieldOriginFactsJson( const AI_PANEL_STATE_RECORD& aPanel,
 }
 
 
+const nlohmann::json* firstSurfaceGuardValue(
+        const nlohmann::json& aState,
+        std::initializer_list<const char*> aKeys,
+        std::string& aMatchedKey )
+{
+    if( !aState.is_object() )
+        return nullptr;
+
+    for( const char* key : aKeys )
+    {
+        if( aState.contains( key ) && !aState[key].is_null() )
+        {
+            aMatchedKey = key;
+            return &aState[key];
+        }
+    }
+
+    aMatchedKey.clear();
+    return nullptr;
+}
+
+
+nlohmann::json surfaceGuardFieldJson(
+        const nlohmann::json& aState,
+        std::initializer_list<const char*> aKeys,
+        const char* aExpectedArgument )
+{
+    std::string           matchedKey;
+    const nlohmann::json* value =
+            firstSurfaceGuardValue( aState, aKeys, matchedKey );
+
+    nlohmann::json field =
+            { { "available", value != nullptr },
+              { "expected_argument", aExpectedArgument } };
+
+    if( value )
+    {
+        field["value"] = *value;
+        field["source"] = "panel_state.state." + matchedKey;
+    }
+
+    return field;
+}
+
+
+nlohmann::json surfaceGuardFactsJson( const AI_PANEL_STATE_RECORD& aPanel,
+                                      const nlohmann::json& aState )
+{
+    nlohmann::json facts =
+            { { "surface_id", toUtf8String( aPanel.m_Id ) },
+              { "surface_title", toUtf8String( aPanel.m_Title ) },
+              { "source", "panel_state.state" } };
+
+    facts["surface_revision"] =
+            surfaceGuardFieldJson( aState, { "surface_revision", "revision" },
+                                   "expected_surface_revision" );
+    facts["schema_version"] =
+            surfaceGuardFieldJson( aState, { "schema_version", "schemaVersion" },
+                                   "expected_schema_version" );
+    facts["selection_fingerprint"] =
+            surfaceGuardFieldJson(
+                    aState,
+                    { "selection_fingerprint", "selectionFingerprint" },
+                    "expected_selection_fingerprint" );
+    facts["overlap_set"] =
+            surfaceGuardFieldJson( aState, { "overlap_set", "overlapSet" },
+                                   "expected_overlap_set" );
+    facts["has_complete_accept_guard"] =
+            facts["surface_revision"]["available"].get<bool>()
+            && facts["schema_version"]["available"].get<bool>()
+            && facts["selection_fingerprint"]["available"].get<bool>()
+            && facts["overlap_set"]["available"].get<bool>();
+
+    return facts;
+}
+
+
 void copySurfaceStateField( nlohmann::json& aPacket,
                             const nlohmann::json& aState,
                             const char* aField )
@@ -3192,6 +3269,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                     normalizedSurfaceSchemaJson( *panel, state );
             packet["field_origin_facts"] =
                     fieldOriginFactsJson( *panel, state );
+            packet["surface_guard_facts"] =
+                    surfaceGuardFactsJson( *panel, state );
         }
     }
 
