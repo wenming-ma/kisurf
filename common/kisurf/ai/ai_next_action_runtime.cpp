@@ -2095,6 +2095,23 @@ nlohmann::json placementObstacleFactJson( const AI_OBJECT_REF& aObject )
         return fact;
     }
 
+    if( aObject.m_Type == PCB_PAD_T || detailsKindEquals( details, "pad" ) )
+    {
+        if( !details.contains( "position" ) && !details.contains( "bbox" ) )
+            return nlohmann::json::object();
+
+        nlohmann::json fact = visibleObjectBaseFact( aObject );
+        fact["kind"] = "pad_obstacle";
+        copyJsonFieldIfPresent( fact, details, "footprint" );
+        copyJsonFieldIfPresent( fact, details, "pad_name" );
+        copyJsonFieldIfPresent( fact, details, "position" );
+        copyJsonFieldIfPresent( fact, details, "bbox" );
+        copyJsonFieldIfPresent( fact, details, "net_name" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layer_set" );
+        return fact;
+    }
+
     if( aObject.m_Type == PCB_FOOTPRINT_T || detailsKindEquals( details, "footprint" ) )
     {
         if( !details.contains( "bbox" ) )

@@ -1395,6 +1395,17 @@ AI_OBJECT_REF footprintRef()
 }
 
 
+AI_OBJECT_REF padRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_PAD_T, wxS( "pad:U4.1" ),
+            wxS( "{\"kind\":\"pad\",\"footprint\":\"U4\",\"pad_name\":\"1\","
+                 "\"position\":{\"x\":240,\"y\":210},"
+                 "\"bbox\":{\"x\":220,\"y\":190,\"width\":40,\"height\":40},"
+                 "\"layer\":\"F.Cu\",\"net_name\":\"GND\"}" ) );
+}
+
+
 AI_OBJECT_REF keepoutRef()
 {
     return AI_OBJECT_REF(
@@ -2155,6 +2166,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"width\":180,\"height\":120}}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             trackRef( 180, 210, 300, 210, wxS( "GND" ) ) );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
@@ -2199,7 +2211,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
             320 );
     BOOST_REQUIRE( routingPacket.contains( "visible_object_summaries" ) );
-    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 3 );
+    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 4 );
     BOOST_CHECK_EQUAL(
             routingPacket["visible_object_summaries"].at( 0 )["details"]["net_name"]
                     .get<std::string>(),
@@ -2212,6 +2224,8 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
         routingLocalObstacleLabels.insert( fact["label"].get<std::string>() );
 
     BOOST_CHECK( routingLocalObstacleLabels.find( "track:180,210->300,210" )
+                 != routingLocalObstacleLabels.end() );
+    BOOST_CHECK( routingLocalObstacleLabels.find( "pad:U4.1" )
                  != routingLocalObstacleLabels.end() );
     BOOST_CHECK( routingLocalObstacleLabels.find( "track:1000,1000->1200,1000" )
                  == routingLocalObstacleLabels.end() );
