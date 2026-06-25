@@ -1898,6 +1898,39 @@ public:
 };
 
 
+class ITEM_BBOX_ISSUE_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"grade\":\"preview\","
+                     "\"issue_count\":1,"
+                     "\"issues\":[{\"kind\":\"clearance\","
+                     "\"severity\":\"warning\","
+                     "\"message\":\"candidate overlaps another net\","
+                     "\"main_item_uuid\":\"main-uuid\","
+                     "\"main_item_bbox\":{\"x\":10,\"y\":20,"
+                     "\"width\":30,\"height\":40},"
+                     "\"aux_item_uuid\":\"aux-uuid\","
+                     "\"aux_item_bbox\":{\"x\":50,\"y\":60,"
+                     "\"width\":70,\"height\":80},"
+                     "\"layer_name\":\"F.Cu\"}]}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
 class SUMMARY_FACTS_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -5653,6 +5686,41 @@ BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeIssueGeometryForReview )
             facts["issue_geometry_facts"].at( 0 )["geometry"]["layer"]
                     .get<std::string>(),
             "F.Cu" );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeNativeDrcItemBboxesForReview )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    ITEM_BBOX_ISSUE_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE           previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    nlohmann::json facts = nlohmann::json::parse(
+            runtime.Attempts().front().m_ValidationFactsJson.ToStdString() );
+
+    BOOST_REQUIRE( facts.contains( "issue_geometry_facts" ) );
+    BOOST_REQUIRE( facts["issue_geometry_facts"].is_array() );
+    BOOST_REQUIRE_EQUAL( facts["issue_geometry_facts"].size(), 1 );
+
+    const nlohmann::json& issueFact = facts["issue_geometry_facts"].at( 0 );
+    BOOST_CHECK_EQUAL( issueFact["kind"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( issueFact["severity"].get<std::string>(), "warning" );
+    BOOST_REQUIRE( issueFact.contains( "main_item_bbox" ) );
+    BOOST_CHECK_EQUAL( issueFact["main_item_bbox"]["width"].get<int>(), 30 );
+    BOOST_REQUIRE( issueFact.contains( "aux_item_bbox" ) );
+    BOOST_CHECK_EQUAL( issueFact["aux_item_bbox"]["height"].get<int>(), 80 );
+    BOOST_CHECK_EQUAL( issueFact["layer_name"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }
 
