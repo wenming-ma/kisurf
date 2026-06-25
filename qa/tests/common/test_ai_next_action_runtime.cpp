@@ -1898,6 +1898,34 @@ public:
 };
 
 
+class SUMMARY_FACTS_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"scope\":\"affected_area\","
+                     "\"grade\":\"preview\","
+                     "\"exactness\":\"preview_state\","
+                     "\"issue_count\":0,"
+                     "\"rule_load\":{\"status\":\"loaded\"},"
+                     "\"connectivity\":{\"status\":\"current\"},"
+                     "\"refill\":{\"status\":\"not_required\"}}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
 class TRACKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -5625,6 +5653,46 @@ BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeIssueGeometryForReview )
             facts["issue_geometry_facts"].at( 0 )["geometry"]["layer"]
                     .get<std::string>(),
             "F.Cu" );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeReviewSummary )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    SUMMARY_FACTS_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE         previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    nlohmann::json facts = nlohmann::json::parse(
+            runtime.Attempts().front().m_ValidationFactsJson.ToStdString() );
+
+    BOOST_REQUIRE( facts.contains( "validation_summary" ) );
+    BOOST_CHECK_EQUAL(
+            facts["validation_summary"]["backend"].get<std::string>(),
+            "native_drc" );
+    BOOST_CHECK_EQUAL(
+            facts["validation_summary"]["grade"].get<std::string>(),
+            "preview" );
+    BOOST_CHECK_EQUAL(
+            facts["validation_summary"]["exactness"].get<std::string>(),
+            "preview_state" );
+    BOOST_CHECK_EQUAL(
+            facts["validation_summary"]["connectivity"]["status"]
+                    .get<std::string>(),
+            "current" );
+    BOOST_CHECK_EQUAL(
+            facts["validation_summary"]["refill"]["status"].get<std::string>(),
+            "not_required" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }
 

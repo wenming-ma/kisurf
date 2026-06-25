@@ -7034,6 +7034,32 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
         }
 
         if( serviceResult.contains( "validation" )
+            && serviceResult["validation"].is_object() )
+        {
+            const nlohmann::json& nativeValidation =
+                    serviceResult["validation"];
+            nlohmann::json summary = nlohmann::json::object();
+
+            for( const char* key : { "status", "backend", "scope", "level",
+                                     "grade", "exactness", "issue_count",
+                                     "preview_state_exact",
+                                     "accept_validation_sufficient" } )
+            {
+                if( nativeValidation.contains( key ) )
+                    summary[key] = nativeValidation[key];
+            }
+
+            for( const char* key : { "rule_load", "connectivity", "refill" } )
+            {
+                if( nativeValidation.contains( key ) )
+                    summary[key] = nativeValidation[key];
+            }
+
+            if( !summary.empty() )
+                validation["validation_summary"] = std::move( summary );
+        }
+
+        if( serviceResult.contains( "validation" )
             && serviceResult["validation"].is_object()
             && serviceResult["validation"].contains( "issues" )
             && serviceResult["validation"]["issues"].is_array() )
