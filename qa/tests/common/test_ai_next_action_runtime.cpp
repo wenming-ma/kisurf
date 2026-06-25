@@ -5036,6 +5036,64 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeReplayTraceRecordsFullNextActionLoop )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    const nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( trace["runtime_step_id"].get<uint64_t>(), 1 );
+    BOOST_CHECK_EQUAL( trace["terminal_state"].get<std::string>(), "published" );
+    BOOST_REQUIRE( trace["semantic_event"].is_object() );
+    BOOST_CHECK_EQUAL( trace["semantic_event"]["kind"].get<std::string>(), "layout" );
+    BOOST_CHECK( trace["semantic_event"]["slot_id"].get<std::string>().find(
+                         "layout" ) != std::string::npos );
+    BOOST_REQUIRE( trace["observation_packet"].is_object() );
+    BOOST_CHECK_EQUAL( trace["observation_packet"]["observation_packet_id"].get<uint64_t>(),
+                       1 );
+    BOOST_CHECK( trace["observation_packet"]["structured_facts"].contains(
+            "work_state_packet" ) );
+    BOOST_REQUIRE( trace["llm_decision"].is_object() );
+    BOOST_CHECK_EQUAL( trace["llm_decision"]["decision_kind"].get<std::string>(),
+                       "attempt" );
+    BOOST_REQUIRE( trace["attempts"].is_array() );
+    BOOST_REQUIRE_EQUAL( trace["attempts"].size(), 1 );
+    BOOST_CHECK( trace["attempts"].at( 0 )["hidden_attempt_journal"]
+                         ["operations"]
+                                 .is_array() );
+    BOOST_CHECK( trace["attempts"].at( 0 )["render_outputs"].is_object() );
+    BOOST_CHECK( trace["attempts"].at( 0 )["validation_facts"].is_object() );
+    BOOST_CHECK( trace["attempts"].at( 0 )["budget_counters"].is_object() );
+    BOOST_REQUIRE( trace["llm_review_decision"].is_object() );
+    BOOST_CHECK_EQUAL( trace["llm_review_decision"]["decision_kind"].get<std::string>(),
+                       "publish" );
+    BOOST_REQUIRE( trace["publish_decision"].is_object() );
+    BOOST_CHECK( trace["publish_decision"]["preview_gate_result"]["allowed"].get<bool>() );
+    BOOST_CHECK_EQUAL( trace["published_suggestion_id"].get<uint64_t>(),
+                       suggestion->m_Id );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 {
     auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();

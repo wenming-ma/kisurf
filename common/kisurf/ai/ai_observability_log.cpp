@@ -21,7 +21,7 @@ wxString fromUtf8String( const std::string& aText )
 }
 
 
-wxString redactSensitiveText( const wxString& aText )
+wxString redactSensitiveText( const wxString& aText, bool aTruncate = true )
 {
     wxString text = aText;
 
@@ -39,7 +39,7 @@ wxString redactSensitiveText( const wxString& aText )
                                wxRE_ADVANCED | wxRE_ICASE );
     credentialPattern.ReplaceAll( &text, wxS( "\\1: [redacted]" ) );
 
-    if( text.length() > 4000 )
+    if( aTruncate && text.length() > 4000 )
         text = text.Left( 4000 ) + wxS( "...[truncated]" );
 
     return text;
@@ -467,6 +467,24 @@ void appendSuggestionEntry( const AI_SUGGESTION_RECORD& aSuggestion,
     entry.m_DetailsJson = dumpJson( suggestionDetailsJson( aSuggestion ) );
     aEntries.push_back( std::move( entry ) );
 }
+
+
+void appendNextActionReplayTraceEntry(
+        const AI_NEXT_ACTION_REPLAY_TRACE_RECORD& aTrace,
+        std::vector<AI_AGENT_OBSERVABILITY_ENTRY>& aEntries )
+{
+    AI_AGENT_OBSERVABILITY_ENTRY entry;
+    entry.m_Sequence = 800000000 + aTrace.m_Sequence;
+    entry.m_Kind = AI_AGENT_OBSERVABILITY_KIND::NextActionReplay;
+    entry.m_Title = wxS( "Next Action replay" );
+    entry.m_Summary =
+            wxString::Format( wxS( "step %llu: %s" ),
+                              static_cast<unsigned long long>(
+                                      aTrace.m_RuntimeStepId ),
+                              redactSensitiveText( aTrace.m_Status ) );
+    entry.m_DetailsJson = redactSensitiveText( aTrace.m_ReplayJson, false );
+    aEntries.push_back( std::move( entry ) );
+}
 } // namespace
 
 
@@ -474,6 +492,17 @@ std::vector<AI_AGENT_OBSERVABILITY_ENTRY> AI_AGENT_OBSERVABILITY_LOG::Build(
         const std::vector<AI_TRACE_RECORD>& aTraces,
         const std::vector<AI_ACTIVITY_RECORD>& aActivity,
         const std::vector<AI_SUGGESTION_RECORD>& aSuggestions,
+        size_t aLimit ) const
+{
+    return Build( aTraces, aActivity, aSuggestions, {}, aLimit );
+}
+
+
+std::vector<AI_AGENT_OBSERVABILITY_ENTRY> AI_AGENT_OBSERVABILITY_LOG::Build(
+        const std::vector<AI_TRACE_RECORD>& aTraces,
+        const std::vector<AI_ACTIVITY_RECORD>& aActivity,
+        const std::vector<AI_SUGGESTION_RECORD>& aSuggestions,
+        const std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD>& aNextActionReplayTraces,
         size_t aLimit ) const
 {
     std::vector<AI_AGENT_OBSERVABILITY_ENTRY> entries;
@@ -486,6 +515,12 @@ std::vector<AI_AGENT_OBSERVABILITY_ENTRY> AI_AGENT_OBSERVABILITY_LOG::Build(
 
     for( const AI_SUGGESTION_RECORD& suggestion : aSuggestions )
         appendSuggestionEntry( suggestion, entries );
+
+    for( const AI_NEXT_ACTION_REPLAY_TRACE_RECORD& replayTrace :
+         aNextActionReplayTraces )
+    {
+        appendNextActionReplayTraceEntry( replayTrace, entries );
+    }
 
     std::stable_sort( entries.begin(), entries.end(),
                       []( const AI_AGENT_OBSERVABILITY_ENTRY& aFirst,
