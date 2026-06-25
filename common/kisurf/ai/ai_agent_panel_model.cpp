@@ -346,6 +346,16 @@ bool AI_AGENT_PANEL_MODEL::AcceptSuggestion( uint64_t aSuggestionId,
 }
 
 
+bool AI_AGENT_PANEL_MODEL::RecordSuggestionGateResult(
+        uint64_t aSuggestionId, const wxString& aKey,
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    return m_NextActionRuntime
+           && m_NextActionRuntime->RecordSuggestionGateResult(
+                   aSuggestionId, aKey, aGate );
+}
+
+
 bool AI_AGENT_PANEL_MODEL::MarkSuggestionAccepted( uint64_t aSuggestionId )
 {
     if( m_NextActionRuntime && m_NextActionRuntime->MarkAccepted( aSuggestionId ) )

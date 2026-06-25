@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 
 #include <array>
+#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
@@ -359,6 +360,30 @@ bool runtimeAcceptTokenMatchesDependency(
 }
 
 
+AI_NEXT_ACTION_GATE_RESULT acceptGateResult(
+        bool aAllowed, std::initializer_list<wxString> aReasons )
+{
+    AI_NEXT_ACTION_GATE_RESULT gate;
+    gate.m_Gate = wxS( "accept" );
+    gate.m_Allowed = aAllowed;
+
+    for( const wxString& reason : aReasons )
+        gate.m_Reasons.push_back( reason );
+
+    return gate;
+}
+
+
+void recordAcceptGateResult( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+                             bool aAllowed,
+                             std::initializer_list<wxString> aReasons )
+{
+    aModel.RecordSuggestionGateResult(
+            aSuggestionId, wxS( "accept_gate_result" ),
+            acceptGateResult( aAllowed, aReasons ) );
+}
+
+
 bool sameContextVersion( const AI_CONTEXT_VERSION& aLeft,
                          const AI_CONTEXT_VERSION& aRight )
 {
@@ -593,13 +618,29 @@ bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId
     if( !suggestion || !hasNextActionSessionJournal( *suggestion ) )
         return false;
 
-    if( !aModel.CanAcceptSuggestion( aSuggestionId )
-        || !sameContextVersion( suggestion->m_ContextVersion,
-                                aCurrentContextVersion.m_ContextVersion )
-        || !runtimeAcceptTokenMatchesDependency( *suggestion,
-                                                 aCurrentContextVersion )
-        || !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
+    if( !aModel.CanAcceptSuggestion( aSuggestionId ) )
     {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "accept_not_available" ) } );
+        aModel.ExpireSuggestion( aSuggestionId );
+        return false;
+    }
+
+    if( !sameContextVersion( suggestion->m_ContextVersion,
+                             aCurrentContextVersion.m_ContextVersion )
+        || !runtimeAcceptTokenMatchesDependency( *suggestion,
+                                                 aCurrentContextVersion ) )
+    {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "context_drift" ) } );
+        aModel.ExpireSuggestion( aSuggestionId );
+        return false;
+    }
+
+    if( !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
+    {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "accept_validation_failed" ) } );
         aModel.ExpireSuggestion( aSuggestionId );
         return false;
     }
@@ -610,10 +651,16 @@ bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId
                                          error );
 
     if( !session )
+    {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "session_journal_invalid" ) } );
         return false;
+    }
 
     if( !runAcceptGateValidation( *session, aValidationService, error ) )
     {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "accept_validation_failed" ) } );
         aModel.ExpireSuggestion( aSuggestionId );
         return false;
     }
@@ -624,10 +671,14 @@ bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId
 
     if( !result.m_Ok )
     {
+        recordAcceptGateResult( aModel, aSuggestionId, false,
+                                { wxS( "edit_apply_failed" ),
+                                  result.m_ErrorCode } );
         aModel.ExpireSuggestion( aSuggestionId );
         return false;
     }
 
+    recordAcceptGateResult( aModel, aSuggestionId, true, {} );
     return aModel.MarkSuggestionAccepted( aSuggestionId );
 }
 

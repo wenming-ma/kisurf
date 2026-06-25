@@ -75,6 +75,8 @@ public:
     bool PreviewSuggestion( uint64_t aSuggestionId, AI_PREVIEW_MANAGER& aPreviewManager );
     bool AcceptSuggestion( uint64_t aSuggestionId, AI_EDIT_SESSION& aEditSession,
                            const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );
+    bool RecordSuggestionGateResult( uint64_t aSuggestionId, const wxString& aKey,
+                                     const AI_NEXT_ACTION_GATE_RESULT& aGate );
     bool MarkSuggestionAccepted( uint64_t aSuggestionId );
     bool RejectSuggestion( uint64_t aSuggestionId );
     bool ExpireSuggestion( uint64_t aSuggestionId );

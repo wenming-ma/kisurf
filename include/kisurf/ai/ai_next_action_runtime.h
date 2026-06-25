@@ -284,6 +284,8 @@ public:
                  const AI_CONTEXT_VERSION& aCurrentContextVersion );
     bool Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aEditSession,
                  const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );
+    bool RecordSuggestionGateResult( uint64_t aSuggestionId, const wxString& aKey,
+                                     const AI_NEXT_ACTION_GATE_RESULT& aGate );
     bool MarkAccepted( uint64_t aSuggestionId );
     bool Reject( uint64_t aSuggestionId );
     bool Expire( uint64_t aSuggestionId );

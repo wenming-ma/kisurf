@@ -751,6 +751,12 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeUsesPublishedAttemptJournalReplay )
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( accepted.has_value() );
     BOOST_CHECK( accepted->m_Status == AI_SUGGESTION_STATUS::Accepted );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
@@ -824,6 +830,14 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidatio
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( expired.has_value() );
     BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
@@ -869,6 +883,14 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidatio
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( expired.has_value() );
     BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 

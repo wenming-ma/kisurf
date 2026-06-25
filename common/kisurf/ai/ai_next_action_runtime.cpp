@@ -851,10 +851,10 @@ nlohmann::json parseObjectBody( const wxString& aBody )
 
 
 void attachGateResultToSuggestion( AI_SUGGESTION_RECORD& aSuggestion,
-                                   const char* aKey,
+                                   const wxString& aKey,
                                    const AI_NEXT_ACTION_GATE_RESULT& aGate )
 {
-    if( aSuggestion.m_RuntimeProvenanceJson.IsEmpty() )
+    if( aSuggestion.m_RuntimeProvenanceJson.IsEmpty() || aKey.IsEmpty() )
         return;
 
     nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
@@ -869,7 +869,7 @@ void attachGateResultToSuggestion( AI_SUGGESTION_RECORD& aSuggestion,
     if( gate.is_discarded() || !gate.is_object() )
         gate = nlohmann::json::object();
 
-    provenance[aKey] = std::move( gate );
+    provenance[toUtf8String( aKey )] = std::move( gate );
     aSuggestion.m_RuntimeProvenanceJson = fromUtf8String( provenance.dump() );
 }
 
@@ -892,7 +892,7 @@ void attachAcceptGateResult( AI_SUGGESTION_RECORD& aSuggestion,
                              bool aAllowed,
                              std::initializer_list<wxString> aReasons )
 {
-    attachGateResultToSuggestion( aSuggestion, "accept_gate_result",
+    attachGateResultToSuggestion( aSuggestion, wxS( "accept_gate_result" ),
                                   acceptGateResult( aAllowed, aReasons ) );
 }
 
@@ -5955,6 +5955,20 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
     attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
+    return true;
+}
+
+
+bool AI_NEXT_ACTION_RUNTIME::RecordSuggestionGateResult(
+        uint64_t aSuggestionId, const wxString& aKey,
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    AI_SUGGESTION_RECORD* suggestion = findMutable( aSuggestionId );
+
+    if( !suggestion )
+        return false;
+
+    attachGateResultToSuggestion( *suggestion, aKey, aGate );
     return true;
 }
 
