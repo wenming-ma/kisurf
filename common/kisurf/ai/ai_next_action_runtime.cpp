@@ -6235,6 +6235,143 @@ bool AI_NEXT_ACTION_RUNTIME::CanAccept( uint64_t aSuggestionId ) const
 }
 
 
+wxString surfacePatchOverlayValueLabel( const nlohmann::json& aValue )
+{
+    if( aValue.is_string() )
+        return fromUtf8String( aValue.get<std::string>() );
+
+    if( aValue.is_null() )
+        return wxS( "<null>" );
+
+    return fromUtf8String( aValue.dump() );
+}
+
+
+wxString surfacePatchOverlayItemLabel( const nlohmann::json& aEntry,
+                                       size_t aFallbackIndex )
+{
+    if( aEntry.contains( "target_path" ) && aEntry["target_path"].is_string() )
+        return fromUtf8String( aEntry["target_path"].get<std::string>() );
+
+    return wxString::Format( wxS( "surface_patch_diff_%zu" ),
+                             aFallbackIndex );
+}
+
+
+wxString surfacePatchOverlayMessage( const nlohmann::json& aEntry )
+{
+    const std::string kind = jsonStringOrEmpty( aEntry, "kind" );
+    const nlohmann::json& visualTarget =
+            aEntry.contains( "visual_target" )
+            && aEntry["visual_target"].is_object()
+                    ? aEntry["visual_target"]
+                    : nlohmann::json::object();
+    wxString proposed = wxS( "<unknown>" );
+
+    if( aEntry.contains( "proposed_value" ) )
+        proposed = surfacePatchOverlayValueLabel( aEntry["proposed_value"] );
+    else if( aEntry.contains( "value" ) )
+        proposed = surfacePatchOverlayValueLabel( aEntry["value"] );
+
+    if( kind == "set_cell" )
+    {
+        return wxString::Format(
+                wxS( "SurfacePatch cell %s/%s -> %s" ),
+                fromUtf8String( jsonStringOrEmpty( visualTarget, "row_id" ) ),
+                fromUtf8String( jsonStringOrEmpty( visualTarget, "column_id" ) ),
+                proposed );
+    }
+
+    if( kind == "set_field" )
+    {
+        return wxString::Format(
+                wxS( "SurfacePatch field %s -> %s" ),
+                fromUtf8String( jsonStringOrEmpty( visualTarget, "field_id" ) ),
+                proposed );
+    }
+
+    return wxString::Format( wxS( "SurfacePatch %s -> %s" ),
+                             fromUtf8String( kind ), proposed );
+}
+
+
+void showSurfacePatchPreviewOverlaysFromToolRecords(
+        const nlohmann::json& aToolRecords,
+        AI_PREVIEW_MANAGER& aPreviewManager )
+{
+    if( !aToolRecords.is_array() )
+        return;
+
+    size_t fallbackIndex = 0;
+
+    for( const nlohmann::json& toolRecord : aToolRecords )
+    {
+        if( !toolRecord.is_object() || !toolRecord.contains( "result" )
+            || !toolRecord["result"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& result = toolRecord["result"];
+
+        if( !result.contains( "surface_patch_previews" )
+            || !result["surface_patch_previews"].is_array() )
+        {
+            continue;
+        }
+
+        for( const nlohmann::json& preview : result["surface_patch_previews"] )
+        {
+            if( !preview.is_object()
+                || !preview.contains( "surface_patch_diff_entries" )
+                || !preview["surface_patch_diff_entries"].is_array() )
+            {
+                continue;
+            }
+
+            for( const nlohmann::json& entry :
+                 preview["surface_patch_diff_entries"] )
+            {
+                if( !entry.is_object() )
+                    continue;
+
+                aPreviewManager.ShowItemOverlay(
+                        surfacePatchOverlayItemLabel( entry, fallbackIndex++ ),
+                        wxS( "structured_surface_patch" ), wxS( "preview" ),
+                        surfacePatchOverlayMessage( entry ),
+                        fromUtf8String( entry.dump() ) );
+            }
+        }
+    }
+}
+
+
+void showSurfacePatchPreviewOverlays(
+        const AI_SUGGESTION_RECORD& aSuggestion,
+        AI_PREVIEW_MANAGER& aPreviewManager )
+{
+    nlohmann::json provenance =
+            parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
+
+    if( !provenance.is_object() )
+        return;
+
+    if( provenance.contains( "provider_tool_results" ) )
+    {
+        showSurfacePatchPreviewOverlaysFromToolRecords(
+                provenance["provider_tool_results"], aPreviewManager );
+    }
+
+    if( provenance.contains( "attempt" ) && provenance["attempt"].is_object()
+        && provenance["attempt"].contains( "provider_tool_results" ) )
+    {
+        showSurfacePatchPreviewOverlaysFromToolRecords(
+                provenance["attempt"]["provider_tool_results"],
+                aPreviewManager );
+    }
+}
+
+
 bool AI_NEXT_ACTION_RUNTIME::BeginPreview( uint64_t aSuggestionId,
                                            AI_PREVIEW_MANAGER& aPreviewManager )
 {
@@ -6253,6 +6390,8 @@ bool AI_NEXT_ACTION_RUNTIME::BeginPreview( uint64_t aSuggestionId,
 
     for( const AI_OBJECT_REF& object : suggestion->m_PreviewObjects )
         aPreviewManager.ShowObject( object );
+
+    showSurfacePatchPreviewOverlays( *suggestion, aPreviewManager );
 
     suggestion->m_Status = AI_SUGGESTION_STATUS::Previewing;
     return true;

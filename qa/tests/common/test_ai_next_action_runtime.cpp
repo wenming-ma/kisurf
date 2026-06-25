@@ -2,6 +2,7 @@
 
 #include <kisurf/ai/ai_edit_session.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
+#include <kisurf/ai/ai_preview_manager.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
@@ -50,6 +51,48 @@ public:
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
     std::deque<wxString>             m_Bodies;
+};
+
+
+class RUNTIME_PREVIEW_RECORDING_ADAPTER : public AI_PREVIEW_ADAPTER
+{
+public:
+    void BeginPreview( uint64_t aPreviewId ) override
+    {
+        m_BeginIds.push_back( aPreviewId );
+    }
+
+    void ShowObject( uint64_t aPreviewId, const AI_OBJECT_REF& aObject ) override
+    {
+        wxUnusedVar( aObject );
+        m_ObjectPreviewIds.push_back( aPreviewId );
+    }
+
+    void ShowOperation( uint64_t aPreviewId,
+                        const AI_SUGGESTION_OPERATION& aOperation ) override
+    {
+        wxUnusedVar( aOperation );
+        m_OperationPreviewIds.push_back( aPreviewId );
+    }
+
+    void ShowOverlay( uint64_t aPreviewId,
+                      const AI_PREVIEW_ITEM_OVERLAY& aOverlay ) override
+    {
+        m_OverlayPreviewIds.push_back( aPreviewId );
+        m_Overlays.push_back( aOverlay );
+    }
+
+    void ClearPreview( uint64_t aPreviewId ) override
+    {
+        m_ClearIds.push_back( aPreviewId );
+    }
+
+    std::vector<uint64_t>                m_BeginIds;
+    std::vector<uint64_t>                m_ObjectPreviewIds;
+    std::vector<uint64_t>                m_OperationPreviewIds;
+    std::vector<uint64_t>                m_OverlayPreviewIds;
+    std::vector<uint64_t>                m_ClearIds;
+    std::vector<AI_PREVIEW_ITEM_OVERLAY> m_Overlays;
 };
 
 
@@ -3096,6 +3139,47 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"attempt_session_journal\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBeginPreviewProjectsSurfacePatchDiffOverlays )
+{
+    auto* provider = new SURFACE_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makePanelFillTriggerWithTargetScope() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RUNTIME_PREVIEW_RECORDING_ADAPTER adapter;
+    AI_PREVIEW_MANAGER                previewManager( adapter );
+
+    BOOST_REQUIRE( runtime.BeginPreview( suggestion->m_Id, previewManager ) );
+    BOOST_REQUIRE_EQUAL( adapter.m_BeginIds.size(), 1 );
+    BOOST_REQUIRE_EQUAL( adapter.m_Overlays.size(), 2 );
+    BOOST_REQUIRE_EQUAL( previewManager.CurrentPreviewOverlays().size(), 2 );
+
+    const AI_PREVIEW_ITEM_OVERLAY& overlay = adapter.m_Overlays.front();
+    BOOST_CHECK_EQUAL( overlay.m_OverlayKind,
+                       wxString( wxS( "structured_surface_patch" ) ) );
+    BOOST_CHECK_EQUAL( overlay.m_Severity, wxString( wxS( "preview" ) ) );
+    BOOST_CHECK( overlay.m_ItemLabel.Contains(
+            wxS( "surfaces.board_setup.clearance.tables.clearance.rules"
+                 ".rows.row.power.cells.class" ) ) );
+    BOOST_CHECK( overlay.m_Message.Contains( wxS( "row.power" ) ) );
+    BOOST_CHECK( overlay.m_Message.Contains( wxS( "class" ) ) );
+    BOOST_CHECK( overlay.m_Message.Contains( wxS( "Power" ) ) );
+    BOOST_CHECK( overlay.m_GeometryJson.Contains(
+            wxS( "\"kind\":\"table_cell\"" ) ) );
+    BOOST_CHECK( overlay.m_GeometryJson.Contains(
+            wxS( "\"column_id\":\"class\"" ) ) );
+    BOOST_CHECK( overlay.m_GeometryJson.Contains(
+            wxS( "\"proposed_value\":\"Power\"" ) ) );
 }
 
 
