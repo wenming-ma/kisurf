@@ -60,6 +60,54 @@ public:
 };
 
 
+class RECORDING_STRUCTURED_SURFACE_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override
+    {
+        wxUnusedVar( aSession );
+        ++m_BeginCount;
+        aSurfaceStateJson = m_StateJson;
+        aError.clear();
+        return m_BeginOk;
+    }
+
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override
+    {
+        ++m_CommitCount;
+        m_LastChanged = aChanged;
+
+        if( !m_CommitOk )
+        {
+            aError = wxS( "backend commit failed" );
+            return false;
+        }
+
+        m_StateJson = aSurfaceStateJson;
+        aError.clear();
+        return true;
+    }
+
+    void AbortSurfaceTransaction() override
+    {
+        ++m_AbortCount;
+    }
+
+    wxString m_StateJson;
+    int      m_BeginCount = 0;
+    int      m_CommitCount = 0;
+    int      m_AbortCount = 0;
+    bool     m_LastChanged = false;
+    bool     m_BeginOk = true;
+    bool     m_CommitOk = true;
+};
+
+
 AI_EXECUTION_SESSION makeSession()
 {
     AI_EXECUTION_SESSION::OPEN_OPTIONS options;
@@ -386,6 +434,80 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayAppliesStructuredSurfaceChanges )
     BOOST_CHECK( surfaceState.Contains( wxS( "\"class\":\"Power\"" ) ) );
     BOOST_CHECK( surfaceState.Contains(
             wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughStructuredSurfaceBackend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "surface backend accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    RECORDING_STRUCTURED_SURFACE_BACKEND backend;
+    backend.m_StateJson =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"fields\":"
+                 "{\"default_clearance\":\"0.15mm\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( backend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( backend.m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( backend.m_CommitCount, 1 );
+    BOOST_CHECK_EQUAL( backend.m_AbortCount, 0 );
+    BOOST_CHECK( backend.m_LastChanged );
+    BOOST_CHECK( backend.m_StateJson.Contains(
+            wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchBackendCommitFailureAbortsAccept )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "surface backend failure" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    RECORDING_STRUCTURED_SURFACE_BACKEND backend;
+    backend.m_StateJson =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"fields\":"
+                 "{\"default_clearance\":\"0.15mm\"}}}}" );
+    const wxString originalState = backend.m_StateJson;
+    backend.m_CommitOk = false;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( backend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "commit_failed" ) ) );
+    BOOST_CHECK_EQUAL( backend.m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( backend.m_CommitCount, 1 );
+    BOOST_CHECK_EQUAL( backend.m_AbortCount, 1 );
+    BOOST_CHECK_EQUAL( backend.m_StateJson, originalState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
 }
 
 
