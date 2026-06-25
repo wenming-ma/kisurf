@@ -13,12 +13,50 @@
 #include <kicommon.h>
 #include <kisurf/ai/ai_accept_applier.h>
 
+#include <memory>
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    virtual ~AI_STRUCTURED_SURFACE_STATE_BACKEND() = default;
+
+    virtual bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                          wxString& aSurfaceStateJson,
+                                          wxString& aError ) = 0;
+    virtual bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                           bool aChanged,
+                                           wxString& aError ) = 0;
+    virtual void AbortSurfaceTransaction() {}
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    explicit AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND(
+            wxString& aSurfaceStateJson );
+
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override;
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override;
+
+private:
+    wxString& m_SurfaceStateJson;
+};
+
+
 class AI_STRUCTURED_SURFACE_APPLY_ADAPTER :
         public AI_ACCEPT_APPLY_ADAPTER
 {
 public:
     explicit KICOMMON_API AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
             wxString& aSurfaceStateJson );
+    explicit KICOMMON_API AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
+            AI_STRUCTURED_SURFACE_STATE_BACKEND& aBackend );
 
     KICOMMON_API bool BeginTransaction( const AI_EXECUTION_SESSION& aSession,
                                         wxString& aError ) override;
@@ -35,8 +73,9 @@ private:
     bool applySurfacePatch( const AI_SESSION_OPERATION_RECORD& aOperation,
                             wxString& aError );
 
-    wxString& m_SurfaceStateJson;
-    wxString  m_WorkingStateJson;
-    bool      m_InTransaction = false;
-    bool      m_SurfaceChanged = false;
+    std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND> m_OwnedBackend;
+    AI_STRUCTURED_SURFACE_STATE_BACKEND&                 m_Backend;
+    wxString                                             m_WorkingStateJson;
+    bool                                                 m_InTransaction = false;
+    bool                                                 m_SurfaceChanged = false;
 };

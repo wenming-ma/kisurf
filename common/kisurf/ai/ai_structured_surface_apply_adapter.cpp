@@ -209,9 +209,47 @@ const nlohmann::json* overlapSetField( const nlohmann::json& aSurface,
 }
 
 
+AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND::
+        AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND( wxString& aSurfaceStateJson ) :
+        m_SurfaceStateJson( aSurfaceStateJson )
+{
+}
+
+
+bool AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND::BeginSurfaceTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aSurfaceStateJson,
+        wxString& aError )
+{
+    wxUnusedVar( aSession );
+    aSurfaceStateJson = m_SurfaceStateJson;
+    aError.clear();
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND::CommitSurfaceTransaction(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    wxUnusedVar( aChanged );
+    m_SurfaceStateJson = aSurfaceStateJson;
+    aError.clear();
+    return true;
+}
+
+
 AI_STRUCTURED_SURFACE_APPLY_ADAPTER::AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
         wxString& aSurfaceStateJson ) :
-        m_SurfaceStateJson( aSurfaceStateJson )
+        m_OwnedBackend(
+                std::make_unique<AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND>(
+                        aSurfaceStateJson ) ),
+        m_Backend( *m_OwnedBackend )
+{
+}
+
+
+AI_STRUCTURED_SURFACE_APPLY_ADAPTER::AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
+        AI_STRUCTURED_SURFACE_STATE_BACKEND& aBackend ) :
+        m_Backend( aBackend )
 {
 }
 
@@ -219,11 +257,18 @@ AI_STRUCTURED_SURFACE_APPLY_ADAPTER::AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
 bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::BeginTransaction(
         const AI_EXECUTION_SESSION& aSession, wxString& aError )
 {
-    wxUnusedVar( aSession );
     aError.clear();
-    m_WorkingStateJson = m_SurfaceStateJson;
-    m_InTransaction = true;
     m_SurfaceChanged = false;
+
+    if( !m_Backend.BeginSurfaceTransaction( aSession, m_WorkingStateJson,
+                                            aError ) )
+    {
+        m_WorkingStateJson.clear();
+        m_InTransaction = false;
+        return false;
+    }
+
+    m_InTransaction = true;
     return true;
 }
 
@@ -255,7 +300,12 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::CommitTransaction( wxString& aError )
         return false;
     }
 
-    m_SurfaceStateJson = m_WorkingStateJson;
+    if( !m_Backend.CommitSurfaceTransaction( m_WorkingStateJson,
+                                             m_SurfaceChanged, aError ) )
+    {
+        return false;
+    }
+
     m_WorkingStateJson.clear();
     m_InTransaction = false;
     aError.clear();
@@ -271,6 +321,9 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::HasBoardChanges() const
 
 void AI_STRUCTURED_SURFACE_APPLY_ADAPTER::AbortTransaction()
 {
+    if( m_InTransaction )
+        m_Backend.AbortSurfaceTransaction();
+
     m_WorkingStateJson.clear();
     m_InTransaction = false;
     m_SurfaceChanged = false;
