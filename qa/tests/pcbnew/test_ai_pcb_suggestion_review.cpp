@@ -918,6 +918,42 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalDoesNotFallbackToEdit
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalExpiresSessionApplySuggestion )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext = runtimeAcceptContext();
+    AI_SUGGESTION_RECORD suggestionWithoutJournal = routeSuggestion();
+    suggestionWithoutJournal.m_ContextVersion = currentContext.m_ContextVersion;
+    suggestionWithoutJournal.m_RuntimeProvenanceJson =
+            wxS( "{\"runtime\":\"next_action\"}" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( suggestionWithoutJournal );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    JOURNAL_REPLAY_SPY_ADAPTER replayAdapter;
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true );
+
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                         replayAdapter, validationService,
+                                         currentContext ) );
+    BOOST_CHECK_EQUAL( replayAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 0 );
+
+    std::optional<AI_SUGGESTION_RECORD> expired =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( expired.has_value() );
+    BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"session_journal_missing\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RejectSuggestionLeavesBoardUnchanged )
 {
     PCB_REVIEW_FIXTURE fixture;

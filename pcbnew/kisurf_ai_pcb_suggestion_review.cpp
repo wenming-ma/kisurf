@@ -615,8 +615,20 @@ bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             aModel.FindSuggestion( aSuggestionId );
 
-    if( !suggestion || !hasNextActionSessionJournal( *suggestion ) )
+    if( !suggestion )
         return false;
+
+    if( !hasNextActionSessionJournal( *suggestion ) )
+    {
+        if( isNextActionRuntimeSuggestion( *suggestion ) )
+        {
+            recordAcceptGateResult( aModel, aSuggestionId, false,
+                                    { wxS( "session_journal_missing" ) } );
+            aModel.ExpireSuggestion( aSuggestionId );
+        }
+
+        return false;
+    }
 
     if( !aModel.CanAcceptSuggestion( aSuggestionId ) )
     {
@@ -654,6 +666,7 @@ bool AcceptAiPcbSuggestion( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId
     {
         recordAcceptGateResult( aModel, aSuggestionId, false,
                                 { wxS( "session_journal_invalid" ) } );
+        aModel.ExpireSuggestion( aSuggestionId );
         return false;
     }
 
