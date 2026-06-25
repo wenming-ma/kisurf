@@ -2378,6 +2378,55 @@ nlohmann::json constraintSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 }
 
 
+nlohmann::json connectivitySummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    if( aContext.m_Summary.IsEmpty() )
+        return nlohmann::json::object();
+
+    nlohmann::json boardSummary = objectFromJsonText( aContext.m_Summary );
+
+    if( !boardSummary.is_object() || !boardSummary.contains( "connectivity_summary" )
+        || !boardSummary["connectivity_summary"].is_object() )
+    {
+        return nlohmann::json::object();
+    }
+
+    const nlohmann::json& connectivity = boardSummary["connectivity_summary"];
+    nlohmann::json        summary =
+            { { "source", "context_summary.connectivity_summary" } };
+
+    copyJsonFieldIfPresent( summary, connectivity, "present" );
+    copyJsonFieldIfPresent( summary, connectivity, "net_count" );
+    copyJsonFieldIfPresent( summary, connectivity, "node_count" );
+    copyJsonFieldIfPresent( summary, connectivity, "pad_count" );
+    copyJsonFieldIfPresent( summary, connectivity, "ratsnest_unconnected_count" );
+    copyJsonFieldIfPresent( summary, connectivity, "visible_ratsnest_unconnected_count" );
+    copyJsonFieldIfPresent( summary, connectivity, "local_ratsnest_line_count" );
+    copyJsonFieldIfPresent( summary, connectivity,
+                            "net_component_summary_sample_truncated" );
+    copyJsonFieldIfPresent( summary, connectivity, "unconnected_edge_sample_truncated" );
+
+    bool componentTruncated = false;
+    bool edgeTruncated = false;
+    summary["net_component_summaries"] =
+            cappedJsonArray( connectivity.value( "net_component_summaries",
+                                                 nlohmann::json::array() ),
+                             16, componentTruncated );
+    summary["unconnected_edges"] =
+            cappedJsonArray( connectivity.value( "unconnected_edges",
+                                                 nlohmann::json::array() ),
+                             16, edgeTruncated );
+
+    if( componentTruncated )
+        summary["net_component_summary_sample_truncated"] = true;
+
+    if( edgeTruncated )
+        summary["unconnected_edge_sample_truncated"] = true;
+
+    return summary;
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -3415,6 +3464,11 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
 
     if( !constraints.empty() )
         packet["constraint_summary"] = std::move( constraints );
+
+    nlohmann::json connectivity = connectivitySummaryJson( context );
+
+    if( !connectivity.empty() )
+        packet["connectivity_summary"] = std::move( connectivity );
 
     if( std::optional<LOCALITY_REGION> locality =
                 localityRegionForToolState( context.m_ToolState ) )

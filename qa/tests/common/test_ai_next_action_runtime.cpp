@@ -2516,7 +2516,19 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"effective_constraints\":{"
                  "\"drc_engine_present\":true,\"rules_valid\":true,"
                  "\"worst_constraints\":[{\"type\":\"track_width\","
-                 "\"value\":{\"min\":75000,\"has_min\":true}}]}}}" );
+                 "\"value\":{\"min\":75000,\"has_min\":true}}]}},"
+                 "\"connectivity_summary\":{\"source\":\"board_connectivity\","
+                 "\"present\":true,\"net_count\":2,\"node_count\":7,"
+                 "\"pad_count\":3,\"ratsnest_unconnected_count\":3,"
+                 "\"visible_ratsnest_unconnected_count\":1,"
+                 "\"local_ratsnest_line_count\":1,"
+                 "\"net_component_summaries\":[{\"net_code\":1,"
+                 "\"net_name\":\"GND\",\"component_count\":2,"
+                 "\"ratsnest_component_edge_count\":1}],"
+                 "\"net_component_summary_sample_truncated\":false,"
+                 "\"unconnected_edges\":[{\"net_code\":1,"
+                 "\"net_name\":\"GND\",\"visible\":true}],"
+                 "\"unconnected_edge_sample_truncated\":false}}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
@@ -2555,6 +2567,25 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE_EQUAL(
             routingPacket["constraint_summary"]["effective_constraints"]
                     ["worst_constraints"].size(),
+            1 );
+    BOOST_REQUIRE( routingPacket.contains( "connectivity_summary" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["connectivity_summary"]["source"].get<std::string>(),
+            "context_summary.connectivity_summary" );
+    BOOST_CHECK( routingPacket["connectivity_summary"]["present"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            routingPacket["connectivity_summary"]["ratsnest_unconnected_count"]
+                    .get<int>(),
+            3 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["connectivity_summary"]["visible_ratsnest_unconnected_count"]
+                    .get<int>(),
+            1 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["connectivity_summary"]["net_component_summaries"].size(),
+            1 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["connectivity_summary"]["unconnected_edges"].size(),
             1 );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
