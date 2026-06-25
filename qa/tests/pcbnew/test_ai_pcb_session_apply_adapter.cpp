@@ -235,6 +235,77 @@ BOOST_AUTO_TEST_CASE( NativeValidationServiceRunsDrcLiteOnBoardDrcEngine )
 }
 
 
+BOOST_AUTO_TEST_CASE( NativeValidationServiceProjectsDrcIssueItemBboxes )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    NETINFO_ITEM* vcc = new NETINFO_ITEM( &board, wxS( "VCC" ), 2 );
+    board.Add( gnd );
+    board.Add( vcc );
+
+    PCB_TRACK* gndTrack =
+            addTrackSegment( board, gnd, VECTOR2I( 0, 0 ), VECTOR2I( 1000000, 0 ) );
+    PCB_TRACK* vccTrack =
+            addTrackSegment( board, vcc, VECTOR2I( 0, 0 ), VECTOR2I( 1000000, 0 ) );
+
+    BOARD_DESIGN_SETTINGS& bds = board.GetDesignSettings();
+    bds.m_DRCEngine = std::make_shared<DRC_ENGINE>( &board, &bds );
+    bds.m_DRCEngine->InitEngine( wxFileName() );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "native bbox validation" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    const wxString args = wxS( "{\"scope\":\"board\",\"level\":\"full_drc\"}" );
+    AI_ATOMIC_EXECUTION_RESULT commonValidation =
+            AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                    session, AI_SESSION_OPERATION_KIND::RunValidation, args );
+    BOOST_REQUIRE( commonValidation.m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_VALIDATION_SERVICE validationService( board );
+    AI_SESSION_VALIDATION_RESULT nativeValidation =
+            validationService.RunValidation( session, args,
+                                             commonValidation.m_ResultJson );
+
+    BOOST_REQUIRE( nativeValidation.m_Ok );
+    nlohmann::json payload =
+            nlohmann::json::parse( nativeValidation.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_GT( payload["validation"]["issue_count"].get<size_t>(), 0 );
+
+    bool foundItemIssue = false;
+
+    for( const nlohmann::json& issue : payload["validation"]["issues"] )
+    {
+        if( !issue.contains( "main_item_uuid" ) )
+            continue;
+
+        wxUnusedVar( gndTrack );
+        wxUnusedVar( vccTrack );
+
+        foundItemIssue = true;
+        BOOST_REQUIRE( issue.contains( "main_item_bbox" ) );
+        BOOST_CHECK( issue["main_item_bbox"].contains( "x" ) );
+        BOOST_CHECK( issue["main_item_bbox"].contains( "y" ) );
+        BOOST_CHECK( issue["main_item_bbox"].contains( "width" ) );
+        BOOST_CHECK( issue["main_item_bbox"].contains( "height" ) );
+
+        if( issue.contains( "aux_item_uuid" ) )
+        {
+            BOOST_REQUIRE( issue.contains( "aux_item_bbox" ) );
+            BOOST_CHECK( issue["aux_item_bbox"].contains( "x" ) );
+            BOOST_CHECK( issue["aux_item_bbox"].contains( "y" ) );
+            BOOST_CHECK( issue["aux_item_bbox"].contains( "width" ) );
+            BOOST_CHECK( issue["aux_item_bbox"].contains( "height" ) );
+        }
+
+        break;
+    }
+
+    BOOST_CHECK( foundItemIssue );
+}
+
+
 BOOST_AUTO_TEST_CASE( NativeValidationServiceRunsDrcOnPreviewBoardWhenSessionHasMutations )
 {
     BOARD board;

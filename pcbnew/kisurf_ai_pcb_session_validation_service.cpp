@@ -12,6 +12,7 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <board_item.h>
 #include <drc/drc_engine.h>
 #include <drc/drc_item.h>
 #include <kisurf_ai_pcb_session_apply_adapter.h>
@@ -76,6 +77,31 @@ std::string severityName( SEVERITY aSeverity )
     case RPT_SEVERITY_UNDEFINED:
     default:                     return "undefined";
     }
+}
+
+
+nlohmann::json bboxJson( const BOX2I& aBox )
+{
+    return {
+        { "x", aBox.GetX() },
+        { "y", aBox.GetY() },
+        { "width", aBox.GetWidth() },
+        { "height", aBox.GetHeight() }
+    };
+}
+
+
+void addIssueItemGeometryFacts( const BOARD& aBoard, const KIID& aItemId,
+                                const char* aPrefix, nlohmann::json& aIssue )
+{
+    BOARD_ITEM* item = aBoard.ResolveItem( aItemId, true );
+
+    if( !item )
+        return;
+
+    const std::string prefix( aPrefix );
+    aIssue[prefix + "_item_bbox"] = bboxJson( item->GetBoundingBox() );
+    aIssue[prefix + "_item_type"] = static_cast<int>( item->Type() );
 }
 
 
@@ -375,12 +401,18 @@ AI_SESSION_VALIDATION_RESULT KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::RunValida
                     {
                         issue["main_item_uuid"] =
                                 toUtf8String( aItem->GetMainItemID().AsString() );
+                        addIssueItemGeometryFacts( *validationBoard,
+                                                   aItem->GetMainItemID(), "main",
+                                                   issue );
                     }
 
                     if( aItem->GetAuxItemID() != niluuid )
                     {
                         issue["aux_item_uuid"] =
                                 toUtf8String( aItem->GetAuxItemID().AsString() );
+                        addIssueItemGeometryFacts( *validationBoard,
+                                                   aItem->GetAuxItemID(), "aux",
+                                                   issue );
                     }
 
                     issues.push_back( std::move( issue ) );
