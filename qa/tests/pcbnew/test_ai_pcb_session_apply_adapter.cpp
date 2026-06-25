@@ -524,6 +524,56 @@ BOOST_AUTO_TEST_CASE( AcceptReplayAppliesOrientationPropertyToSeededLiveFootprin
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptReplayAppliesSidePropertyToSeededLiveFootprint )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    FOOTPRINT* footprint = addFootprintWithPad( board, gnd );
+    footprint->SetLayer( F_Cu );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( session );
+
+    std::vector<AI_SHADOW_ITEM> footprints =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":\"footprint\"}" ) );
+    BOOST_REQUIRE_EQUAL( footprints.size(), 1 );
+
+    const uint64_t stepId = session.BeginStep( wxS( "flip seeded footprint" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    nlohmann::json handle = {
+        { "session_id", footprints.front().m_Handle.m_SessionId },
+        { "handle_id", footprints.front().m_Handle.m_HandleId },
+        { "generation", footprints.front().m_Handle.m_Generation }
+    };
+    nlohmann::json args = {
+        { "handle", handle },
+        { "typed_props", { { "side", "B.Cu" } } }
+    };
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::SetItemProperties,
+            wxString::FromUTF8( args.dump().c_str() ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK( result.m_BoardMutated );
+    BOOST_CHECK_EQUAL( footprint->GetLayer(), B_Cu );
+    BOOST_CHECK( footprint->IsFlipped() );
+}
+
+
 BOOST_AUTO_TEST_CASE( AcceptReplayAppliesLayerSetToCreatedZone )
 {
     BOARD board;

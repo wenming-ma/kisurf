@@ -791,6 +791,26 @@ bool applyTypedProperties( BOARD_ITEM& aItem, const nlohmann::json& aProps,
 
     if( FOOTPRINT* footprint = dynamic_cast<FOOTPRINT*>( &aItem ) )
     {
+        if( aProps.contains( "side" ) )
+        {
+            if( !aProps["side"].is_string() )
+            {
+                aError = wxS( "Footprint side property must be a layer name string." );
+                return false;
+            }
+
+            std::optional<PCB_LAYER_ID> side =
+                    resolveLayerName( *footprint->GetBoard(), stringField( aProps, "side" ) );
+
+            if( !side || ( *side != F_Cu && *side != B_Cu ) )
+            {
+                aError = wxS( "Footprint side property must resolve to F.Cu or B.Cu." );
+                return false;
+            }
+
+            footprint->SetLayerAndFlip( *side );
+        }
+
         if( aProps.contains( "orientation_degrees" ) )
         {
             if( !aProps["orientation_degrees"].is_number() )
