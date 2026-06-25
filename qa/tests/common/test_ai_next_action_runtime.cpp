@@ -476,6 +476,10 @@ public:
                              "\"arguments\":{"
                              "\"surface_id\":\"board_setup.clearance\","
                              "\"table_id\":\"clearance.rules\","
+                             "\"expected_surface_revision\":17,"
+                             "\"expected_schema_version\":\"net-class-v1\","
+                             "\"expected_selection_fingerprint\":\"cell:row.power:class\","
+                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"],"
                              "\"target_scope\":{\"kind\":\"column\","
                              "\"panel_id\":\"board_setup.clearance\","
                              "\"surface_id\":\"board_setup.clearance\","
@@ -2829,6 +2833,17 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             nlohmann::json::parse( renderResult.m_ResultJson.ToStdString() );
     const nlohmann::json& preview =
             renderPayload["surface_patch_previews"].front();
+    BOOST_REQUIRE( preview.contains( "expected_surface_revision" ) );
+    BOOST_REQUIRE( preview.contains( "expected_schema_version" ) );
+    BOOST_REQUIRE( preview.contains( "expected_selection_fingerprint" ) );
+    BOOST_REQUIRE( preview.contains( "expected_overlap_set" ) );
+    BOOST_CHECK_EQUAL( preview["expected_surface_revision"].get<int>(), 17 );
+    BOOST_CHECK_EQUAL( preview["expected_schema_version"].get<std::string>(),
+                       "net-class-v1" );
+    BOOST_CHECK_EQUAL(
+            preview["expected_selection_fingerprint"].get<std::string>(),
+            "cell:row.power:class" );
+    BOOST_REQUIRE_EQUAL( preview["expected_overlap_set"].size(), 2 );
     BOOST_REQUIRE( preview.contains( "surface_patch_diff_entries" ) );
     BOOST_REQUIRE_EQUAL( preview["surface_patch_diff_entries"].size(), 2 );
     BOOST_CHECK_EQUAL( preview["surface_patch_diff_entry_count"].get<size_t>(), 2 );
