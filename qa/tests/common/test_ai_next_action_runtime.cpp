@@ -1979,6 +1979,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains(
             wxS( "\"candidate_source\":\"internal_bus_routing_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"routing.generate_replace_path_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"candidate_source\":\"internal_replace_path_library\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
@@ -2035,6 +2039,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingParallelRequiredReference = false;
     bool sawRoutingBusCandidateTool = false;
     bool sawRoutingBusRequiredReference = false;
+    bool sawRoutingReplacePathCandidateTool = false;
+    bool sawRoutingReplacePathRequiredPlan = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
@@ -2325,6 +2331,43 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     hasReferenceStart && hasReferenceEnd && hasLaneOffsets;
         }
 
+        if( functionName == "routing_generate_replace_path_candidates" )
+        {
+            sawRoutingReplacePathCandidateTool = true;
+            const nlohmann::json& parameters = function["parameters"];
+            BOOST_REQUIRE( parameters.contains( "required" ) );
+            bool hasReplaceHandles = false;
+            bool hasReplacementPoints = false;
+            bool hasNet = false;
+            bool hasLayer = false;
+            bool hasWidth = false;
+
+            for( const nlohmann::json& value : parameters["required"] )
+            {
+                if( !value.is_string() )
+                    continue;
+
+                if( value.get<std::string>() == "replace_handles" )
+                    hasReplaceHandles = true;
+
+                if( value.get<std::string>() == "replacement_points" )
+                    hasReplacementPoints = true;
+
+                if( value.get<std::string>() == "net" )
+                    hasNet = true;
+
+                if( value.get<std::string>() == "layer" )
+                    hasLayer = true;
+
+                if( value.get<std::string>() == "width" )
+                    hasWidth = true;
+            }
+
+            sawRoutingReplacePathRequiredPlan =
+                    hasReplaceHandles && hasReplacementPoints && hasNet && hasLayer
+                    && hasWidth;
+        }
+
         if( functionName == "surface_repair_patch" )
         {
             sawSurfaceRepairTool = true;
@@ -2380,6 +2423,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingParallelRequiredReference );
     BOOST_CHECK( sawRoutingBusCandidateTool );
     BOOST_CHECK( sawRoutingBusRequiredReference );
+    BOOST_CHECK( sawRoutingReplacePathCandidateTool );
+    BOOST_CHECK( sawRoutingReplacePathRequiredPlan );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
@@ -3232,6 +3277,62 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
     BOOST_CHECK_EQUAL( routingLanding["point"]["x"].get<int>(), 260 );
     BOOST_CHECK_EQUAL( routingLanding["net"].get<std::string>(), "GND" );
     BOOST_CHECK_EQUAL( routingLanding["layer"].get<std::string>(), "F.Cu" );
+
+    auto* replacePathProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_replace_path_candidates" ),
+            wxS( "routing" ),
+            -1,
+            wxS( "{\"replace_handles\":[{\"handle\":\"track-old-1\"}],"
+                 "\"replacement_points\":[{\"x\":10,\"y\":10},"
+                 "{\"x\":60,\"y\":40},{\"x\":110,\"y\":40}],"
+                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES replacePathServices;
+    AI_NEXT_ACTION_RUNTIME replacePathRuntime{
+            std::unique_ptr<AI_PROVIDER>( replacePathProvider ),
+            &replacePathServices.m_Validation,
+            &replacePathServices.m_Preview };
+
+    BOOST_REQUIRE( replacePathRuntime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( replacePathProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL(
+            replacePathProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    nlohmann::json replacePathResult = nlohmann::json::parse(
+            replacePathProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( replacePathResult["tool"].get<std::string>(),
+                       "routing.generate_replace_path_candidates" );
+    BOOST_CHECK_EQUAL( replacePathResult["status"].get<std::string>(),
+                       "candidates_generated" );
+    BOOST_CHECK_EQUAL( replacePathResult["candidate_count"].get<int>(), 1 );
+    BOOST_CHECK( !replacePathResult["publish_allowed"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( replacePathResult["candidates"].size(), 1 );
+
+    const nlohmann::json& replacePathCandidate =
+            replacePathResult["candidates"].at( 0 );
+    BOOST_CHECK_EQUAL( replacePathCandidate["source_tool"].get<std::string>(),
+                       "routing.generate_replace_path_candidates" );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["replace_path_facts"]["point_count"].get<int>(),
+            3 );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["landing_facts"]["source"].get<std::string>(),
+            "replace_path.replacement_points.end" );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["landing_facts"]["point"]["x"].get<int>(),
+            110 );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["plan"]["operations"].at( 0 )["kind"]
+                    .get<std::string>(),
+            "pcb.delete_items" );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["plan"]["operations"].at( 1 )["kind"]
+                    .get<std::string>(),
+            "pcb.create_track_polyline" );
+    BOOST_CHECK_EQUAL(
+            replacePathCandidate["plan"]["operations"].at( 1 )["points"].size(),
+            3 );
 
     auto* parallelProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_parallel_segment_candidates" ),
