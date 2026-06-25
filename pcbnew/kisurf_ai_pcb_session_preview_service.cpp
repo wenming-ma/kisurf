@@ -250,6 +250,7 @@ std::optional<nlohmann::json> previewHoles( const nlohmann::json& aGeometry )
 std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aItem )
 {
     nlohmann::json geometry = parseObjectJson( aItem.m_GeometryJson );
+    nlohmann::json properties = parseObjectJson( aItem.m_PropertiesJson );
     nlohmann::json details = nlohmann::json::object();
     KICAD_T        type = TYPE_NOT_INIT;
 
@@ -341,6 +342,50 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
             details["holes"] = *holes;
 
         type = PCB_ZONE_T;
+    }
+    else if( aItem.m_Type == wxS( "footprint" ) )
+    {
+        std::optional<nlohmann::json> position =
+                geometry.contains( "position" ) ? previewPoint( geometry["position"] )
+                                                : std::nullopt;
+
+        if( !position )
+            return std::nullopt;
+
+        wxString liveUuid = metadataValue( aItem, wxS( "live_uuid" ) );
+
+        if( liveUuid.IsEmpty() )
+            return std::nullopt;
+
+        details = {
+            { "operation", "footprint_transform_preview" },
+            { "position", *position },
+            { "side", layerOrFallback( aItem ) }
+        };
+
+        if( geometry.contains( "reference" ) && geometry["reference"].is_string() )
+            details["reference"] = geometry["reference"];
+
+        if( geometry.contains( "fp_id" ) && geometry["fp_id"].is_string() )
+            details["fp_id"] = geometry["fp_id"];
+
+        if( geometry.contains( "orientation_degrees" )
+            && geometry["orientation_degrees"].is_number() )
+        {
+            details["orientation_degrees"] = geometry["orientation_degrees"];
+        }
+
+        if( properties.contains( "orientation_degrees" )
+            && properties["orientation_degrees"].is_number() )
+        {
+            details["orientation_degrees"] = properties["orientation_degrees"];
+        }
+
+        if( properties.contains( "side" ) && properties["side"].is_string() )
+            details["side"] = properties["side"];
+
+        return AI_OBJECT_REF( KIID( liveUuid ), PCB_FOOTPRINT_T,
+                              shadowItemPreviewLabel( aItem ), fromJson( details ) );
     }
     else
     {

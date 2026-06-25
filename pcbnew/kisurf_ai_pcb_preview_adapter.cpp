@@ -2,6 +2,7 @@
 
 #include <board.h>
 #include <board_item.h>
+#include <footprint.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 #include <kisurf_ai_pcb_object_resolver.h>
 #include <lset.h>
@@ -11,6 +12,8 @@
 #include <zone.h>
 
 #include <nlohmann/json.hpp>
+
+#include <memory>
 
 namespace
 {
@@ -78,6 +81,18 @@ std::string toUtf8String( const wxString& aText )
 }
 
 
+nlohmann::json parseObjectJson( const wxString& aText )
+{
+    nlohmann::json parsed =
+            nlohmann::json::parse( toUtf8String( aText ), nullptr, false );
+
+    if( parsed.is_discarded() || !parsed.is_object() )
+        return nlohmann::json::object();
+
+    return parsed;
+}
+
+
 std::optional<VECTOR2I> pointFromJson( const nlohmann::json& aPoint )
 {
     if( !aPoint.is_object() || !aPoint.contains( "x" ) || !aPoint.contains( "y" )
@@ -88,6 +103,68 @@ std::optional<VECTOR2I> pointFromJson( const nlohmann::json& aPoint )
 
     return VECTOR2I( static_cast<int>( aPoint["x"].get<double>() ),
                      static_cast<int>( aPoint["y"].get<double>() ) );
+}
+
+
+FOOTPRINT* buildFootprintTransformPreview(
+        const KISURF_AI_PCB_OBJECT_RESOLVER& aResolver,
+        const AI_OBJECT_REF& aObject )
+{
+    nlohmann::json details = parseObjectJson( aObject.m_DetailsJson );
+
+    if( !details.contains( "operation" ) || !details["operation"].is_string()
+        || details["operation"].get<std::string>() != "footprint_transform_preview" )
+    {
+        return nullptr;
+    }
+
+    FOOTPRINT* source = dynamic_cast<FOOTPRINT*>( aResolver.Resolve( aObject ) );
+
+    if( !source )
+        return nullptr;
+
+    std::unique_ptr<FOOTPRINT> preview(
+            dynamic_cast<FOOTPRINT*>( source->Clone() ) );
+
+    if( !preview )
+        return nullptr;
+
+    if( details.contains( "side" ) )
+    {
+        if( !details["side"].is_string() )
+            return nullptr;
+
+        wxString sideName =
+                wxString::FromUTF8( details["side"].get<std::string>().c_str() );
+        std::optional<PCB_LAYER_ID> side =
+                resolveLayerName( aResolver.Board(), sideName );
+
+        if( !side || ( *side != F_Cu && *side != B_Cu ) )
+            return nullptr;
+
+        preview->SetLayerAndFlip( *side );
+    }
+
+    if( details.contains( "position" ) )
+    {
+        std::optional<VECTOR2I> position = pointFromJson( details["position"] );
+
+        if( !position )
+            return nullptr;
+
+        preview->SetPosition( *position );
+    }
+
+    if( details.contains( "orientation_degrees" ) )
+    {
+        if( !details["orientation_degrees"].is_number() )
+            return nullptr;
+
+        preview->SetOrientation(
+                EDA_ANGLE( details["orientation_degrees"].get<double>(), DEGREES_T ) );
+    }
+
+    return preview.release();
 }
 
 
@@ -477,6 +554,15 @@ void KISURF_AI_PCB_PREVIEW_ADAPTER::ShowObject( uint64_t aPreviewId,
 {
     if( aPreviewId != m_ActivePreviewId )
         return;
+
+    if( FOOTPRINT* footprintPreview =
+                buildFootprintTransformPreview( m_Resolver, aObject ) )
+    {
+        m_View.AddToPreview( footprintPreview, true );
+        m_PreviewedItems.push_back( footprintPreview );
+        m_PreviewedItemLabels.push_back( aObject.m_Label );
+        return;
+    }
 
     if( BOARD_ITEM* syntheticItem = buildSyntheticPreviewItem( m_Resolver.Board(), aObject ) )
     {
