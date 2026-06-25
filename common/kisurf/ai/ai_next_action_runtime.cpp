@@ -6396,6 +6396,74 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                           { "additionalProperties", false },
                           { "properties", nlohmann::json::object() } };
 
+                auto pointSchema =
+                        []( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "type", "object" },
+                                { "additionalProperties", false },
+                                { "description", aDescription },
+                                { "properties",
+                                  { { "x",
+                                      { { "type", "integer" },
+                                        { "description",
+                                          "Internal-coordinate x value." } } },
+                                    { "y",
+                                      { { "type", "integer" },
+                                        { "description",
+                                          "Internal-coordinate y value." } } } } },
+                                { "required", nlohmann::json::array( { "x", "y" } ) }
+                            };
+                        };
+
+                auto pointArraySchema =
+                        [&]( const char* aDescription, int aMinItems = 1 )
+                        {
+                            return nlohmann::json{
+                                { "type", "array" },
+                                { "description", aDescription },
+                                { "items", pointSchema( "Internal-coordinate x/y point." ) },
+                                { "minItems", aMinItems }
+                            };
+                        };
+
+                auto busSegmentSchema =
+                        [&]()
+                        {
+                            return nlohmann::json{
+                                { "type", "object" },
+                                { "additionalProperties", false },
+                                { "properties",
+                                  { { "start",
+                                      pointSchema( "Start point for this bus lane segment." ) },
+                                    { "end",
+                                      pointSchema( "End point for this bus lane segment." ) },
+                                    { "net",
+                                      { { "type", "string" },
+                                        { "description",
+                                          "Net assigned to this bus lane segment." } } },
+                                    { "layer",
+                                      { { "type", "string" },
+                                        { "description",
+                                          "Optional layer override for this bus lane segment." } } },
+                                    { "width",
+                                      { { "type", "integer" },
+                                        { "minimum", 1 },
+                                        { "description",
+                                          "Optional width override for this bus lane segment." } } },
+                                    { "alias",
+                                      { { "type", "string" },
+                                        { "description",
+                                          "Optional model-readable alias for this lane." } } },
+                                    { "metadata",
+                                      { { "type", "object" },
+                                        { "description",
+                                          "Optional provenance metadata for this lane." } } } } },
+                                { "required", nlohmann::json::array(
+                                              { "start", "end", "net" } ) }
+                            };
+                        };
+
                 if( aName == "shadow.apply_candidate" )
                 {
                     parameters["properties"]["candidate_index"] =
@@ -6471,13 +6539,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description",
                                 "Optional footprint reference designator for facts." } };
                     parameters["properties"]["current_position"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Current x/y position of the footprint being placed." } };
+                            pointSchema( "Current x/y position of the footprint being placed." );
                     parameters["properties"]["target_position"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Target x/y position for the placement candidate." } };
+                            pointSchema( "Target x/y position for the placement candidate." );
                     parameters["required"] = nlohmann::json::array(
                             { "current_position", "target_position" } );
                 }
@@ -6514,18 +6578,11 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingParallelCandidateTool( aName ) )
                 {
                     parameters["properties"]["reference_start"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Start point of the already-routed reference segment." } };
+                            pointSchema( "Start point of the already-routed reference segment." );
                     parameters["properties"]["reference_end"] =
-                            { { "type", "object" },
-                              { "description",
-                                "End point of the already-routed reference segment." } };
+                            pointSchema( "End point of the already-routed reference segment." );
                     parameters["properties"]["offset"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Integer x/y offset to translate the reference segment "
-                                "into a parallel route candidate." } };
+                            pointSchema( "Integer x/y offset to translate the reference segment into a parallel route candidate." );
                     parameters["properties"]["net"] =
                             { { "type", "string" },
                               { "description",
@@ -6545,17 +6602,11 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingBusCandidateTool( aName ) )
                 {
                     parameters["properties"]["reference_start"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Start point of the already-routed reference segment." } };
+                            pointSchema( "Start point of the already-routed reference segment." );
                     parameters["properties"]["reference_end"] =
-                            { { "type", "object" },
-                              { "description",
-                                "End point of the already-routed reference segment." } };
+                            pointSchema( "End point of the already-routed reference segment." );
                     parameters["properties"]["lane_offsets"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Array of integer x/y offsets, one per bus lane." } };
+                            pointArraySchema( "Array of integer x/y offsets, one per bus lane." );
                     parameters["properties"]["nets"] =
                             { { "type", "array" },
                               { "description",
@@ -6580,9 +6631,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Existing session handles to delete as part of the "
                                 "replacement path candidate." } };
                     parameters["properties"]["replacement_points"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Replacement polyline points, at least start and end." } };
+                            pointArraySchema( "Replacement polyline points, at least start and end.", 2 );
                     parameters["properties"]["net"] =
                             { { "type", "string" },
                               { "description", "Target net for the replacement path." } };
@@ -6605,9 +6654,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Existing session handles to delete as part of the "
                                 "constraint-aware reroute candidate." } };
                     parameters["properties"]["replacement_points"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Replacement polyline points, at least start and end." } };
+                            pointArraySchema( "Replacement polyline points, at least start and end.", 2 );
                     parameters["properties"]["constraints"] =
                             { { "type", "object" },
                               { "description",
@@ -6630,10 +6677,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isPlacementRepairViaTool( aName ) )
                 {
                     parameters["properties"]["position"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Board position for the repaired via, using integer "
-                                "internal coordinates." } };
+                            pointSchema( "Board position for the repaired via, using integer internal coordinates." );
                     parameters["properties"]["net"] =
                             { { "type", "string" },
                               { "description", "Net assigned to the repaired via." } };
@@ -6668,9 +6712,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Use handles returned by earlier hidden attempt tools." },
                               { "items", { { "type", "object" } } } };
                     parameters["properties"]["delta"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Integer internal-coordinate movement delta with x and y." } };
+                            pointSchema( "Integer internal-coordinate movement delta with x and y." );
                     parameters["properties"]["alias"] =
                             { { "type", "string" },
                               { "description",
@@ -6715,15 +6757,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingRepairSegmentTool( aName ) )
                 {
                     parameters["properties"]["start"] =
-                            { { "type", "object" },
-                              { "description",
-                                "Start point for the repaired route segment, using "
-                                "integer internal coordinates." } };
+                            pointSchema( "Start point for the repaired route segment, using integer internal coordinates." );
                     parameters["properties"]["end"] =
-                            { { "type", "object" },
-                              { "description",
-                                "End point for the repaired route segment, using "
-                                "integer internal coordinates." } };
+                            pointSchema( "End point for the repaired route segment, using integer internal coordinates." );
                     parameters["properties"]["layer"] =
                             { { "type", "string" },
                               { "description", "Routing layer for the segment." } };
@@ -6747,11 +6783,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingRepairPolylineTool( aName ) )
                 {
                     parameters["properties"]["points"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Ordered route polyline points using integer internal coordinates." },
-                              { "items", { { "type", "object" } } },
-                              { "minItems", 2 } };
+                            pointArraySchema( "Ordered route polyline points using integer internal coordinates.", 2 );
                     parameters["properties"]["layer"] =
                             { { "type", "string" },
                               { "description", "Routing layer for all polyline segments." } };
@@ -6780,7 +6812,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Ordered bus lane segment objects. Each segment "
                                 "must provide start, end, and net; layer and "
                                 "width may be supplied per segment or at top level." },
-                              { "items", { { "type", "object" } } },
+                              { "items", busSegmentSchema() },
                               { "minItems", 1 },
                               { "maxItems", 16 } };
                     parameters["properties"]["layer"] =
