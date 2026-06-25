@@ -2321,6 +2321,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     AI_SUGGESTION_TRIGGER placementTrigger = makeViaTrigger();
     placementTrigger.m_ContextSnapshot.m_Summary =
             wxS( "{\"kind\":\"pcb_board_summary\","
+                 "\"board_edges_bbox\":{\"x\":0,\"y\":0,"
+                 "\"width\":1000000,\"height\":500000},"
+                 "\"layer_context\":{\"source\":\"board\","
+                 "\"copper_layer_count\":2,\"enabled_layer_count\":4,"
+                 "\"visible_layer_count\":3,"
+                 "\"active_layer\":{\"name\":\"F.Cu\",\"copper\":true}},"
                  "\"constraint_facts\":{\"source\":\"board\","
                  "\"minimums\":{\"min_clearance\":125000,"
                  "\"min_track_width\":100000,\"min_via_size\":450000},"
@@ -2373,6 +2379,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             "via" );
     BOOST_CHECK( placementPacket["planning_target"]["click_required_to_materialize"]
                          .get<bool>() );
+    BOOST_REQUIRE( placementPacket.contains( "board_context_summary" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["board_context_summary"]["source"].get<std::string>(),
+            "context_summary.pcb_board_summary" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["board_context_summary"]["board_edges_bbox"]["width"]
+                    .get<int>(),
+            1000000 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["board_context_summary"]["layer_context"]
+                    ["active_layer"]["name"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["board_context_summary"]["layer_context"]
+                    ["visible_layer_count"].get<int>(),
+            3 );
     BOOST_REQUIRE( placementPacket.contains( "constraint_summary" ) );
     BOOST_CHECK_EQUAL(
             placementPacket["constraint_summary"]["source"].get<std::string>(),
