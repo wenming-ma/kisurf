@@ -1971,6 +1971,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains(
             wxS( "\"candidate_source\":\"internal_parallel_routing_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"routing.generate_bus_segment_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"candidate_source\":\"internal_bus_routing_library\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
@@ -2023,6 +2027,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingPolylineRepairTool = false;
     bool sawRoutingParallelCandidateTool = false;
     bool sawRoutingParallelRequiredReference = false;
+    bool sawRoutingBusCandidateTool = false;
+    bool sawRoutingBusRequiredReference = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
@@ -2253,6 +2259,34 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     hasReferenceStart && hasReferenceEnd && hasOffset;
         }
 
+        if( functionName == "routing_generate_bus_segment_candidates" )
+        {
+            sawRoutingBusCandidateTool = true;
+            const nlohmann::json& parameters = function["parameters"];
+            BOOST_REQUIRE( parameters.contains( "required" ) );
+            bool hasReferenceStart = false;
+            bool hasReferenceEnd = false;
+            bool hasLaneOffsets = false;
+
+            for( const nlohmann::json& value : parameters["required"] )
+            {
+                if( !value.is_string() )
+                    continue;
+
+                if( value.get<std::string>() == "reference_start" )
+                    hasReferenceStart = true;
+
+                if( value.get<std::string>() == "reference_end" )
+                    hasReferenceEnd = true;
+
+                if( value.get<std::string>() == "lane_offsets" )
+                    hasLaneOffsets = true;
+            }
+
+            sawRoutingBusRequiredReference =
+                    hasReferenceStart && hasReferenceEnd && hasLaneOffsets;
+        }
+
         if( functionName == "surface_repair_patch" )
         {
             sawSurfaceRepairTool = true;
@@ -2304,6 +2338,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingPolylineRepairTool );
     BOOST_CHECK( sawRoutingParallelCandidateTool );
     BOOST_CHECK( sawRoutingParallelRequiredReference );
+    BOOST_CHECK( sawRoutingBusCandidateTool );
+    BOOST_CHECK( sawRoutingBusRequiredReference );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
@@ -3148,6 +3184,58 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
     BOOST_CHECK_EQUAL( parallelCandidate["landing_facts"]["point"]["x"].get<int>(), 110 );
     BOOST_CHECK_EQUAL( parallelCandidate["landing_facts"]["point"]["y"].get<int>(), 50 );
     BOOST_CHECK_EQUAL( parallelCandidate["parallel_facts"]["offset"]["y"].get<int>(), 40 );
+
+    auto* busProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_bus_segment_candidates" ),
+            wxS( "routing" ),
+            -1,
+            wxS( "{\"reference_start\":{\"x\":10,\"y\":10},"
+                 "\"reference_end\":{\"x\":110,\"y\":10},"
+                 "\"lane_offsets\":[{\"x\":0,\"y\":20},{\"x\":0,\"y\":40}],"
+                 "\"nets\":[\"D0\",\"D1\"],\"layer\":\"F.Cu\",\"width\":120000}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES busServices;
+    AI_NEXT_ACTION_RUNTIME busRuntime{
+            std::unique_ptr<AI_PROVIDER>( busProvider ),
+            &busServices.m_Validation,
+            &busServices.m_Preview };
+
+    BOOST_REQUIRE( busRuntime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( busProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL( busProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    nlohmann::json busResult = nlohmann::json::parse(
+            busProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( busResult["tool"].get<std::string>(),
+                       "routing.generate_bus_segment_candidates" );
+    BOOST_CHECK_EQUAL( busResult["status"].get<std::string>(),
+                       "candidates_generated" );
+    BOOST_CHECK_EQUAL( busResult["candidate_count"].get<int>(), 2 );
+    BOOST_CHECK( !busResult["publish_allowed"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( busResult["candidates"].size(), 2 );
+
+    const nlohmann::json& firstBusCandidate = busResult["candidates"].at( 0 );
+    BOOST_CHECK_EQUAL( firstBusCandidate["source_tool"].get<std::string>(),
+                       "routing.generate_bus_segment_candidates" );
+    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["operation"].get<std::string>(),
+                       "route_segment_preview" );
+    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["net"].get<std::string>(),
+                       "D0" );
+    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["start"]["y"].get<int>(), 30 );
+    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["end"]["y"].get<int>(), 30 );
+    BOOST_CHECK_EQUAL( firstBusCandidate["landing_facts"]["source"].get<std::string>(),
+                       "bus_reference.offset" );
+    BOOST_CHECK_EQUAL( firstBusCandidate["bus_facts"]["lane_index"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( firstBusCandidate["bus_facts"]["lane_count"].get<int>(), 2 );
+
+    const nlohmann::json& secondBusCandidate = busResult["candidates"].at( 1 );
+    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["net"].get<std::string>(),
+                       "D1" );
+    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["start"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["end"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( secondBusCandidate["landing_facts"]["point"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( secondBusCandidate["bus_facts"]["offset"]["y"].get<int>(), 40 );
 }
 
 

@@ -376,6 +376,12 @@ bool isRoutingParallelCandidateTool( const std::string& aToolName )
 }
 
 
+bool isRoutingBusCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "routing.generate_bus_segment_candidates";
+}
+
+
 bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
@@ -4255,11 +4261,16 @@ nlohmann::json candidateLandingFactsJson(
         const bool isParallelCandidate =
                 arguments.value( "source_tool", std::string() )
                 == "routing.generate_parallel_segment_candidates";
+        const bool isBusCandidate =
+                arguments.value( "source_tool", std::string() )
+                == "routing.generate_bus_segment_candidates";
 
         return { { "kind", "routing_landing" },
                  { "source",
-                   isParallelCandidate ? "parallel_reference.offset"
-                                       : "operation.end" },
+                   isBusCandidate
+                           ? "bus_reference.offset"
+                           : isParallelCandidate ? "parallel_reference.offset"
+                                                 : "operation.end" },
                  { "point", pointJson( operation->m_End ) },
                  { "start", pointJson( operation->m_Start ) },
                  { "net", toUtf8String( operation->m_NetName ) },
@@ -4291,6 +4302,9 @@ nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
 
     if( arguments.contains( "parallel_facts" ) && arguments["parallel_facts"].is_object() )
         record["parallel_facts"] = arguments["parallel_facts"];
+
+    if( arguments.contains( "bus_facts" ) && arguments["bus_facts"].is_object() )
+        record["bus_facts"] = arguments["bus_facts"];
 
     nlohmann::json landingFacts = candidateLandingFactsJson( aCandidate );
 
@@ -4435,6 +4449,196 @@ nlohmann::json routingParallelCandidatePayloadJson(
              { "status", "candidates_generated" },
              { "candidate_count", 1 },
              { "candidates", nlohmann::json::array( { candidate } ) } };
+}
+
+
+nlohmann::json routingBusCandidatePayloadJson(
+        const nlohmann::json& aArgs,
+        const AI_OBSERVATION_PACKET& aObservation )
+{
+    int referenceStartX = 0;
+    int referenceStartY = 0;
+    int referenceEndX = 0;
+    int referenceEndY = 0;
+
+    if( !jsonPointToInts( aArgs.value( "reference_start",
+                                       nlohmann::json::object() ),
+                          referenceStartX, referenceStartY )
+        || !jsonPointToInts( aArgs.value( "reference_end",
+                                          nlohmann::json::object() ),
+                             referenceEndX, referenceEndY )
+        || !aArgs.contains( "lane_offsets" )
+        || !aArgs["lane_offsets"].is_array()
+        || aArgs["lane_offsets"].empty()
+        || aArgs["lane_offsets"].size() > 16 )
+    {
+        return { { "tool", "routing.generate_bus_segment_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_bus_segment_candidates requires "
+                   "reference_start, reference_end, and 1-16 lane_offsets." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    const nlohmann::json modeContext =
+            objectFromJsonText(
+                    aObservation.m_ContextSnapshot.m_ToolState.m_ModeContextJson );
+    std::optional<std::string> layer = stringField( aArgs, "layer" );
+    std::optional<int>         width = positiveIntField( aArgs, "width" );
+
+    if( !layer )
+        layer = stringField( modeContext, "layer" );
+
+    if( !width )
+        width = positiveIntField( modeContext, "width" );
+
+    if( !layer || !width )
+    {
+        return { { "tool", "routing.generate_bus_segment_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_bus_segment_candidates requires layer "
+                   "and width from arguments or active routing context." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    std::vector<std::string> nets;
+
+    if( aArgs.contains( "nets" ) && aArgs["nets"].is_array() )
+    {
+        for( const nlohmann::json& netValue : aArgs["nets"] )
+        {
+            if( !netValue.is_string() )
+            {
+                return { { "tool", "routing.generate_bus_segment_candidates" },
+                         { "status", "malformed_arguments" },
+                         { "error_code", "malformed_arguments" },
+                         { "message",
+                           "routing.generate_bus_segment_candidates requires "
+                           "string nets when nets is provided." },
+                         { "candidate_count", 0 },
+                         { "candidates", nlohmann::json::array() } };
+            }
+
+            nets.push_back( netValue.get<std::string>() );
+        }
+    }
+
+    if( nets.empty() )
+    {
+        std::optional<std::string> activeNet = stringField( modeContext, "net" );
+
+        if( !activeNet )
+        {
+            return { { "tool", "routing.generate_bus_segment_candidates" },
+                     { "status", "malformed_arguments" },
+                     { "error_code", "malformed_arguments" },
+                     { "message",
+                       "routing.generate_bus_segment_candidates requires nets "
+                       "or active routing net context." },
+                     { "candidate_count", 0 },
+                     { "candidates", nlohmann::json::array() } };
+        }
+
+        nets.assign( aArgs["lane_offsets"].size(), *activeNet );
+    }
+    else if( nets.size() != aArgs["lane_offsets"].size() )
+    {
+        return { { "tool", "routing.generate_bus_segment_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_bus_segment_candidates requires nets "
+                   "count to match lane_offsets count." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    nlohmann::json candidates = nlohmann::json::array();
+    const int laneCount = static_cast<int>( aArgs["lane_offsets"].size() );
+
+    for( int laneIndex = 0; laneIndex < laneCount; ++laneIndex )
+    {
+        int offsetX = 0;
+        int offsetY = 0;
+
+        if( !jsonPointToInts( aArgs["lane_offsets"].at( laneIndex ),
+                              offsetX, offsetY ) )
+        {
+            return { { "tool", "routing.generate_bus_segment_candidates" },
+                     { "status", "malformed_arguments" },
+                     { "error_code", "malformed_arguments" },
+                     { "message",
+                       "routing.generate_bus_segment_candidates requires every "
+                       "lane offset to be an x/y point." },
+                     { "candidate_count", 0 },
+                     { "candidates", nlohmann::json::array() } };
+        }
+
+        const int startX = referenceStartX + offsetX;
+        const int startY = referenceStartY + offsetY;
+        const int endX = referenceEndX + offsetX;
+        const int endY = referenceEndY + offsetY;
+        nlohmann::json busFacts =
+                { { "reference_start",
+                    pointRecordJson( referenceStartX, referenceStartY ) },
+                  { "reference_end",
+                    pointRecordJson( referenceEndX, referenceEndY ) },
+                  { "offset", pointRecordJson( offsetX, offsetY ) },
+                  { "candidate_start", pointRecordJson( startX, startY ) },
+                  { "candidate_end", pointRecordJson( endX, endY ) },
+                  { "lane_index", laneIndex },
+                  { "lane_count", laneCount },
+                  { "net", nets.at( laneIndex ) },
+                  { "segment_style",
+                    toUtf8String( routingSegmentStyle(
+                            referenceEndX - referenceStartX,
+                            referenceEndY - referenceStartY ) ) },
+                  { "generation_strategy", "bus_reference_offsets" } };
+        nlohmann::json operation =
+                { { "operation", "route_segment_preview" },
+                  { "source_tool", "routing.generate_bus_segment_candidates" },
+                  { "candidate_strategy", "bus_reference_offsets" },
+                  { "net", nets.at( laneIndex ) },
+                  { "layer", *layer },
+                  { "width", *width },
+                  { "start", pointRecordJson( startX, startY ) },
+                  { "end", pointRecordJson( endX, endY ) },
+                  { "bus_facts", busFacts } };
+
+        candidates.push_back(
+                { { "index", laneIndex },
+                  { "title",
+                    std::string( "Bus route segment lane " )
+                            + std::to_string( laneIndex + 1 ) },
+                  { "body",
+                    "Candidate bus lane segment parallel to a reference segment." },
+                  { "source_tool", "routing.generate_bus_segment_candidates" },
+                  { "context_kind", "routing" },
+                  { "preview_object_count", 1 },
+                  { "edit_object_count", 1 },
+                  { "arguments", operation },
+                  { "operation", "route_segment_preview" },
+                  { "bus_facts", busFacts },
+                  { "landing_facts",
+                    { { "kind", "routing_landing" },
+                      { "source", "bus_reference.offset" },
+                      { "point", pointRecordJson( endX, endY ) },
+                      { "start", pointRecordJson( startX, startY ) },
+                      { "net", nets.at( laneIndex ) },
+                      { "layer", *layer },
+                      { "width", *width } } },
+                  { "publish_allowed", false } } );
+    }
+
+    return { { "tool", "routing.generate_bus_segment_candidates" },
+             { "status", "candidates_generated" },
+             { "candidate_count", laneCount },
+             { "candidates", candidates } };
 }
 
 
@@ -5324,6 +5528,13 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_parallel_routing_library" },
                 { "can_publish", false } },
+              { { "name", "routing.generate_bus_segment_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "routing" },
+                { "side_effect", "read_only" },
+                { "candidate_source", "internal_bus_routing_library" },
+                { "can_publish", false } },
               { { "name", "surface.generate_fill_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -5536,6 +5747,36 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Optional target width; defaults to the active routing width." } };
                     parameters["required"] = nlohmann::json::array(
                             { "reference_start", "reference_end", "offset" } );
+                }
+                else if( isRoutingBusCandidateTool( aName ) )
+                {
+                    parameters["properties"]["reference_start"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Start point of the already-routed reference segment." } };
+                    parameters["properties"]["reference_end"] =
+                            { { "type", "object" },
+                              { "description",
+                                "End point of the already-routed reference segment." } };
+                    parameters["properties"]["lane_offsets"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Array of integer x/y offsets, one per bus lane." } };
+                    parameters["properties"]["nets"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Optional target net names; when provided, count must match lane_offsets." } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional target layer; defaults to the active routing layer." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description",
+                                "Optional target width; defaults to the active routing width." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "reference_start", "reference_end", "lane_offsets" } );
                 }
                 else if( isPlacementRepairViaTool( aName ) )
                 {
@@ -5999,6 +6240,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                             "routing.generate_parallel_segment_candidates" );
                 }
 
+                if( name == "routing_generate_bus_segment_candidates"
+                    || name == "routing.generate_bus_segment_candidates" )
+                {
+                    return std::string(
+                            "routing.generate_bus_segment_candidates" );
+                }
+
                 if( name == "surface_generate_fill_candidates"
                     || name == "surface.generate_fill_candidates" )
                 {
@@ -6168,6 +6416,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         const wxString message =
                 malformed
                         ? wxString( wxS( "routing.generate_parallel_segment_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
+    }
+
+    if( toolName == "routing.generate_bus_segment_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                routingBusCandidatePayloadJson( args, aObservation );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "routing.generate_bus_segment_candidates "
                                          "received malformed arguments." ) )
                         : wxString( wxS( "Candidates generated." ) );
 
