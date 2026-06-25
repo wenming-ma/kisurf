@@ -227,6 +227,18 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_RECORD
     wxString m_ReplayJson;
 };
 
+inline constexpr unsigned AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION = 1;
+
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
+{
+    bool     m_Valid = false;
+    wxString m_ErrorCode;
+    wxString m_Message;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
+AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:

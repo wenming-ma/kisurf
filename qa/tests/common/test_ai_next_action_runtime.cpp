@@ -5062,6 +5062,14 @@ BOOST_AUTO_TEST_CASE( RuntimeReplayTraceRecordsFullNextActionLoop )
     const nlohmann::json trace =
             nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
 
+    BOOST_REQUIRE( trace["schema"].is_object() );
+    BOOST_CHECK_EQUAL( trace["schema"]["name"].get<std::string>(),
+                       "kisurf.next_action.replay_trace" );
+    BOOST_CHECK_EQUAL( trace["schema"]["version"].get<unsigned>(),
+                       AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+    BOOST_CHECK( AiValidateNextActionReplayTraceJson(
+                         traces.front().m_ReplayJson )
+                         .m_Valid );
     BOOST_CHECK_EQUAL( trace["runtime_step_id"].get<uint64_t>(), 1 );
     BOOST_CHECK_EQUAL( trace["terminal_state"].get<std::string>(), "published" );
     BOOST_REQUIRE( trace["semantic_event"].is_object() );
@@ -5091,6 +5099,19 @@ BOOST_AUTO_TEST_CASE( RuntimeReplayTraceRecordsFullNextActionLoop )
     BOOST_CHECK( trace["publish_decision"]["preview_gate_result"]["allowed"].get<bool>() );
     BOOST_CHECK_EQUAL( trace["published_suggestion_id"].get<uint64_t>(),
                        suggestion->m_Id );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayTraceValidationRejectsMissingSchema )
+{
+    AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT result =
+            AiValidateNextActionReplayTraceJson(
+                    wxS( "{\"runtime\":\"next_action\","
+                         "\"runtime_step_id\":1,"
+                         "\"terminal_state\":\"published\"}" ) );
+
+    BOOST_CHECK( !result.m_Valid );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "missing_schema" ) ) );
 }
 
 
