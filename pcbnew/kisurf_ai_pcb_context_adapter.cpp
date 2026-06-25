@@ -1842,12 +1842,13 @@ wxString pairConstraintItemJson( const BOARD_CONNECTED_ITEM& aItem )
 {
     return wxString::Format(
             wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":%s,\"label\":%s,"
-                 "\"net_code\":%d,\"net\":%s,\"layers\":%s}" ),
+                 "\"net_code\":%d,\"net\":%s,\"layers\":%s,\"bbox\":%s}" ),
             quotedJson( aItem.m_Uuid.AsString() ), static_cast<int>( aItem.Type() ),
             quotedJson( connectedItemKindToken( aItem ) ),
             quotedJson( connectedItemLabel( aItem ) ), aItem.GetNetCode(),
             quotedJson( aItem.GetNetname() ),
-            layerSetDetailsJson( aItem, aItem.GetLayerSet() ) );
+            layerSetDetailsJson( aItem, aItem.GetLayerSet() ),
+            boxRectDetailsJson( aItem.GetBoundingBox() ) );
 }
 
 
@@ -1870,16 +1871,20 @@ bool firstCommonCopperLayer( const BOARD& aBoard, const BOARD_CONNECTED_ITEM& aI
 wxString pairEffectiveConstraintJson( const BOARD& aBoard, const BOARD_CONNECTED_ITEM& aItemA,
                                       const BOARD_CONNECTED_ITEM& aItemB, PCB_LAYER_ID aLayer,
                                       DRC_CONSTRAINT_T aType,
-                                      const DRC_CONSTRAINT& aConstraint )
+                                      const DRC_CONSTRAINT& aConstraint,
+                                      bool aGeometryDependentRulesPresent )
 {
     return wxString::Format(
             wxS( "{\"type\":%s,\"enum\":%d,\"layer\":%s,"
                  "\"source_item\":%s,\"target_item\":%s,"
-                 "\"name\":%s,\"value\":%s}" ),
+                 "\"name\":%s,\"value\":%s,"
+                 "\"evaluation_source\":\"DRC_ENGINE::EvalRules\","
+                 "\"geometry_dependent_rules_present\":%s}" ),
             quotedJson( drcConstraintTypeToken( aType ) ), static_cast<int>( aType ),
             quotedJson( aBoard.GetLayerName( aLayer ) ), pairConstraintItemJson( aItemA ),
             pairConstraintItemJson( aItemB ), quotedJson( aConstraint.GetName() ),
-            minOptMaxJson( aConstraint.GetValue() ) );
+            minOptMaxJson( aConstraint.GetValue() ),
+            boolJson( aGeometryDependentRulesPresent ) );
 }
 
 
@@ -1962,7 +1967,8 @@ std::vector<wxString> makePairEffectiveConstraintEntries( const BOARD& aBoard,
 
             entries.push_back( pairEffectiveConstraintJson( aBoard, *itemA, *itemB, layer,
                                                             CLEARANCE_CONSTRAINT,
-                                                            constraint ) );
+                                                            constraint,
+                                                            aEngine.HasGeometryDependentRules() ) );
         }
     }
 
@@ -1982,6 +1988,7 @@ wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
     if( !aSettings.m_DRCEngine )
     {
         return wxS( "{\"drc_engine_present\":false,\"rules_valid\":false,"
+                    "\"geometry_dependent_rules_present\":false,"
                     "\"worst_constraints\":[],"
                     "\"worst_constraint_sample_truncated\":false,"
                     "\"pair_effective_constraints\":[],"
@@ -2024,11 +2031,13 @@ wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
 
     return wxString::Format(
             wxS( "{\"drc_engine_present\":true,\"rules_valid\":%s,"
+                 "\"geometry_dependent_rules_present\":%s,"
                  "\"worst_constraints\":%s,"
                  "\"worst_constraint_sample_truncated\":%s,"
                  "\"pair_effective_constraints\":%s,"
                  "\"pair_effective_constraint_sample_truncated\":%s}" ),
             boolJson( aSettings.m_DRCEngine->RulesValid() ),
+            boolJson( aSettings.m_DRCEngine->HasGeometryDependentRules() ),
             jsonArray( worstConstraintEntries ),
             boolJson( worstConstraintSampleTruncated ),
             jsonArray( pairConstraintEntries ),

@@ -8,6 +8,7 @@
 #include <connectivity/connectivity_data.h>
 #include <drc/drc_engine.h>
 #include <drc/drc_rule.h>
+#include <drc/drc_rule_condition.h>
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -1292,6 +1293,89 @@ BOOST_AUTO_TEST_CASE( AdapterAddsPairSpecificEffectiveConstraintFacts )
     BOOST_CHECK( pairNets.find( "/SIG" ) != pairNets.end() );
     BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["min"].get<int>(), 910000 );
     BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["has_min"].get<bool>(), true );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+
+    board.Add( new NETINFO_ITEM( &board, wxS( "/IN_AREA" ), 1 ) );
+    board.Add( new NETINFO_ITEM( &board, wxS( "/OUT_AREA" ), 2 ) );
+
+    ZONE* area = new ZONE( &board );
+    area->SetZoneName( wxS( "AI_RULE_AREA" ) );
+    area->SetIsRuleArea( true );
+    area->SetLayerSet( LSET( { F_Cu } ) );
+
+    SHAPE_POLY_SET areaOutline;
+    areaOutline.NewOutline();
+    areaOutline.Append( VECTOR2I( 0, 0 ) );
+    areaOutline.Append( VECTOR2I( 1000000, 0 ) );
+    areaOutline.Append( VECTOR2I( 1000000, 500000 ) );
+    areaOutline.Append( VECTOR2I( 0, 500000 ) );
+    area->AddPolygon( areaOutline.COutline( 0 ) );
+
+    board.Add( area );
+
+    PCB_TRACK* insideTrack = new PCB_TRACK( &board );
+    insideTrack->SetStart( VECTOR2I( 100000, 100000 ) );
+    insideTrack->SetEnd( VECTOR2I( 200000, 100000 ) );
+    insideTrack->SetLayer( F_Cu );
+    insideTrack->SetWidth( 50000 );
+    insideTrack->SetNetCode( 1 );
+    board.Add( insideTrack );
+
+    PCB_TRACK* outsideTrack = new PCB_TRACK( &board );
+    outsideTrack->SetStart( VECTOR2I( 2000000, 100000 ) );
+    outsideTrack->SetEnd( VECTOR2I( 2100000, 100000 ) );
+    outsideTrack->SetLayer( F_Cu );
+    outsideTrack->SetWidth( 50000 );
+    outsideTrack->SetNetCode( 2 );
+    board.Add( outsideTrack );
+
+    auto rule = std::make_shared<DRC_RULE>( wxS( "AI Area Clearance" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxS( "A.intersectsArea('AI_RULE_AREA')" ) );
+
+    DRC_CONSTRAINT constraint( CLEARANCE_CONSTRAINT );
+    constraint.Value().SetMin( 777000 );
+    rule->AddConstraint( constraint );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( rule );
+    settings.m_DRCEngine = engine;
+
+    DRC_CONSTRAINT direct =
+            engine->EvalRules( CLEARANCE_CONSTRAINT, insideTrack, outsideTrack, F_Cu );
+    BOOST_REQUIRE( direct.GetValue().HasMin() );
+    BOOST_CHECK_EQUAL( direct.GetValue().Min(), 777000 );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["geometry_dependent_rules_present"].get<bool>(), true );
+
+    const nlohmann::json* pairConstraint =
+            findPairConstraintByLabels( effective["pair_effective_constraints"],
+                                        "track:100000,100000->200000,100000",
+                                        "track:2000000,100000->2100000,100000" );
+
+    BOOST_REQUIRE( pairConstraint );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["type"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["min"].get<int>(), 777000 );
+    BOOST_CHECK( ( *pairConstraint )["name"].get<std::string>().find(
+                         "AI Area Clearance" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["evaluation_source"].get<std::string>(),
+                       "DRC_ENGINE::EvalRules" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["geometry_dependent_rules_present"].get<bool>(),
+                       true );
+    BOOST_CHECK( ( *pairConstraint )["source_item"].contains( "bbox" ) );
+    BOOST_CHECK( ( *pairConstraint )["target_item"].contains( "bbox" ) );
 }
 
 
