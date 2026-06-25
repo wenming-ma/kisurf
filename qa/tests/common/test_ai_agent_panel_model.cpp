@@ -556,6 +556,90 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledWithoutRuntimeDoesNotPublishSuggesti
 }
 
 
+BOOST_AUTO_TEST_CASE( BackgroundAgentCannotMutateWhileChatOwnsDocumentWriteLease )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity();
+    AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+
+    BOOST_CHECK( model.TryAcquireDocumentWriteOwnership( wxS( "chat" ),
+                                                         ownershipContext ) );
+    BOOST_REQUIRE( model.ActiveDocumentWriteOwnerNamespace().has_value() );
+    BOOST_CHECK_EQUAL( *model.ActiveDocumentWriteOwnerNamespace(),
+                       wxString( wxS( "chat" ) ) );
+
+    std::optional<AI_SUGGESTION_RECORD> blocked =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_CHECK( !blocked.has_value() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 0 );
+    BOOST_CHECK( model.Suggestions().empty() );
+    BOOST_CHECK( !model.TryAcquireDocumentWriteOwnership( wxS( "nextaction" ),
+                                                          ownershipContext ) );
+
+    BOOST_CHECK( model.ReleaseDocumentWriteOwnership( wxS( "chat" ),
+                                                      ownershipContext ) );
+    BOOST_CHECK( !model.ActiveDocumentWriteOwnerNamespace().has_value() );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( UnknownDocumentWriteLeaseBlocksKnownDocumentMutation )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_NEXT_ACTION_CONTEXT_VERSION unknownContext;
+    BOOST_CHECK( model.TryAcquireDocumentWriteOwnership( wxS( "chat" ),
+                                                         unknownContext ) );
+
+    std::optional<AI_SUGGESTION_RECORD> blocked =
+            model.UpdateSuggestionsIfBackgroundEnabled( makeViaNextActionContext(),
+                                                        makeSuggestionActivity(),
+                                                        wxS( "activity" ) );
+
+    BOOST_CHECK( !blocked.has_value() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 0 );
+}
+
+
 BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptable )
 {
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );

@@ -3,6 +3,34 @@
 
 #include <utility>
 
+namespace
+{
+wxString documentWriteKey( const AI_NEXT_ACTION_CONTEXT_VERSION& aContextVersion )
+{
+    if( !aContextVersion.m_BoardBaseHash.IsEmpty() )
+        return wxS( "board:" ) + aContextVersion.m_BoardBaseHash;
+
+    if( aContextVersion.m_ContextVersion.m_DocumentRevision != 0 )
+    {
+        return wxString::Format(
+                wxS( "doc:%llu" ),
+                static_cast<unsigned long long>(
+                        aContextVersion.m_ContextVersion.m_DocumentRevision ) );
+    }
+
+    return wxS( "unknown" );
+}
+
+
+bool documentWriteKeysConflict( const wxString& aActiveKey,
+                                const wxString& aRequestedKey )
+{
+    return aActiveKey == aRequestedKey || aActiveKey == wxS( "unknown" )
+           || aRequestedKey == wxS( "unknown" );
+}
+} // namespace
+
+
 AI_AGENT_PANEL_MODEL::AI_AGENT_PANEL_MODEL( std::unique_ptr<AI_PROVIDER> aProvider ) :
         m_ActivityLog( 256 ),
         m_Runtime( std::move( aProvider ), m_ActivityLog ),
@@ -50,8 +78,16 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
 
     m_Messages.push_back( { wxS( "user" ), aText } );
 
+    AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext;
+    ownershipContext.m_ContextVersion = request.m_ContextVersion;
+    const bool chatOwnsDocument =
+            TryAcquireDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
+
     AI_PROVIDER_RESPONSE response = m_Runtime.Submit( request );
     m_LastRequestId = response.m_RequestId;
+
+    if( chatOwnsDocument )
+        ReleaseDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
 
     m_Messages.push_back( { wxS( "assistant" ), response.m_Body } );
 
@@ -129,6 +165,69 @@ void AI_AGENT_PANEL_MODEL::ConfigureNextActionCurrentContextSampler(
 
     if( m_NextActionRuntime )
         m_NextActionRuntime->SetCurrentContextSampler( m_NextActionContextSampler );
+}
+
+
+bool AI_AGENT_PANEL_MODEL::TryAcquireDocumentWriteOwnership(
+        const wxString& aOwnerNamespace,
+        const AI_NEXT_ACTION_CONTEXT_VERSION& aContextVersion )
+{
+    if( aOwnerNamespace.IsEmpty() )
+        return false;
+
+    const wxString documentKey = documentWriteKey( aContextVersion );
+
+    if( m_DocumentWriteOwnership
+        && documentWriteKeysConflict( m_DocumentWriteOwnership->m_DocumentKey,
+                                      documentKey ) )
+    {
+        if( m_DocumentWriteOwnership->m_OwnerNamespace != aOwnerNamespace )
+            return false;
+
+        ++m_DocumentWriteOwnership->m_Depth;
+        return true;
+    }
+
+    m_DocumentWriteOwnership = DOCUMENT_WRITE_OWNERSHIP{
+        aOwnerNamespace,
+        documentKey,
+        m_NextDocumentWriteLeaseId++
+    };
+
+    return true;
+}
+
+
+bool AI_AGENT_PANEL_MODEL::ReleaseDocumentWriteOwnership(
+        const wxString& aOwnerNamespace,
+        const AI_NEXT_ACTION_CONTEXT_VERSION& aContextVersion )
+{
+    if( !m_DocumentWriteOwnership )
+        return false;
+
+    if( m_DocumentWriteOwnership->m_OwnerNamespace != aOwnerNamespace )
+        return false;
+
+    if( m_DocumentWriteOwnership->m_DocumentKey != documentWriteKey( aContextVersion ) )
+        return false;
+
+    if( m_DocumentWriteOwnership->m_Depth > 1 )
+    {
+        --m_DocumentWriteOwnership->m_Depth;
+        return true;
+    }
+
+    m_DocumentWriteOwnership.reset();
+    return true;
+}
+
+
+std::optional<wxString> AI_AGENT_PANEL_MODEL::ActiveDocumentWriteOwnerNamespace() const
+{
+    if( !m_DocumentWriteOwnership )
+        return std::nullopt;
+
+    return m_DocumentWriteOwnership->m_OwnerNamespace;
 }
 
 
@@ -239,6 +338,16 @@ AI_AGENT_PANEL_MODEL::UpdateSuggestionsIfBackgroundEnabled(
     if( !m_NextActionRuntime )
         return std::nullopt;
 
+    AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext =
+            AiNextActionContextVersionFromSnapshot( aContextSnapshot,
+                                                    aActivity.m_Sequence );
+
+    if( !TryAcquireDocumentWriteOwnership( wxS( "nextaction" ),
+                                           ownershipContext ) )
+    {
+        return std::nullopt;
+    }
+
     AI_SUGGESTION_TRIGGER trigger;
     trigger.m_EditorKind = aContextSnapshot.m_EditorKind;
     trigger.m_ContextVersion = aContextSnapshot.m_Version;
@@ -246,7 +355,11 @@ AI_AGENT_PANEL_MODEL::UpdateSuggestionsIfBackgroundEnabled(
     trigger.m_Activity = std::move( aActivity );
     trigger.m_Reason = aReason;
     trigger.m_PreviewOnly = true;
-    return m_NextActionRuntime->Update( std::move( trigger ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            m_NextActionRuntime->Update( std::move( trigger ) );
+
+    ReleaseDocumentWriteOwnership( wxS( "nextaction" ), ownershipContext );
+    return suggestion;
 }
 
 
