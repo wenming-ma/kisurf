@@ -310,6 +310,24 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
 KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
 AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson );
 
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+{
+    bool     m_Valid = true;
+    bool     m_Passed = true;
+    wxString m_FirstErrorCode;
+    wxString m_FirstErrorMessage;
+    wxString m_FirstFailedRecordId;
+    size_t   m_TotalRecordCount = 0;
+    size_t   m_ValidRecordCount = 0;
+    size_t   m_InvalidRecordCount = 0;
+    size_t   m_PassedRecordCount = 0;
+    size_t   m_FailedRecordCount = 0;
+    wxString m_SummaryJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:
