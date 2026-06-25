@@ -41,6 +41,13 @@ public:
                                       AI_SESSION_VALIDATION_SERVICE* aValidationService );
     void ConfigureNextActionCurrentContextSampler(
             std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> aSampler );
+    bool TryAcquireDocumentWriteOwnership(
+            const wxString& aOwnerNamespace,
+            const AI_NEXT_ACTION_CONTEXT_VERSION& aContextVersion );
+    bool ReleaseDocumentWriteOwnership(
+            const wxString& aOwnerNamespace,
+            const AI_NEXT_ACTION_CONTEXT_VERSION& aContextVersion );
+    std::optional<wxString> ActiveDocumentWriteOwnerNamespace() const;
     void ReloadDefaultProviders();
     void SetToolCallHandler( AI_TOOL_CALL_HANDLER* aHandler );
 
@@ -97,4 +104,15 @@ private:
     AI_SESSION_PREVIEW_SERVICE*             m_NextActionPreviewService = nullptr;
     AI_SESSION_VALIDATION_SERVICE*          m_NextActionValidationService = nullptr;
     std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> m_NextActionContextSampler;
+
+    struct DOCUMENT_WRITE_OWNERSHIP
+    {
+        wxString m_OwnerNamespace;
+        wxString m_DocumentKey;
+        uint64_t m_LeaseId = 0;
+        uint64_t m_Depth = 1;
+    };
+
+    std::optional<DOCUMENT_WRITE_OWNERSHIP> m_DocumentWriteOwnership;
+    uint64_t                                m_NextDocumentWriteLeaseId = 1;
 };
