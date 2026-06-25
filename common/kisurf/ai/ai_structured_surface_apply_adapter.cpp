@@ -1148,6 +1148,118 @@ void AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::AbortSurfaceTransaction()
 }
 
 
+bool AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK::BeginUiTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aError )
+{
+    wxUnusedVar( aSession );
+    aError.clear();
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK::BeforeUiCommit(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    wxUnusedVar( aSurfaceStateJson );
+    wxUnusedVar( aChanged );
+    aError.clear();
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK::AfterUiCommit(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    wxUnusedVar( aSurfaceStateJson );
+    wxUnusedVar( aChanged );
+    aError.clear();
+    return true;
+}
+
+
+void AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK::AbortUiTransaction()
+{
+}
+
+
+AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND::
+        AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND(
+                std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND> aBackend,
+                std::unique_ptr<AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK> aHook ) :
+        m_Backend( std::move( aBackend ) ),
+        m_Hook( std::move( aHook ) )
+{
+}
+
+
+bool AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND::BeginSurfaceTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aSurfaceStateJson,
+        wxString& aError )
+{
+    if( !m_Backend || !m_Hook )
+    {
+        aError = wxS( "Structured surface UI transaction backend requires "
+                      "a child backend and UI hook." );
+        return false;
+    }
+
+    if( !m_Backend->BeginSurfaceTransaction( aSession, aSurfaceStateJson,
+                                             aError ) )
+    {
+        return false;
+    }
+
+    if( !m_Hook->BeginUiTransaction( aSession, aError ) )
+    {
+        m_Backend->AbortSurfaceTransaction();
+        return false;
+    }
+
+    m_InTransaction = true;
+    aError.clear();
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND::CommitSurfaceTransaction(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    if( !m_InTransaction )
+    {
+        aError = wxS( "Structured surface UI transaction has not started." );
+        return false;
+    }
+
+    if( !m_Hook->BeforeUiCommit( aSurfaceStateJson, aChanged, aError ) )
+        return false;
+
+    if( !m_Backend->CommitSurfaceTransaction( aSurfaceStateJson, aChanged,
+                                              aError ) )
+    {
+        return false;
+    }
+
+    if( !m_Hook->AfterUiCommit( aSurfaceStateJson, aChanged, aError ) )
+        return false;
+
+    m_InTransaction = false;
+    aError.clear();
+    return true;
+}
+
+
+void AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND::AbortSurfaceTransaction()
+{
+    if( m_Backend )
+        m_Backend->AbortSurfaceTransaction();
+
+    if( m_Hook )
+        m_Hook->AbortUiTransaction();
+
+    m_InTransaction = false;
+}
+
+
 AI_STRUCTURED_SURFACE_APPLY_ADAPTER::AI_STRUCTURED_SURFACE_APPLY_ADAPTER(
         wxString& aSurfaceStateJson ) :
         m_OwnedBackend(

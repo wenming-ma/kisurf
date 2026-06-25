@@ -111,6 +111,72 @@ public:
 };
 
 
+class RECORDING_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK :
+        public AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK
+{
+public:
+    bool BeginUiTransaction( const AI_EXECUTION_SESSION& aSession,
+                             wxString& aError ) override
+    {
+        wxUnusedVar( aError );
+        ++m_BeginCount;
+        m_SessionId = aSession.SessionId();
+        return m_BeginOk;
+    }
+
+    bool BeforeUiCommit( const wxString& aSurfaceStateJson, bool aChanged,
+                         wxString& aError ) override
+    {
+        ++m_BeforeCommitCount;
+        m_LastBeforeStateJson = aSurfaceStateJson;
+        m_LastChanged = aChanged;
+
+        if( !m_BeforeCommitOk )
+        {
+            aError = wxS( "ui before commit failed" );
+            return false;
+        }
+
+        aError.clear();
+        return true;
+    }
+
+    bool AfterUiCommit( const wxString& aSurfaceStateJson, bool aChanged,
+                        wxString& aError ) override
+    {
+        ++m_AfterCommitCount;
+        m_LastAfterStateJson = aSurfaceStateJson;
+        m_LastChanged = aChanged;
+
+        if( !m_AfterCommitOk )
+        {
+            aError = wxS( "ui after commit failed" );
+            return false;
+        }
+
+        aError.clear();
+        return true;
+    }
+
+    void AbortUiTransaction() override
+    {
+        ++m_AbortCount;
+    }
+
+    uint64_t m_SessionId = 0;
+    int      m_BeginCount = 0;
+    int      m_BeforeCommitCount = 0;
+    int      m_AfterCommitCount = 0;
+    int      m_AbortCount = 0;
+    bool     m_LastChanged = false;
+    bool     m_BeginOk = true;
+    bool     m_BeforeCommitOk = true;
+    bool     m_AfterCommitOk = true;
+    wxString m_LastBeforeStateJson;
+    wxString m_LastAfterStateJson;
+};
+
+
 class RECORDING_GRID_IO : public AI_STRUCTURED_SURFACE_GRID_IO
 {
 public:
@@ -844,6 +910,101 @@ BOOST_AUTO_TEST_CASE( CompositeSurfaceBackendAbortPropagatesToChildren )
     BOOST_CHECK_EQUAL( netclass->m_AbortCount, 1 );
     BOOST_CHECK_EQUAL( failing->m_AbortCount, 1 );
     BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughUiTransactionBackend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "ui transaction accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.netclass\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto backend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* child = backend.get();
+    child->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.netclass\":{\"fields\":"
+                 "{\"class\":\"Signal\"}}}}" );
+
+    auto hook =
+            std::make_unique<RECORDING_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK>();
+    RECORDING_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK* uiHook = hook.get();
+
+    AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND uiBackend(
+            std::move( backend ), std::move( hook ) );
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( uiBackend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( child->m_CommitCount, 1 );
+    BOOST_CHECK( child->m_StateJson.Contains( wxS( "\"class\":\"Power\"" ) ) );
+    BOOST_CHECK_EQUAL( uiHook->m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_BeforeCommitCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_AfterCommitCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_AbortCount, 0 );
+    BOOST_CHECK( uiHook->m_LastChanged );
+    BOOST_CHECK( uiHook->m_LastBeforeStateJson.Contains(
+            wxS( "\"class\":\"Power\"" ) ) );
+    BOOST_CHECK( uiHook->m_LastAfterStateJson.Contains(
+            wxS( "\"class\":\"Power\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( UiTransactionBackendRejectsBeforeChildCommit )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "ui transaction reject" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.netclass\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto backend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* child = backend.get();
+    child->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.netclass\":{\"fields\":"
+                 "{\"class\":\"Signal\"}}}}" );
+
+    auto hook =
+            std::make_unique<RECORDING_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK>();
+    RECORDING_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK* uiHook = hook.get();
+    uiHook->m_BeforeCommitOk = false;
+
+    AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND uiBackend(
+            std::move( backend ), std::move( hook ) );
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( uiBackend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "commit_failed" ) ) );
+    BOOST_CHECK_EQUAL( child->m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( child->m_AbortCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_BeforeCommitCount, 1 );
+    BOOST_CHECK_EQUAL( uiHook->m_AfterCommitCount, 0 );
+    BOOST_CHECK_EQUAL( uiHook->m_AbortCount, 1 );
+    BOOST_CHECK( child->m_StateJson.Contains( wxS( "\"class\":\"Signal\"" ) ) );
+    BOOST_CHECK( !child->m_StateJson.Contains( wxS( "\"class\":\"Power\"" ) ) );
 }
 
 
