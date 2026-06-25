@@ -3838,6 +3838,17 @@ nlohmann::json surfacePatchPreviewFactsJson(
         if( args.contains( "target_scope" ) && args["target_scope"].is_object() )
             preview["target_scope"] = args["target_scope"];
 
+        for( const char* key : { "expected_surface_revision",
+                                 "expected_schema_version",
+                                 "expected_selection_fingerprint",
+                                 "expected_overlap_set" } )
+        {
+            if( args.contains( key ) )
+                preview[key] = args[key];
+            else if( result.contains( key ) )
+                preview[key] = result[key];
+        }
+
         if( args.contains( "patch" ) && args["patch"].is_object() )
         {
             preview["patch"] = args["patch"];
