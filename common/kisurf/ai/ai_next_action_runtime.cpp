@@ -7467,6 +7467,105 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
 }
 
 
+AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson )
+{
+    auto finishDatasetError =
+            []( const wxString& aDatasetId, const wxString& aErrorCode,
+                const wxString& aMessage )
+            {
+                AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result;
+                result.m_Valid = false;
+                result.m_Passed = false;
+                result.m_FirstErrorCode = aErrorCode;
+                result.m_FirstErrorMessage = aMessage;
+
+                nlohmann::json summary =
+                        { { "dataset_id", toUtf8String( aDatasetId ) },
+                          { "valid", false },
+                          { "passed", false },
+                          { "first_error_code", toUtf8String( aErrorCode ) },
+                          { "first_error_message", toUtf8String( aMessage ) },
+                          { "total_record_count", 0 },
+                          { "valid_record_count", 0 },
+                          { "invalid_record_count", 0 },
+                          { "passed_record_count", 0 },
+                          { "failed_record_count", 0 } };
+
+                result.m_SummaryJson = fromUtf8String( summary.dump() );
+                return result;
+            };
+
+    nlohmann::json dataset =
+            nlohmann::json::parse( toUtf8String( aGoldenDatasetJson ), nullptr,
+                                   false );
+
+    if( dataset.is_discarded() || !dataset.is_object() )
+    {
+        return finishDatasetError( wxEmptyString, wxS( "invalid_dataset_json" ),
+                                   wxS( "Golden dataset must be a JSON object." ) );
+    }
+
+    wxString datasetId;
+
+    if( dataset.contains( "id" ) && dataset["id"].is_string() )
+        datasetId = fromUtf8String( dataset["id"].get<std::string>() );
+
+    if( !dataset.contains( "schema" ) || !dataset["schema"].is_object() )
+    {
+        return finishDatasetError( datasetId, wxS( "missing_schema" ),
+                                   wxS( "Golden dataset schema is required." ) );
+    }
+
+    const nlohmann::json& schema = dataset["schema"];
+
+    if( !schema.contains( "name" ) || !schema["name"].is_string()
+        || schema["name"].get<std::string>() != "kisurf.next_action.golden_dataset" )
+    {
+        return finishDatasetError( datasetId, wxS( "unsupported_schema_name" ),
+                                   wxS( "Golden dataset schema name is unsupported." ) );
+    }
+
+    if( !schema.contains( "version" ) || !schema["version"].is_number_unsigned() )
+    {
+        return finishDatasetError( datasetId, wxS( "missing_schema_version" ),
+                                   wxS( "Golden dataset schema version is required." ) );
+    }
+
+    if( schema["version"].get<unsigned>()
+        != AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_SCHEMA_VERSION )
+    {
+        return finishDatasetError( datasetId, wxS( "unsupported_schema_version" ),
+                                   wxS( "Golden dataset schema version is unsupported." ) );
+    }
+
+    if( !dataset.contains( "records" ) || !dataset["records"].is_array() )
+    {
+        return finishDatasetError( datasetId, wxS( "missing_records" ),
+                                   wxS( "Golden dataset records array is required." ) );
+    }
+
+    wxArrayString records;
+
+    for( const nlohmann::json& record : dataset["records"] )
+        records.Add( fromUtf8String( record.dump() ) );
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result =
+            AiEvaluateNextActionReplayGoldenDataset( records );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( toUtf8String( result.m_SummaryJson ), nullptr,
+                                   false );
+
+    if( summary.is_discarded() || !summary.is_object() )
+        summary = nlohmann::json::object();
+
+    summary["dataset_id"] = toUtf8String( datasetId );
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
