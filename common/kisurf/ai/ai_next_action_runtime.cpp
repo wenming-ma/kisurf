@@ -2427,6 +2427,71 @@ nlohmann::json connectivitySummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 }
 
 
+nlohmann::json layerContextSummaryJson( const nlohmann::json& aLayerContext )
+{
+    if( !aLayerContext.is_object() )
+        return nlohmann::json::object();
+
+    nlohmann::json summary = nlohmann::json::object();
+
+    copyJsonFieldIfPresent( summary, aLayerContext, "source" );
+    copyJsonFieldIfPresent( summary, aLayerContext, "visible_layers_source" );
+    copyJsonFieldIfPresent( summary, aLayerContext, "copper_layer_count" );
+    copyJsonFieldIfPresent( summary, aLayerContext, "enabled_layer_count" );
+    copyJsonFieldIfPresent( summary, aLayerContext, "visible_layer_count" );
+    copyJsonFieldIfPresent( summary, aLayerContext, "active_layer" );
+
+    bool layersTruncated = false;
+    summary["layers"] =
+            cappedJsonArray( aLayerContext.value( "layers", nlohmann::json::array() ),
+                             16, layersTruncated );
+
+    if( layersTruncated )
+        summary["layer_sample_truncated"] = true;
+
+    return summary;
+}
+
+
+nlohmann::json boardContextSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    if( aContext.m_Summary.IsEmpty() )
+        return nlohmann::json::object();
+
+    nlohmann::json boardSummary = objectFromJsonText( aContext.m_Summary );
+
+    if( !boardSummary.is_object() )
+        return nlohmann::json::object();
+
+    nlohmann::json summary =
+            { { "source", "context_summary.pcb_board_summary" } };
+
+    copyJsonFieldIfPresent( summary, boardSummary, "kind" );
+    copyJsonFieldIfPresent( summary, boardSummary, "board_edges_bbox" );
+    copyJsonFieldIfPresent( summary, boardSummary, "net_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "footprint_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "pad_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "track_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "arc_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "via_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "drawing_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "edge_cut_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "zone_count" );
+    copyJsonFieldIfPresent( summary, boardSummary, "keepout_count" );
+
+    if( boardSummary.contains( "layer_context" ) )
+    {
+        nlohmann::json layerSummary =
+                layerContextSummaryJson( boardSummary["layer_context"] );
+
+        if( !layerSummary.empty() )
+            summary["layer_context"] = std::move( layerSummary );
+    }
+
+    return summary;
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -3539,6 +3604,11 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 visibleObjectSummariesJson( context.m_VisibleObjects ) },
               { "selected_object_count", context.m_SelectedObjects.size() },
               { "anchor_count", context.m_Anchors.size() } };
+
+    nlohmann::json boardContext = boardContextSummaryJson( context );
+
+    if( !boardContext.empty() )
+        packet["board_context_summary"] = std::move( boardContext );
 
     nlohmann::json constraints = constraintSummaryJson( context );
 
