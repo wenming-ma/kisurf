@@ -422,4 +422,40 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsUnknownPatchOperationAndAborts )
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleSurfaceRevisionAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "stale surface patch" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"expected_surface_revision\":7,"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{"
+                 "\"revision\":8,"
+                 "\"fields\":{\"default_clearance\":\"0.15mm\"}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "stale surface revision" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
 BOOST_AUTO_TEST_SUITE_END()
