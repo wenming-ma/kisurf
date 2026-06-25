@@ -2512,6 +2512,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingBusOffsetPointSchema = false;
     bool sawRoutingReplacePathPointSchema = false;
     bool sawRoutingConstraintReroutePointSchema = false;
+    bool sawPlacementFootprintOrientationHandleSchema = false;
+    bool sawPlacementMoveHandleSchema = false;
+    bool sawPlacementOrientationRepairHandleSchema = false;
+    bool sawRoutingReplacePathHandleSchema = false;
+    bool sawRoutingConstraintRerouteHandleSchema = false;
 
     auto pointSchemaRequiresXY =
             []( const nlohmann::json& aSchema )
@@ -2544,6 +2549,39 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 }
 
                 return hasX && hasY && requiresX && requiresY
+                       && aSchema.value( "additionalProperties", true )
+                                  == false;
+            };
+
+    auto handleSchemaRequiresHandleId =
+            []( const nlohmann::json& aSchema )
+            {
+                if( !aSchema.is_object()
+                    || !aSchema.contains( "properties" )
+                    || !aSchema["properties"].is_object()
+                    || !aSchema.contains( "required" )
+                    || !aSchema["required"].is_array() )
+                {
+                    return false;
+                }
+
+                const nlohmann::json& properties = aSchema["properties"];
+                bool hasHandleId = properties.contains( "handle_id" );
+                bool hasGeneration = properties.contains( "generation" );
+                bool hasAlias = properties.contains( "alias" );
+                bool requiresHandleId = false;
+
+                for( const nlohmann::json& value : aSchema["required"] )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "handle_id" )
+                    {
+                        requiresHandleId = true;
+                    }
+                }
+
+                return hasHandleId && hasGeneration && hasAlias
+                       && requiresHandleId
                        && aSchema.value( "additionalProperties", true )
                                   == false;
             };
@@ -2662,6 +2700,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
             sawPlacementFootprintOrientationRequiredFacts =
                     hasHandles && hasCurrentOrientation && hasTargetOrientation;
+            sawPlacementFootprintOrientationHandleSchema =
+                    function["parameters"]["properties"]["handles"]
+                               .contains( "items" )
+                    && handleSchemaRequiresHandleId(
+                            function["parameters"]["properties"]["handles"]
+                                    ["items"] );
         }
 
         if( functionName == "placement_repair_via" )
@@ -2728,6 +2772,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             }
 
             sawPlacementMoveRepairRequiredHandles = hasHandles && hasDelta;
+            sawPlacementMoveHandleSchema =
+                    function["parameters"]["properties"]["handles"]
+                            .contains( "items" )
+                    && handleSchemaRequiresHandleId(
+                            function["parameters"]["properties"]["handles"]
+                                    ["items"] );
             sawPlacementMoveDeltaPointSchema = pointSchemaRequiresXY(
                     function["parameters"]["properties"]["delta"] );
         }
@@ -2764,6 +2814,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
             sawPlacementOrientationRepairRequiredFacts =
                     hasHandles && hasTargetOrientation;
+            sawPlacementOrientationRepairHandleSchema =
+                    function["parameters"]["properties"]["handles"]
+                            .contains( "items" )
+                    && handleSchemaRequiresHandleId(
+                            function["parameters"]["properties"]["handles"]
+                                    ["items"] );
         }
 
         if( functionName == "routing_repair_segment" )
@@ -2989,6 +3045,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             sawRoutingReplacePathRequiredPlan =
                     hasReplaceHandles && hasReplacementPoints && hasNet && hasLayer
                     && hasWidth;
+            const nlohmann::json& replaceHandles =
+                    function["parameters"]["properties"]["replace_handles"];
+            sawRoutingReplacePathHandleSchema =
+                    replaceHandles.contains( "items" )
+                    && handleSchemaRequiresHandleId( replaceHandles["items"] );
             const nlohmann::json& replacementPoints =
                     function["parameters"]["properties"]["replacement_points"];
             sawRoutingReplacePathPointSchema =
@@ -3035,6 +3096,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             sawRoutingConstraintRerouteRequiredFacts =
                     hasReplaceHandles && hasReplacementPoints && hasConstraints
                     && hasNet && hasLayer && hasWidth;
+            const nlohmann::json& replaceHandles =
+                    function["parameters"]["properties"]["replace_handles"];
+            sawRoutingConstraintRerouteHandleSchema =
+                    replaceHandles.contains( "items" )
+                    && handleSchemaRequiresHandleId( replaceHandles["items"] );
             const nlohmann::json& replacementPoints =
                     function["parameters"]["properties"]["replacement_points"];
             sawRoutingConstraintReroutePointSchema =
@@ -3124,6 +3190,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingBusOffsetPointSchema );
     BOOST_CHECK( sawRoutingReplacePathPointSchema );
     BOOST_CHECK( sawRoutingConstraintReroutePointSchema );
+    BOOST_CHECK( sawPlacementFootprintOrientationHandleSchema );
+    BOOST_CHECK( sawPlacementMoveHandleSchema );
+    BOOST_CHECK( sawPlacementOrientationRepairHandleSchema );
+    BOOST_CHECK( sawRoutingReplacePathHandleSchema );
+    BOOST_CHECK( sawRoutingConstraintRerouteHandleSchema );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(

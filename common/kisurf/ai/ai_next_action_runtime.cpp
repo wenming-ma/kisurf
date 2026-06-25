@@ -6427,6 +6427,49 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto handleSchema =
+                        []()
+                        {
+                            return nlohmann::json{
+                                { "type", "object" },
+                                { "additionalProperties", false },
+                                { "description",
+                                  "Session handle returned by a prior hidden attempt tool." },
+                                { "properties",
+                                  { { "session_id",
+                                      { { "type", "integer" },
+                                        { "minimum", 1 },
+                                        { "description",
+                                          "Optional session id for the handle." } } },
+                                    { "handle_id",
+                                      { { "type", "integer" },
+                                        { "minimum", 1 },
+                                        { "description",
+                                          "Session-local handle id." } } },
+                                    { "generation",
+                                      { { "type", "integer" },
+                                        { "minimum", 1 },
+                                        { "description",
+                                          "Optional handle generation for stale-handle checks." } } },
+                                    { "alias",
+                                      { { "type", "string" },
+                                        { "description",
+                                          "Optional model-readable handle alias." } } } } },
+                                { "required", nlohmann::json::array( { "handle_id" } ) }
+                            };
+                        };
+
+                auto handleArraySchema =
+                        [&]( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "type", "array" },
+                                { "description", aDescription },
+                                { "items", handleSchema() },
+                                { "minItems", 1 }
+                            };
+                        };
+
                 auto busSegmentSchema =
                         [&]()
                         {
@@ -6548,12 +6591,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isPlacementFootprintOrientationCandidateTool( aName ) )
                 {
                     parameters["properties"]["handles"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Session handles for the footprint or selected "
-                                "placement items to orient." },
-                              { "items", { { "type", "object" } } },
-                              { "minItems", 1 } };
+                            handleArraySchema(
+                                    "Session handles for the footprint or selected placement items to orient." );
                     parameters["properties"]["footprint_ref"] =
                             { { "type", "string" },
                               { "description",
@@ -6626,10 +6665,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingReplacePathCandidateTool( aName ) )
                 {
                     parameters["properties"]["replace_handles"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Existing session handles to delete as part of the "
-                                "replacement path candidate." } };
+                            handleArraySchema(
+                                    "Existing session handles to delete as part of the replacement path candidate." );
                     parameters["properties"]["replacement_points"] =
                             pointArraySchema( "Replacement polyline points, at least start and end.", 2 );
                     parameters["properties"]["net"] =
@@ -6649,10 +6686,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isRoutingConstraintAwareRerouteCandidateTool( aName ) )
                 {
                     parameters["properties"]["replace_handles"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Existing session handles to delete as part of the "
-                                "constraint-aware reroute candidate." } };
+                            handleArraySchema(
+                                    "Existing session handles to delete as part of the constraint-aware reroute candidate." );
                     parameters["properties"]["replacement_points"] =
                             pointArraySchema( "Replacement polyline points, at least start and end.", 2 );
                     parameters["properties"]["constraints"] =
@@ -6706,11 +6741,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isPlacementRepairMoveItemsTool( aName ) )
                 {
                     parameters["properties"]["handles"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Session handles for hidden placement items to move. "
-                                "Use handles returned by earlier hidden attempt tools." },
-                              { "items", { { "type", "object" } } } };
+                            handleArraySchema(
+                                    "Session handles for hidden placement items to move. Use handles returned by earlier hidden attempt tools." );
                     parameters["properties"]["delta"] =
                             pointSchema( "Integer internal-coordinate movement delta with x and y." );
                     parameters["properties"]["alias"] =
@@ -6726,12 +6758,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 else if( isPlacementRepairFootprintOrientationTool( aName ) )
                 {
                     parameters["properties"]["handles"] =
-                            { { "type", "array" },
-                              { "description",
-                                "Session handles for the footprint or selected "
-                                "placement items to orient in the hidden attempt." },
-                              { "items", { { "type", "object" } } },
-                              { "minItems", 1 } };
+                            handleArraySchema(
+                                    "Session handles for the footprint or selected placement items to orient in the hidden attempt." );
                     parameters["properties"]["target_orientation_degrees"] =
                             { { "type", "number" },
                               { "description",
