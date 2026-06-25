@@ -4031,6 +4031,15 @@ wxString AI_NEXT_ACTION_BUDGET_COUNTERS::AsJsonText() const
 }
 
 
+bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
+{
+    return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
+           || aToolState == AI_TOOL_STATE_KIND::PlacingVia
+           || aToolState == AI_TOOL_STATE_KIND::PlacingFootprint
+           || aToolState == AI_TOOL_STATE_KIND::DrawingZone;
+}
+
+
 std::optional<AI_SEMANTIC_EVENT> AI_NEXT_ACTION_SCHEDULER::BuildSemanticEvent(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
@@ -4042,9 +4051,14 @@ std::optional<AI_SEMANTIC_EVENT> AI_NEXT_ACTION_SCHEDULER::BuildSemanticEvent(
 
     wxString action = aTrigger.m_Activity.m_ActionName.Lower();
 
-    if( action.Contains( wxS( "mouse.move" ) )
-        || action.Contains( wxS( "cursor.move" ) )
-        || action.Contains( wxS( "pointer.move" ) ) )
+    const bool rawPointerMove =
+            action.Contains( wxS( "mouse.move" ) )
+            || action.Contains( wxS( "cursor.move" ) )
+            || action.Contains( wxS( "pointer.move" ) );
+
+    if( rawPointerMove
+        && !isActiveNextActionToolState(
+                aTrigger.m_ContextSnapshot.m_ToolState.m_Kind ) )
     {
         return std::nullopt;
     }

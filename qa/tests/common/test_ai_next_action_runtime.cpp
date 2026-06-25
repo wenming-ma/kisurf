@@ -1536,6 +1536,16 @@ AI_SUGGESTION_TRIGGER makeAutofillTrigger()
 }
 
 
+AI_SUGGESTION_TRIGGER makeIdleMouseMoveTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeAutofillTrigger();
+    trigger.m_Activity.m_Sequence = 46;
+    trigger.m_Activity.m_ActionName = wxS( "mouse.move" );
+    trigger.m_Reason = wxS( "raw cursor move" );
+    return trigger;
+}
+
+
 AI_SUGGESTION_TRIGGER makePanelFillTriggerWithTargetScope()
 {
     AI_SUGGESTION_TRIGGER trigger;
@@ -1654,12 +1664,28 @@ nlohmann::json providerRequestJson( const AI_PROVIDER_REQUEST& aRequest )
 BOOST_AUTO_TEST_SUITE( AiNextActionRuntime )
 
 
-BOOST_AUTO_TEST_CASE( SchedulerSuppressesRawMouseMove )
+BOOST_AUTO_TEST_CASE( SchedulerSuppressesRawMouseMoveOutsideActiveToolState )
 {
     AI_NEXT_ACTION_SCHEDULER scheduler;
 
-    BOOST_CHECK( !scheduler.BuildSemanticEvent( makeMouseMoveTrigger() ).has_value() );
+    BOOST_CHECK( !scheduler.BuildSemanticEvent(
+                           makeIdleMouseMoveTrigger() )
+                          .has_value() );
     BOOST_CHECK( scheduler.BuildSemanticEvent( makeViaTrigger() ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SchedulerAllowsMouseMoveDuringActiveRoutingOrPlacement )
+{
+    AI_NEXT_ACTION_SCHEDULER scheduler;
+
+    BOOST_CHECK( scheduler.BuildSemanticEvent( makeMouseMoveTrigger() ).has_value() );
+
+    AI_NEXT_ACTION_SCHEDULER routingScheduler;
+    AI_SUGGESTION_TRIGGER routing = makeRoutingTrigger();
+    routing.m_Activity.m_ActionName = wxS( "cursor.move" );
+    routing.m_Reason = wxS( "active routing cursor move" );
+    BOOST_CHECK( routingScheduler.BuildSemanticEvent( routing ).has_value() );
 }
 
 
