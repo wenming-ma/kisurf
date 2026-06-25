@@ -2276,6 +2276,19 @@ public:
                 return response;
             }
 
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need render facts after the script mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_after_script" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
             response.m_Body = publishReview();
             return response;
         }
@@ -5106,7 +5119,7 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesShadowApplyCandidateToolAgainstHiddenAttemp
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
@@ -5133,10 +5146,12 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesShadowApplyCandidateToolAgainstHiddenAttemp
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"pcb.create_via\"" ) ) );
 
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
-            wxS( "\"provider_tool_results\"" ) ) );
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
-            wxS( "\"call_apply_candidate\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
+    BOOST_CHECK( runtime.Suggestions().empty() );
 }
 
 
@@ -5152,7 +5167,7 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
@@ -5181,11 +5196,6 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"pcb.create_via\"" ) ) );
 
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
-            wxS( "\"provider_tool_results\"" ) ) );
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
-            wxS( "\"call_script_plan\"" ) ) );
-
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
             wxS( "\"provider_tool_results\"" ) ) );
@@ -5202,6 +5212,37 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
             wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
     BOOST_CHECK( mergedJournal.Contains(
             wxS( "\"merged_from_tool_call_id\":\"call_script_plan\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksScriptMutationPublishWithoutFreshRender )
+{
+    auto* provider = new BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.back().m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.back().m_ToolResults.front().m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
+    BOOST_CHECK( runtime.Suggestions().empty() );
 }
 
 
@@ -5217,7 +5258,7 @@ BOOST_AUTO_TEST_CASE( RuntimeLowersSurfacePatchPlanIntoHiddenAttemptJournal )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makePanelFillTriggerWithTargetScope() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
     BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
 
@@ -5248,6 +5289,11 @@ BOOST_AUTO_TEST_CASE( RuntimeLowersSurfacePatchPlanIntoHiddenAttemptJournal )
     BOOST_CHECK( journal.Contains( wxS( "\"patch_operation_count\":2" ) ) );
     BOOST_CHECK( journal.Contains(
             wxS( "\"merged_from_tool_call_id\":\"call_surface_patch\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
 }
 
 
@@ -6572,9 +6618,11 @@ BOOST_AUTO_TEST_CASE( RuntimeValidateToolRefreshesAttemptSessionAfterScriptInSam
     BOOST_CHECK_GE( validationService.m_CheckpointCounts.back(), 2 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
-    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
     const AI_TOOL_CALL_RECORD& validationResult =
             publishRequest.m_ToolResults.at( 1 );
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 2 );
 
     BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
                        wxString( wxS( "call_validate_after_script" ) ) );
@@ -6583,6 +6631,12 @@ BOOST_AUTO_TEST_CASE( RuntimeValidateToolRefreshesAttemptSessionAfterScriptInSam
     BOOST_CHECK( validationResult.m_ResultJson.Contains(
             wxS( "\"shadow_live_item_count\":2" ) ) );
     BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_after_script" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"render.hidden_attempt\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"attempt_session_journal\"" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
