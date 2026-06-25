@@ -62,6 +62,26 @@ public:
     virtual void ClearPreview( uint64_t aPreviewId ) = 0;
 };
 
+class KICOMMON_API AI_COMPOSITE_PREVIEW_ADAPTER :
+        public AI_PREVIEW_ADAPTER
+{
+public:
+    void AddAdapter( AI_PREVIEW_ADAPTER& aAdapter );
+    size_t AdapterCount() const { return m_Adapters.size(); }
+
+    void BeginPreview( uint64_t aPreviewId ) override;
+    void ShowObject( uint64_t aPreviewId,
+                     const AI_OBJECT_REF& aObject ) override;
+    void ShowOperation( uint64_t aPreviewId,
+                        const AI_SUGGESTION_OPERATION& aOperation ) override;
+    void ShowOverlay( uint64_t aPreviewId,
+                      const AI_PREVIEW_ITEM_OVERLAY& aOverlay ) override;
+    void ClearPreview( uint64_t aPreviewId ) override;
+
+private:
+    std::vector<AI_PREVIEW_ADAPTER*> m_Adapters;
+};
+
 class KICOMMON_API AI_PREVIEW_MANAGER
 {
 public:
