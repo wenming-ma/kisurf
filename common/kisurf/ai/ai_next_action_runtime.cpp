@@ -2374,6 +2374,7 @@ nlohmann::json effectiveConstraintSummaryJson( const nlohmann::json& aEffective 
 
     bool worstTruncated = false;
     bool pairTruncated = false;
+    bool coverageTruncated = false;
     summary["worst_constraints"] =
             cappedJsonArray( aEffective.value( "worst_constraints",
                                                nlohmann::json::array() ),
@@ -2382,12 +2383,19 @@ nlohmann::json effectiveConstraintSummaryJson( const nlohmann::json& aEffective 
             cappedJsonArray( aEffective.value( "pair_effective_constraints",
                                                nlohmann::json::array() ),
                              8, pairTruncated );
+    summary["geometry_specific_rule_coverage"] =
+            cappedJsonArray( aEffective.value( "geometry_specific_rule_coverage",
+                                               nlohmann::json::array() ),
+                             8, coverageTruncated );
 
     if( worstTruncated )
         summary["worst_constraint_sample_truncated"] = true;
 
     if( pairTruncated )
         summary["pair_effective_constraint_sample_truncated"] = true;
+
+    if( coverageTruncated )
+        summary["geometry_specific_rule_coverage_truncated"] = true;
 
     return summary;
 }
@@ -2458,6 +2466,8 @@ nlohmann::json connectivitySummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 
     bool componentTruncated = false;
     bool edgeTruncated = false;
+    bool graphNodeTruncated = false;
+    bool graphEdgeTruncated = false;
     summary["net_component_summaries"] =
             cappedJsonArray( connectivity.value( "net_component_summaries",
                                                  nlohmann::json::array() ),
@@ -2466,12 +2476,26 @@ nlohmann::json connectivitySummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
             cappedJsonArray( connectivity.value( "unconnected_edges",
                                                  nlohmann::json::array() ),
                              16, edgeTruncated );
+    summary["component_graph_nodes"] =
+            cappedJsonArray( connectivity.value( "component_graph_nodes",
+                                                 nlohmann::json::array() ),
+                             16, graphNodeTruncated );
+    summary["component_graph_edges"] =
+            cappedJsonArray( connectivity.value( "component_graph_edges",
+                                                 nlohmann::json::array() ),
+                             16, graphEdgeTruncated );
 
     if( componentTruncated )
         summary["net_component_summary_sample_truncated"] = true;
 
     if( edgeTruncated )
         summary["unconnected_edge_sample_truncated"] = true;
+
+    if( graphNodeTruncated )
+        summary["component_graph_node_sample_truncated"] = true;
+
+    if( graphEdgeTruncated )
+        summary["component_graph_edge_sample_truncated"] = true;
 
     return summary;
 }

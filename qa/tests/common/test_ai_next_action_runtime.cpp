@@ -2815,6 +2815,9 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"effective_constraints\":{"
                  "\"drc_engine_present\":true,\"rules_valid\":true,"
                  "\"geometry_dependent_rules_present\":true,"
+                 "\"geometry_specific_rule_coverage\":[{"
+                 "\"rule\":\"clearance\",\"geometry\":\"pad_to_track\","
+                 "\"covered\":true,\"source\":\"DRC_ENGINE::EvalRules\"}],"
                  "\"worst_constraints\":[{\"type\":\"clearance\","
                  "\"value\":{\"min\":175000,\"has_min\":true}}],"
                  "\"pair_effective_constraints\":[{\"type\":\"clearance\","
@@ -2895,6 +2898,15 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK(
             placementPacket["constraint_summary"]["effective_constraints"]
                     ["geometry_dependent_rules_present"].get<bool>() );
+    BOOST_REQUIRE_EQUAL(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["geometry_specific_rule_coverage"].size(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["geometry_specific_rule_coverage"].at( 0 )["geometry"]
+                    .get<std::string>(),
+            "pad_to_track" );
     BOOST_REQUIRE_EQUAL(
             placementPacket["constraint_summary"]["effective_constraints"]
                     ["worst_constraints"].size(),
@@ -3057,6 +3069,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"net_name\":\"GND\",\"component_count\":2,"
                  "\"ratsnest_component_edge_count\":1}],"
                  "\"net_component_summary_sample_truncated\":false,"
+                 "\"component_graph_nodes\":[{\"id\":\"U1.1\","
+                 "\"net_code\":1,\"net_name\":\"GND\"},"
+                 "{\"id\":\"U2.1\",\"net_code\":1,\"net_name\":\"GND\"}],"
+                 "\"component_graph_edges\":[{\"from\":\"U1.1\","
+                 "\"to\":\"U2.1\",\"net_code\":1,\"net_name\":\"GND\","
+                 "\"kind\":\"ratsnest\"}],"
                  "\"unconnected_edges\":[{\"net_code\":1,"
                  "\"net_name\":\"GND\",\"visible\":true}],"
                  "\"unconnected_edge_sample_truncated\":false},"
@@ -3121,6 +3139,16 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE_EQUAL(
             routingPacket["connectivity_summary"]["net_component_summaries"].size(),
             1 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["connectivity_summary"]["component_graph_nodes"].size(),
+            2 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["connectivity_summary"]["component_graph_edges"].size(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["connectivity_summary"]["component_graph_edges"]
+                    .at( 0 )["from"].get<std::string>(),
+            "U1.1" );
     BOOST_REQUIRE_EQUAL(
             routingPacket["connectivity_summary"]["unconnected_edges"].size(),
             1 );
