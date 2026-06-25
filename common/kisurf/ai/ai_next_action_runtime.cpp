@@ -9519,6 +9519,10 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
                                              "budget_within_limits",
                                              "self_review_passed" } ) },
                   { "publish_requires_review_basis", true },
+                  { "hidden_mutation_requires_fresh_render", true },
+                  { "hidden_mutation_requires_fresh_validation", true },
+                  { "rollback_clears_pending_hidden_mutation_evidence",
+                    true },
                   { "publish_is_runtime_gated", true } } },
               { "attempt",
                 { { "attempt_id", aAttempt.m_Id },
@@ -9601,7 +9605,10 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
                  "rollback, and review feedback to avoid repeating failed work. "
                  "Publishing requires review_basis.render_valid, "
                  "review_basis.validation_passed, review_basis.budget_within_limits, "
-                 "and review_basis.self_review_passed to be true. Return JSON only." );
+                 "and review_basis.self_review_passed to be true. "
+                 "If you execute hidden mutation tools during review, call "
+                 "render_hidden_attempt and validate_hidden_attempt after the final "
+                 "hidden mutation before requesting publish. Return JSON only." );
     request.m_ResponseFormatJson = wxS( "{\"type\":\"json_object\"}" );
     request.m_ToolCatalogJson = m_Tools.CallableToolCatalogJson();
     const ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState(

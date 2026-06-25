@@ -4572,6 +4572,10 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
             wxS( "publish.preview" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
             wxS( "validate.hidden_attempt" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
+            wxS( "\"hidden_mutation_requires_fresh_render\":true" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
+            wxS( "\"hidden_mutation_requires_fresh_validation\":true" ) ) );
     BOOST_CHECK( suggestion->m_Title.Contains( wxS( "next via" ) ) );
     BOOST_CHECK( !suggestion->m_PreviewOnly );
     BOOST_CHECK( !suggestion->m_EditObjects.empty() );
