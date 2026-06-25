@@ -2265,6 +2265,141 @@ public:
 };
 
 
+bool previewGateFeedbackHasReason( const wxString& aFeedbackJson,
+                                   const std::string& aReason )
+{
+    nlohmann::json feedback = nlohmann::json::parse(
+            aFeedbackJson.ToStdString(), nullptr, false );
+
+    if( feedback.is_discarded() || !feedback.is_object()
+        || !feedback.contains( "preview_gate_result" ) )
+    {
+        return false;
+    }
+
+    const nlohmann::json& gate = feedback["preview_gate_result"];
+
+    if( !gate.is_object() || !gate.contains( "reasons" )
+        || !gate["reasons"].is_array() )
+    {
+        return false;
+    }
+
+    for( const nlohmann::json& reason : gate["reasons"] )
+    {
+        if( reason.is_string() && reason.get<std::string>() == aReason )
+            return true;
+    }
+
+    return false;
+}
+
+
+class SCRIPT_PUBLISH_GATE_RENDER_VALIDATE_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "script publish gate render validate next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"sequential_gate_feedback_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            wxString latestFeedbackJson;
+            bool hasRender = false;
+            bool hasValidation = false;
+
+            for( const AI_TOOL_CALL_RECORD& result : aRequest.m_ToolResults )
+            {
+                if( result.m_ToolName == wxS( "preview_gate_feedback" ) )
+                    latestFeedbackJson = result.m_ResultJson;
+
+                if( result.m_ToolName == wxS( "render_hidden_attempt" ) )
+                    hasRender = true;
+
+                if( result.m_ToolName == wxS( "validate_hidden_attempt" ) )
+                    hasValidation = true;
+            }
+
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_via_1\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            const bool latestFeedbackNeedsRender =
+                    previewGateFeedbackHasReason(
+                            latestFeedbackJson, "render_freshness_failed" );
+            const bool latestFeedbackNeedsValidation =
+                    previewGateFeedbackHasReason(
+                            latestFeedbackJson, "validation_freshness_failed" );
+
+            if( latestFeedbackNeedsRender && !hasRender )
+            {
+                response.m_Body = wxS( "Gate feedback requires render after mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_after_gate_feedback" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( latestFeedbackNeedsValidation && !latestFeedbackNeedsRender
+                && hasRender && !hasValidation )
+            {
+                response.m_Body =
+                        wxS( "Gate feedback requires validation after render." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_after_gate_feedback" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class REPAIR_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -6767,6 +6902,57 @@ BOOST_AUTO_TEST_CASE( RuntimeFeedsPreviewGateFailureBackIntoReviewLoop )
                        wxString( wxS( "validate_hidden_attempt" ) ) );
     BOOST_CHECK_EQUAL(
             publishRequest.m_ToolResults.at( 3 ).m_ToolCallId,
+            wxString( wxS( "call_validate_after_gate_feedback" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+    BOOST_CHECK_EQUAL( runtime.Suggestions().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeFeedsSequentialPreviewGateFailuresBackIntoReviewLoop )
+{
+    auto* provider =
+            new SCRIPT_PUBLISH_GATE_RENDER_VALIDATE_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 5 );
+
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 0 ).m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 1 ).m_ToolName,
+                       wxString( wxS( "preview_gate_feedback" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.at( 1 ).m_ResultJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 2 ).m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK_EQUAL(
+            publishRequest.m_ToolResults.at( 2 ).m_ToolCallId,
+            wxString( wxS( "call_render_after_gate_feedback" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 3 ).m_ToolName,
+                       wxString( wxS( "preview_gate_feedback" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.at( 3 ).m_ResultJson.Contains(
+            wxS( "validation_freshness_failed" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 4 ).m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK_EQUAL(
+            publishRequest.m_ToolResults.at( 4 ).m_ToolCallId,
             wxString( wxS( "call_validate_after_gate_feedback" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
