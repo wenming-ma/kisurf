@@ -1367,6 +1367,23 @@ AI_OBJECT_REF viaRef( int aX, int aY, const wxString& aNetName = wxS( "GND" ) )
 }
 
 
+AI_OBJECT_REF trackRef( int aStartX, int aStartY, int aEndX, int aEndY,
+                        const wxString& aNetName = wxS( "GND" ) )
+{
+    wxString details;
+    details << wxS( "{\"kind\":\"track\",\"start\":{\"x\":" ) << aStartX
+            << wxS( ",\"y\":" ) << aStartY << wxS( "},\"end\":{\"x\":" )
+            << aEndX << wxS( ",\"y\":" ) << aEndY
+            << wxS( "},\"layer\":\"F.Cu\",\"width\":150000,\"net_name\":\"" )
+            << aNetName << wxS( "\"}" );
+
+    return AI_OBJECT_REF( KIID(), PCB_TRACE_T,
+                          wxString::Format( wxS( "track:%d,%d->%d,%d" ),
+                                            aStartX, aStartY, aEndX, aEndY ),
+                          details );
+}
+
+
 AI_OBJECT_REF footprintRef()
 {
     return AI_OBJECT_REF(
@@ -2130,8 +2147,18 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             contextAnchor( wxS( "route_candidate_1" ),
                            AI_CONTEXT_ANCHOR_KIND::RouteCandidate,
                            wxS( "Route candidate 1" ), 320, 200 ) );
+    routingTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000,"
+                 "\"start\":{\"x\":100,\"y\":200},"
+                 "\"cursor\":{\"x\":260,\"y\":200},"
+                 "\"cursor_region\":{\"x\":250,\"y\":210,"
+                 "\"width\":180,\"height\":120}}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            trackRef( 180, 210, 300, 210, wxS( "GND" ) ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            trackRef( 1000, 1000, 1200, 1000, wxS( "GND" ) ) );
 
     BOOST_CHECK( !routingRuntime.Update( routingTrigger ).has_value() );
     BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.size(), 1 );
@@ -2172,11 +2199,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
             320 );
     BOOST_REQUIRE( routingPacket.contains( "visible_object_summaries" ) );
-    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 1 );
+    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 3 );
     BOOST_CHECK_EQUAL(
             routingPacket["visible_object_summaries"].at( 0 )["details"]["net_name"]
                     .get<std::string>(),
             "GND" );
+    BOOST_REQUIRE( routingPacket.contains( "local_obstacle_facts" ) );
+
+    std::set<std::string> routingLocalObstacleLabels;
+
+    for( const nlohmann::json& fact : routingPacket["local_obstacle_facts"] )
+        routingLocalObstacleLabels.insert( fact["label"].get<std::string>() );
+
+    BOOST_CHECK( routingLocalObstacleLabels.find( "track:180,210->300,210" )
+                 != routingLocalObstacleLabels.end() );
+    BOOST_CHECK( routingLocalObstacleLabels.find( "track:1000,1000->1200,1000" )
+                 == routingLocalObstacleLabels.end() );
 
     auto* autofillProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","

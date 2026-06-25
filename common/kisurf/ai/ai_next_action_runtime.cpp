@@ -2245,6 +2245,108 @@ nlohmann::json bboxRecordJson( int aLeft, int aTop, int aWidth, int aHeight )
 }
 
 
+bool appendPointFromField( std::vector<std::pair<int, int>>& aPoints,
+                           const nlohmann::json& aDetails, const char* aField )
+{
+    if( !aDetails.contains( aField ) || !aDetails[aField].is_object() )
+        return false;
+
+    int x = 0;
+    int y = 0;
+
+    if( !jsonNumberAsInt( aDetails[aField], "x", x )
+        || !jsonNumberAsInt( aDetails[aField], "y", y ) )
+    {
+        return false;
+    }
+
+    aPoints.emplace_back( x, y );
+    return true;
+}
+
+
+std::optional<nlohmann::json> bboxFromPointFields(
+        const nlohmann::json& aDetails, const std::vector<const char*>& aFields )
+{
+    std::vector<std::pair<int, int>> points;
+
+    for( const char* field : aFields )
+        appendPointFromField( points, aDetails, field );
+
+    if( points.empty() )
+        return std::nullopt;
+
+    int minX = points.front().first;
+    int maxX = points.front().first;
+    int minY = points.front().second;
+    int maxY = points.front().second;
+
+    for( const std::pair<int, int>& point : points )
+    {
+        minX = std::min( minX, point.first );
+        maxX = std::max( maxX, point.first );
+        minY = std::min( minY, point.second );
+        maxY = std::max( maxY, point.second );
+    }
+
+    return bboxRecordJson( minX, minY, maxX - minX, maxY - minY );
+}
+
+
+nlohmann::json routingObstacleFactJson( const AI_OBJECT_REF& aObject )
+{
+    const nlohmann::json details = objectDetailsJson( aObject );
+
+    if( details.empty() )
+        return nlohmann::json::object();
+
+    if( aObject.m_Type != PCB_TRACE_T && aObject.m_Type != PCB_ARC_T
+        && !detailsKindEquals( details, "track" )
+        && !detailsKindEquals( details, "arc" ) )
+    {
+        return nlohmann::json::object();
+    }
+
+    const bool isArc = aObject.m_Type == PCB_ARC_T || detailsKindEquals( details, "arc" );
+    std::optional<nlohmann::json> bbox =
+            isArc ? bboxFromPointFields( details, { "start", "mid", "end" } )
+                  : bboxFromPointFields( details, { "start", "end" } );
+
+    if( !bbox )
+        return nlohmann::json::object();
+
+    nlohmann::json fact = visibleObjectBaseFact( aObject );
+    fact["kind"] = isArc ? "routing_arc_obstacle" : "routing_track_obstacle";
+    fact["bbox"] = *bbox;
+    copyJsonFieldIfPresent( fact, details, "start" );
+    copyJsonFieldIfPresent( fact, details, "mid" );
+    copyJsonFieldIfPresent( fact, details, "end" );
+    copyJsonFieldIfPresent( fact, details, "layer" );
+    copyJsonFieldIfPresent( fact, details, "width" );
+    copyJsonFieldIfPresent( fact, details, "net_code" );
+    copyJsonFieldIfPresent( fact, details, "net_name" );
+    return fact;
+}
+
+
+nlohmann::json routingObstacleFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    const size_t    count = std::min<size_t>( aObjects.size(), 32 );
+
+    for( size_t ii = 0; ii < count; ++ii )
+    {
+        nlohmann::json fact = routingObstacleFactJson( aObjects[ii] );
+
+        if( !fact.empty() )
+            facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
 std::optional<LOCALITY_REGION> localityRegionFromObject( const char* aSource,
                                                          const nlohmann::json& aObject )
 {
@@ -2386,6 +2488,9 @@ nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObject
 
     for( nlohmann::json keepout : placementKeepoutFactsJson( aObjects ) )
         candidates.push_back( std::move( keepout ) );
+
+    for( nlohmann::json routingObstacle : routingObstacleFactsJson( aObjects ) )
+        candidates.push_back( std::move( routingObstacle ) );
 
     for( nlohmann::json fact : candidates )
     {
