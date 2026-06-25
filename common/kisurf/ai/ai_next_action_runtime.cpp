@@ -944,6 +944,27 @@ bool toolRecordIsExecutedValidation( const nlohmann::json& aToolRecord )
 }
 
 
+bool toolRecordIsExecutedHiddenMutation( const nlohmann::json& aToolRecord )
+{
+    if( !aToolRecord.is_object()
+        || !aToolRecord.value( "allowed", false )
+        || !aToolRecord.value( "executed", false )
+        || !aToolRecord.contains( "result" )
+        || !aToolRecord["result"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& result = aToolRecord["result"];
+    const std::string     resultTool =
+            result.value( "tool", std::string() );
+
+    return isHiddenMutationBatchTool( resultTool )
+           && result.value( "status", std::string() ) == "script_plan_executed"
+           && result.value( "mutation_applied", false );
+}
+
+
 bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 {
     nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
@@ -955,6 +976,7 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
     }
 
     bool validationPending = false;
+    bool validationHintActive = false;
 
     for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
     {
@@ -969,6 +991,14 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 
         if( toolRecord.contains( "result" )
             && jsonContainsValidationBeforePublishHint( toolRecord["result"] ) )
+        {
+            validationPending = true;
+            validationHintActive = true;
+            continue;
+        }
+
+        if( validationHintActive
+            && toolRecordIsExecutedHiddenMutation( toolRecord ) )
         {
             validationPending = true;
         }
