@@ -7251,6 +7251,153 @@ AiEvaluateNextActionReplayTraceBatch(
 }
 
 
+AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
+{
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT result;
+
+    auto finish =
+            [&result]( bool aValid, bool aPassed,
+                       const wxString& aErrorCode,
+                       const wxString& aMessage,
+                       const AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT* aTraceEval )
+            {
+                result.m_Valid = aValid;
+                result.m_Passed = aPassed;
+                result.m_ErrorCode = aErrorCode;
+                result.m_Message = aMessage;
+
+                nlohmann::json summary =
+                        { { "record_id", toUtf8String( result.m_RecordId ) },
+                          { "valid", result.m_Valid },
+                          { "passed", result.m_Passed } };
+
+                if( !aErrorCode.IsEmpty() )
+                    summary["error_code"] = toUtf8String( aErrorCode );
+
+                if( !aMessage.IsEmpty() )
+                    summary["message"] = toUtf8String( aMessage );
+
+                if( aTraceEval )
+                {
+                    summary["trace_terminal_state"] =
+                            toUtf8String( aTraceEval->m_TerminalState );
+                    summary["trace_published"] = aTraceEval->m_Published;
+                    summary["trace_hidden_operation_count"] =
+                            aTraceEval->m_HiddenOperationCount;
+                    summary["trace_attempt_count"] = aTraceEval->m_AttemptCount;
+                    summary["trace_preview_gate_allowed"] =
+                            aTraceEval->m_PreviewGateAllowed;
+                }
+
+                result.m_SummaryJson = fromUtf8String( summary.dump() );
+                return result;
+            };
+
+    nlohmann::json golden =
+            nlohmann::json::parse( toUtf8String( aGoldenRecordJson ), nullptr, false );
+
+    if( golden.is_discarded() || !golden.is_object() )
+    {
+        return finish( false, false, wxS( "invalid_golden_json" ),
+                       wxS( "Golden record must be a JSON object." ), nullptr );
+    }
+
+    if( golden.contains( "id" ) && golden["id"].is_string() )
+        result.m_RecordId = fromUtf8String( golden["id"].get<std::string>() );
+
+    if( !golden.contains( "schema" ) || !golden["schema"].is_object() )
+    {
+        return finish( false, false, wxS( "missing_schema" ),
+                       wxS( "Golden record schema is required." ), nullptr );
+    }
+
+    const nlohmann::json& schema = golden["schema"];
+
+    if( !schema.contains( "name" ) || !schema["name"].is_string()
+        || schema["name"].get<std::string>() != "kisurf.next_action.golden_trace" )
+    {
+        return finish( false, false, wxS( "unsupported_schema_name" ),
+                       wxS( "Golden record schema name is unsupported." ), nullptr );
+    }
+
+    if( !schema.contains( "version" ) || !schema["version"].is_number_unsigned() )
+    {
+        return finish( false, false, wxS( "missing_schema_version" ),
+                       wxS( "Golden record schema version is required." ), nullptr );
+    }
+
+    if( schema["version"].get<unsigned>()
+        != AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION )
+    {
+        return finish( false, false, wxS( "unsupported_schema_version" ),
+                       wxS( "Golden record schema version is unsupported." ), nullptr );
+    }
+
+    if( result.m_RecordId.IsEmpty() )
+    {
+        return finish( false, false, wxS( "missing_record_id" ),
+                       wxS( "Golden record id is required." ), nullptr );
+    }
+
+    if( !golden.contains( "replay_trace" )
+        || !golden["replay_trace"].is_object() )
+    {
+        return finish( false, false, wxS( "missing_replay_trace" ),
+                       wxS( "Golden record replay_trace object is required." ), nullptr );
+    }
+
+    if( !golden.contains( "expected" ) || !golden["expected"].is_object() )
+    {
+        return finish( false, false, wxS( "missing_expected" ),
+                       wxS( "Golden record expected object is required." ), nullptr );
+    }
+
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT traceEval =
+            AiEvaluateNextActionReplayTraceJson(
+                    fromUtf8String( golden["replay_trace"].dump() ) );
+
+    if( !traceEval.m_Valid )
+    {
+        return finish( false, false, wxS( "invalid_replay_trace" ),
+                       traceEval.m_Message, &traceEval );
+    }
+
+    const nlohmann::json& expected = golden["expected"];
+
+    if( expected.contains( "terminal_state" )
+        && expected["terminal_state"].is_string()
+        && expected["terminal_state"].get<std::string>()
+           != toUtf8String( traceEval.m_TerminalState ) )
+    {
+        return finish( true, false, wxS( "terminal_state_mismatch" ),
+                       wxS( "Replay terminal_state did not match expected." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "published" ) && expected["published"].is_boolean()
+        && expected["published"].get<bool>() != traceEval.m_Published )
+    {
+        return finish( true, false, wxS( "published_mismatch" ),
+                       wxS( "Replay published state did not match expected." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "min_hidden_operation_count" )
+        && expected["min_hidden_operation_count"].is_number_unsigned()
+        && traceEval.m_HiddenOperationCount
+           < expected["min_hidden_operation_count"].get<size_t>() )
+    {
+        return finish( true, false,
+                       wxS( "hidden_operation_count_below_minimum" ),
+                       wxS( "Replay hidden operation count is below expected minimum." ),
+                       &traceEval );
+    }
+
+    return finish( true, true, wxEmptyString, wxEmptyString, &traceEval );
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack

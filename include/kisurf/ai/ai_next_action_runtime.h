@@ -295,6 +295,21 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
 KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
 AiEvaluateNextActionReplayTraceBatch( const wxArrayString& aReplayTraceJsons );
 
+inline constexpr unsigned AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION = 1;
+
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
+{
+    bool     m_Valid = false;
+    bool     m_Passed = false;
+    wxString m_ErrorCode;
+    wxString m_Message;
+    wxString m_RecordId;
+    wxString m_SummaryJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:
