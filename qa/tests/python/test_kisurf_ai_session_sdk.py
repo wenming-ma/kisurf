@@ -270,6 +270,10 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
                         }
                     ],
                 },
+                expected_surface_revision=17,
+                expected_schema_version="net-class-v1",
+                expected_selection_fingerprint="cell:row.power:class",
+                expected_overlap_set=["row.power", "row.gpio"],
                 alias="surface_patch_fill_class",
             )
 
@@ -283,6 +287,13 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
         self.assertEqual(operation["arguments"]["table_id"], "clearance.rules")
         self.assertEqual(operation["arguments"]["alias"], "surface_patch_fill_class")
         self.assertEqual(operation["arguments"]["patch"]["operations"][0]["value"], "Power")
+        self.assertEqual(operation["arguments"]["expected_surface_revision"], 17)
+        self.assertEqual(operation["arguments"]["expected_schema_version"],
+                         "net-class-v1")
+        self.assertEqual(operation["arguments"]["expected_selection_fingerprint"],
+                         "cell:row.power:class")
+        self.assertEqual(operation["arguments"]["expected_overlap_set"],
+                         ["row.power", "row.gpio"])
 
     def test_worker_maps_surface_patch_to_protobuf_operation_kind(self):
         request = session_pb2.WorkerRequest(protocol="kisurf.ai.session.v1")
@@ -296,6 +307,8 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
             "    patch={'kind': 'SurfacePatch', 'operations': ["
             "{'op': 'set_cell', 'row_id': 'row.power', "
             "'column_id': 'class', 'value': 'Power'}]},\n"
+            "    expected_schema_version='net-class-v1',\n"
+            "    expected_selection_fingerprint='cell:row.power:class',\n"
             "    alias='surface_patch_fill_class')\n"
         )
 
@@ -310,6 +323,10 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
             response.cell_result.operations[0].kind,
             session_pb2.SURFACE_APPLY_PATCH,
         )
+        arguments = json.loads(response.cell_result.operations[0].arguments_json)
+        self.assertEqual(arguments["expected_schema_version"], "net-class-v1")
+        self.assertEqual(arguments["expected_selection_fingerprint"],
+                         "cell:row.power:class")
 
     def test_control_helpers_emit_checkpoint_and_rollback_operations(self):
         session = KiSurfSession()

@@ -339,6 +339,10 @@ public:
                              "\"arguments\":{"
                              "\"surface_id\":\"board_setup.clearance\","
                              "\"table_id\":\"clearance.rules\","
+                             "\"expected_surface_revision\":17,"
+                             "\"expected_schema_version\":\"net-class-v1\","
+                             "\"expected_selection_fingerprint\":\"cell:row.power:class\","
+                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"],"
                              "\"target_scope\":{\"kind\":\"column\","
                              "\"panel_id\":\"board_setup.clearance\","
                              "\"surface_id\":\"board_setup.clearance\","
@@ -555,6 +559,10 @@ public:
                 call.m_ArgumentsJson =
                         wxS( "{\"surface_id\":\"board_setup.clearance\","
                              "\"table_id\":\"clearance.rules\","
+                             "\"expected_surface_revision\":17,"
+                             "\"expected_schema_version\":\"net-class-v1\","
+                             "\"expected_selection_fingerprint\":\"cell:row.power:class\","
+                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"],"
                              "\"target_scope\":{\"kind\":\"column\","
                              "\"panel_id\":\"board_setup.clearance\","
                              "\"surface_id\":\"board_setup.clearance\","
@@ -1773,6 +1781,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingRepairRequiredSegment = false;
     bool sawRoutingPolylineRepairRequiredPoints = false;
     bool sawSurfaceRepairRequiredPatch = false;
+    bool sawSurfaceRepairExpectedMetadata = false;
 
     for( const nlohmann::json& tool : callable )
     {
@@ -1970,6 +1979,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
         {
             sawSurfaceRepairTool = true;
 
+            const nlohmann::json& properties =
+                    function["parameters"].contains( "properties" )
+                            ? function["parameters"]["properties"]
+                            : nlohmann::json::object();
             const nlohmann::json& required =
                     function["parameters"].contains( "required" )
                             ? function["parameters"]["required"]
@@ -1997,6 +2010,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             }
 
             sawSurfaceRepairRequiredPatch = hasSurfaceId && hasPatch;
+            sawSurfaceRepairExpectedMetadata =
+                    properties.contains( "expected_surface_revision" )
+                    && properties.contains( "expected_schema_version" )
+                    && properties.contains( "expected_selection_fingerprint" )
+                    && properties.contains( "expected_overlap_set" );
         }
     }
 
@@ -2014,6 +2032,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingRepairRequiredSegment );
     BOOST_CHECK( sawRoutingPolylineRepairRequiredPoints );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
+    BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
@@ -2886,6 +2905,14 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
             wxS( "\"kind\":\"surface.apply_patch\"" ) ) );
     BOOST_CHECK( repairResult.m_ResultJson.Contains(
             wxS( "\"surface_repair_fill_class\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"expected_surface_revision\":17" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"expected_schema_version\":\"net-class-v1\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"expected_selection_fingerprint\":\"cell:row.power:class\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"]" ) ) );
     BOOST_CHECK( repairResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
     BOOST_CHECK( repairResult.m_ResultJson.Contains(

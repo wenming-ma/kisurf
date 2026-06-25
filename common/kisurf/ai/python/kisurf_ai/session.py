@@ -152,6 +152,10 @@ class KiSurfSession:
     def apply_surface_patch(self, *, surface_id: str, patch: dict[str, Any],
                             table_id: str = "", target_scope: Any = None,
                             alias: str = "",
+                            expected_surface_revision: Any = None,
+                            expected_schema_version: Any = None,
+                            expected_selection_fingerprint: Any = None,
+                            expected_overlap_set: Any = None,
                             metadata: dict[str, Any] | None = None) -> None:
         args: dict[str, Any] = {
             "surface_id": surface_id,
@@ -160,6 +164,11 @@ class KiSurfSession:
         _set_optional(args, "table_id", table_id)
         _set_optional(args, "target_scope", target_scope)
         _set_optional(args, "alias", alias)
+        _set_optional(args, "expected_surface_revision", expected_surface_revision)
+        _set_optional(args, "expected_schema_version", expected_schema_version)
+        _set_optional(args, "expected_selection_fingerprint",
+                      expected_selection_fingerprint)
+        _set_optional(args, "expected_overlap_set", expected_overlap_set)
         _set_optional(args, "metadata", metadata)
         self.emit("surface.apply_patch", **args)
 
