@@ -1124,6 +1124,54 @@ bool reviewHiddenMutationRenderFreshnessSatisfied( const wxString& aReviewJson )
 }
 
 
+bool reviewHiddenMutationValidationFreshnessSatisfied( const wxString& aReviewJson )
+{
+    nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
+
+    if( !reviewTrace.contains( "provider_tool_results" )
+        || !reviewTrace["provider_tool_results"].is_array() )
+    {
+        return true;
+    }
+
+    bool                  validationPendingWithoutToolId = false;
+    std::set<std::string> pendingMutationToolCallIds;
+
+    for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object() )
+            continue;
+
+        if( toolRecordIsExecutedValidation( toolRecord ) )
+        {
+            pendingMutationToolCallIds.clear();
+            validationPendingWithoutToolId = false;
+            continue;
+        }
+
+        const std::string rolledBackToolCallId =
+                toolRecordRolledBackToolCallId( toolRecord );
+
+        if( !rolledBackToolCallId.empty() )
+            pendingMutationToolCallIds.erase( rolledBackToolCallId );
+
+        if( toolRecordIsExecutedHiddenMutation( toolRecord ) )
+        {
+            const std::string toolCallId =
+                    toolRecord.value( "tool_call_id", std::string() );
+
+            if( toolCallId.empty() )
+                validationPendingWithoutToolId = true;
+            else
+                pendingMutationToolCallIds.insert( toolCallId );
+        }
+    }
+
+    return pendingMutationToolCallIds.empty()
+           && !validationPendingWithoutToolId;
+}
+
+
 bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 {
     nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
@@ -9709,6 +9757,10 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
     if( !reviewRenderHintsSatisfied( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult,
                           wxS( "render_hint_not_satisfied" ) );
+
+    if( !reviewHiddenMutationValidationFreshnessSatisfied( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult,
+                          wxS( "validation_freshness_failed" ) );
 
     if( !reviewValidationHintsSatisfied( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult,

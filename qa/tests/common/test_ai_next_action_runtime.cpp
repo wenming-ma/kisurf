@@ -616,6 +616,19 @@ public:
                 return response;
             }
 
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need validation facts after structured surface render." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_surface_patch" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
             response.m_Body = publishReview();
             return response;
         }
@@ -5310,12 +5323,12 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             runtime.Update( makePanelFillTriggerWithTargetScope() );
 
     BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     BOOST_CHECK( publishRequest.m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
-    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
 
     const AI_TOOL_CALL_RECORD& renderResult =
             publishRequest.m_ToolResults.at( 1 );
@@ -5411,6 +5424,13 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
             wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"attempt_session_journal\"" ) ) );
+
+    const AI_TOOL_CALL_RECORD& validationResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
+                       wxString( wxS( "call_validate_surface_patch" ) ) );
+    BOOST_CHECK_EQUAL( validationResult.m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
 }
 
 
@@ -5467,7 +5487,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesValueAwareSurfacePatchDiff )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makePanelFillTriggerWithTargetScope() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5529,7 +5549,7 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makePanelFillTriggerWithTargetScope() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5595,7 +5615,7 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairViaToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5647,7 +5667,7 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairMoveItemsToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5708,7 +5728,7 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairFootprintOrientationToolLowersAndFee
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5772,7 +5792,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairSegmentToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5824,7 +5844,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairPolylineToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5885,7 +5905,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairBusSegmentsToolLowersAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -5950,7 +5970,7 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesRoutingCandidateBoundedPlanThroughScriptToo
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -6149,7 +6169,7 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsUnusedConstraintCandidateWithoutHintedValidat
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -6165,7 +6185,8 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsUnusedConstraintCandidateWithoutHintedValidat
 
     BOOST_CHECK( !runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "validation_hint_not_satisfied" ) ) );
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
             wxS( "\"call_generate_constraint_candidate\"" ) ) );
 }
 
@@ -6183,7 +6204,7 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsRolledBackConstraintMutationWithoutHintedVali
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeRoutingTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -6200,7 +6221,8 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsRolledBackConstraintMutationWithoutHintedVali
 
     BOOST_CHECK( !runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "validation_hint_not_satisfied" ) ) );
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
             wxS( "\"call_rollback_candidate_plan\"" ) ) );
 }
 
@@ -6482,7 +6504,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolSeesScriptJournalWithinSameReviewLoop )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
@@ -6532,6 +6554,32 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolSeesScriptJournalWithinSameReviewLoop )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeBlocksScriptMutationPublishWithoutFreshValidation )
+{
+    auto* provider = new SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.back().m_ToolResults.size(), 2 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.back().m_ToolResults.at( 1 ).m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "validation_freshness_failed" ) ) );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRepairToolWritesActiveFrameAndFeedsRender )
 {
     auto* provider = new REPAIR_THEN_RENDER_NEXT_ACTION_PROVIDER();
@@ -6544,7 +6592,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRepairToolWritesActiveFrameAndFeedsRender )
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             runtime.Update( makeViaTrigger() );
 
-    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( !suggestion.has_value() );
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
