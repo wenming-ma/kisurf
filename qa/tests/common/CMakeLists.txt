@@ -51,7 +51,6 @@ set( QA_COMMON_SRCS
     test_ai_callback_action_runner.cpp
     test_ai_activity_log.cpp
     test_ai_editor_activity_recorder.cpp
-    test_ai_suggestion_orchestrator.cpp
     test_ai_context_index.cpp
     test_ai_context_anchor_provider.cpp
     test_ai_visual_snapshot.cpp

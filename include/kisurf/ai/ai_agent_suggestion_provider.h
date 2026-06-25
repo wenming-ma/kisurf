@@ -2,7 +2,7 @@
 
 #include <kicommon.h>
 #include <kisurf/ai/ai_provider.h>
-#include <kisurf/ai/ai_suggestion_orchestrator.h>
+#include <kisurf/ai/ai_suggestion_provider.h>
 
 #include <memory>
 
