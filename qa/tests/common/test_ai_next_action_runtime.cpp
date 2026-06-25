@@ -1006,6 +1006,99 @@ public:
 };
 
 
+class PLACEMENT_REPAIR_ORIENTATION_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "placement repair orientation then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"placement_orientation_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need placement item before orientation repair." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_orientation_subject" );
+                call.m_ToolName = wxS( "placement_repair_via" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"position\":{\"x\":1800000,\"y\":2600000},"
+                             "\"net\":\"GND\","
+                             "\"diameter\":600000,"
+                             "\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"placement_repair_orientation_subject\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need footprint orientation repair facts." );
+
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
+                        nullptr, false );
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_orientation_repair" );
+                call.m_ToolName = wxS( "placement_repair_footprint_orientation" );
+                call.m_ArgumentsJson = wxString::Format(
+                        wxS( "{\"handles\":[%s],"
+                             "\"target_orientation_degrees\":90,"
+                             "\"target_side\":\"B.Cu\","
+                             "\"alias\":\"placement_orientation_90\"}" ),
+                        wxString::FromUTF8( handle.dump().c_str() ) );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need rendered orientation repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_placement_orientation_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class ROUTING_REPAIR_SEGMENT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1128,6 +1221,79 @@ public:
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_render_routing_polyline_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class ROUTING_REPAIR_BUS_SEGMENTS_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "routing repair bus segments then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"routing\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"declared_layer\":\"F.Cu\","
+                                  "\"reason_code\":\"routing_bus_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need routing bus repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_routing_bus_repair" );
+                call.m_ToolName = wxS( "routing_repair_bus_segments" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"segments\":["
+                             "{\"start\":{\"x\":1000000,\"y\":1000000},"
+                             "\"end\":{\"x\":2200000,\"y\":1000000},"
+                             "\"net\":\"D0\"},"
+                             "{\"start\":{\"x\":1000000,\"y\":1250000},"
+                             "\"end\":{\"x\":2200000,\"y\":1250000},"
+                             "\"net\":\"D1\"}],"
+                             "\"layer\":\"F.Cu\","
+                             "\"width\":150000,"
+                             "\"alias\":\"routing_bus_repair\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered routing bus facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_routing_bus_repair" );
                 call.m_ToolName = wxS( "render_hidden_attempt" );
                 call.m_ArgumentsJson = wxS( "{}" );
                 response.m_ToolCalls.push_back( call );
@@ -1969,6 +2135,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains(
             wxS( "\"candidate_source\":\"internal_footprint_transform_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"placement.generate_footprint_orientation_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"candidate_source\":\"internal_footprint_orientation_library\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_parallel_segment_candidates\"" ) ) );
@@ -1999,9 +2169,12 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_via\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_move_items\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"placement.repair_footprint_orientation\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"placement_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"routing.repair_segment\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"routing.repair_polyline\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"routing.repair_bus_segments\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"routing_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"surface.repair_patch\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"surface_repair\"" ) ) );
@@ -2035,10 +2208,14 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRepairTool = false;
     bool sawPlacementFootprintTransformTool = false;
     bool sawPlacementFootprintTransformRequiredPoints = false;
+    bool sawPlacementFootprintOrientationTool = false;
+    bool sawPlacementFootprintOrientationRequiredFacts = false;
     bool sawPlacementRepairTool = false;
     bool sawPlacementMoveRepairTool = false;
+    bool sawPlacementOrientationRepairTool = false;
     bool sawRoutingRepairTool = false;
     bool sawRoutingPolylineRepairTool = false;
+    bool sawRoutingBusRepairTool = false;
     bool sawRoutingParallelCandidateTool = false;
     bool sawRoutingParallelRequiredReference = false;
     bool sawRoutingBusCandidateTool = false;
@@ -2052,8 +2229,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
+    bool sawPlacementOrientationRepairRequiredFacts = false;
     bool sawRoutingRepairRequiredSegment = false;
     bool sawRoutingPolylineRepairRequiredPoints = false;
+    bool sawRoutingBusRepairRequiredSegments = false;
     bool sawSurfaceRepairRequiredPatch = false;
     bool sawSurfaceRepairExpectedMetadata = false;
 
@@ -2139,6 +2318,34 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     hasCurrentPosition && hasTargetPosition;
         }
 
+        if( functionName == "placement_generate_footprint_orientation_candidates" )
+        {
+            sawPlacementFootprintOrientationTool = true;
+            const nlohmann::json& parameters = function["parameters"];
+            BOOST_REQUIRE( parameters.contains( "required" ) );
+            bool hasHandles = false;
+            bool hasCurrentOrientation = false;
+            bool hasTargetOrientation = false;
+
+            for( const nlohmann::json& value : parameters["required"] )
+            {
+                if( !value.is_string() )
+                    continue;
+
+                if( value.get<std::string>() == "handles" )
+                    hasHandles = true;
+
+                if( value.get<std::string>() == "current_orientation_degrees" )
+                    hasCurrentOrientation = true;
+
+                if( value.get<std::string>() == "target_orientation_degrees" )
+                    hasTargetOrientation = true;
+            }
+
+            sawPlacementFootprintOrientationRequiredFacts =
+                    hasHandles && hasCurrentOrientation && hasTargetOrientation;
+        }
+
         if( functionName == "placement_repair_via" )
         {
             sawPlacementRepairTool = true;
@@ -2201,6 +2408,40 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             }
 
             sawPlacementMoveRepairRequiredHandles = hasHandles && hasDelta;
+        }
+
+        if( functionName == "placement_repair_footprint_orientation" )
+        {
+            sawPlacementOrientationRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasHandles = false;
+            bool hasTargetOrientation = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "handles" )
+                    {
+                        hasHandles = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>()
+                                   == "target_orientation_degrees" )
+                    {
+                        hasTargetOrientation = true;
+                    }
+                }
+            }
+
+            sawPlacementOrientationRepairRequiredFacts =
+                    hasHandles && hasTargetOrientation;
         }
 
         if( functionName == "routing_repair_segment" )
@@ -2279,6 +2520,31 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             }
 
             sawRoutingPolylineRepairRequiredPoints = hasPoints && hasLayer && hasNet;
+        }
+
+        if( functionName == "routing_repair_bus_segments" )
+        {
+            sawRoutingBusRepairTool = true;
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasSegments = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "segments" )
+                    {
+                        hasSegments = true;
+                    }
+                }
+            }
+
+            sawRoutingBusRepairRequiredSegments = hasSegments;
         }
 
         if( functionName == "routing_generate_parallel_segment_candidates" )
@@ -2462,10 +2728,14 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRepairTool );
     BOOST_CHECK( sawPlacementFootprintTransformTool );
     BOOST_CHECK( sawPlacementFootprintTransformRequiredPoints );
+    BOOST_CHECK( sawPlacementFootprintOrientationTool );
+    BOOST_CHECK( sawPlacementFootprintOrientationRequiredFacts );
     BOOST_CHECK( sawPlacementRepairTool );
     BOOST_CHECK( sawPlacementMoveRepairTool );
+    BOOST_CHECK( sawPlacementOrientationRepairTool );
     BOOST_CHECK( sawRoutingRepairTool );
     BOOST_CHECK( sawRoutingPolylineRepairTool );
+    BOOST_CHECK( sawRoutingBusRepairTool );
     BOOST_CHECK( sawRoutingParallelCandidateTool );
     BOOST_CHECK( sawRoutingParallelRequiredReference );
     BOOST_CHECK( sawRoutingBusCandidateTool );
@@ -2479,8 +2749,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
+    BOOST_CHECK( sawPlacementOrientationRepairRequiredFacts );
     BOOST_CHECK( sawRoutingRepairRequiredSegment );
     BOOST_CHECK( sawRoutingPolylineRepairRequiredPoints );
+    BOOST_CHECK( sawRoutingBusRepairRequiredSegments );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
@@ -3301,6 +3573,73 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
             footprintCandidate["footprint_transform_facts"]["delta"]["y"].get<int>(),
             30 );
 
+    auto* footprintOrientationProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "placement_generate_footprint_orientation_candidates" ),
+            wxS( "placement" ),
+            -1,
+            wxS( "{\"handles\":[{\"handle\":\"footprint-U1\"}],"
+                 "\"footprint_ref\":\"U1\","
+                 "\"current_orientation_degrees\":0,"
+                 "\"target_orientation_degrees\":90,"
+                 "\"target_side\":\"B.Cu\"}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES footprintOrientationServices;
+    AI_NEXT_ACTION_RUNTIME footprintOrientationRuntime{
+            std::unique_ptr<AI_PROVIDER>( footprintOrientationProvider ),
+            &footprintOrientationServices.m_Validation,
+            &footprintOrientationServices.m_Preview };
+
+    BOOST_REQUIRE( footprintOrientationRuntime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( footprintOrientationProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL(
+            footprintOrientationProvider->m_Requests.at( 1 ).m_ToolResults.size(),
+            1 );
+
+    nlohmann::json footprintOrientationResult = nlohmann::json::parse(
+            footprintOrientationProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( footprintOrientationResult["tool"].get<std::string>(),
+                       "placement.generate_footprint_orientation_candidates" );
+    BOOST_CHECK_EQUAL( footprintOrientationResult["status"].get<std::string>(),
+                       "candidates_generated" );
+    BOOST_CHECK_EQUAL( footprintOrientationResult["candidate_count"].get<int>(), 1 );
+    BOOST_CHECK( !footprintOrientationResult["publish_allowed"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( footprintOrientationResult["candidates"].size(), 1 );
+
+    const nlohmann::json& orientationCandidate =
+            footprintOrientationResult["candidates"].at( 0 );
+    BOOST_CHECK_EQUAL( orientationCandidate["source_tool"].get<std::string>(),
+                       "placement.generate_footprint_orientation_candidates" );
+    BOOST_CHECK_EQUAL( orientationCandidate["arguments"]["operation"].get<std::string>(),
+                       "orient_selected_footprint" );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["footprint_orientation_facts"]["footprint_ref"]
+                    .get<std::string>(),
+            "U1" );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["footprint_orientation_facts"]
+                    ["orientation_delta_degrees"].get<int>(),
+            90 );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["footprint_orientation_facts"]["target_side"]
+                    .get<std::string>(),
+            "B.Cu" );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["landing_facts"]["source"].get<std::string>(),
+            "footprint_orientation.target_orientation" );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["plan"]["operations"].at( 0 )["kind"]
+                    .get<std::string>(),
+            "pcb.set_item_properties" );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["plan"]["operations"].at( 0 )["arguments"]
+                    ["typed_props"]["orientation_degrees"].get<int>(),
+            90 );
+    BOOST_CHECK_EQUAL(
+            orientationCandidate["plan"]["operations"].at( 0 )["arguments"]
+                    ["typed_props"]["side"].get<std::string>(),
+            "B.Cu" );
+
     auto* routingProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_segment_candidates" ),
             wxS( "routing" ) );
@@ -4120,6 +4459,71 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairMoveItemsToolLowersAndFeedsRender )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimePlacementRepairFootprintOrientationToolLowersAndFeedsRender )
+{
+    auto* provider =
+            new PLACEMENT_REPAIR_ORIENTATION_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
+
+    const AI_TOOL_CALL_RECORD& orientationResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( orientationResult.m_ToolCallId,
+                       wxString( wxS( "call_placement_orientation_repair" ) ) );
+    BOOST_CHECK_EQUAL(
+            orientationResult.m_ToolName,
+            wxString( wxS( "placement_repair_footprint_orientation" ) ) );
+    BOOST_CHECK( orientationResult.m_Allowed );
+    BOOST_CHECK( orientationResult.m_Executed );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"placement.repair_footprint_orientation\"" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.set_item_properties\"" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"orientation_degrees\":90" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"side\":\"B.Cu\"" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"placement_orientation_90\"" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"placement.repair_footprint_orientation\"" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( orientationResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL(
+            renderResult.m_ToolCallId,
+            wxString( wxS( "call_render_placement_orientation_repair" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"placement_repair_orientation_subject\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.set_item_properties\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"orientation_degrees\":90" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairSegmentToolLowersAndFeedsRender )
 {
     auto* provider = new ROUTING_REPAIR_SEGMENT_THEN_RENDER_NEXT_ACTION_PROVIDER();
@@ -4227,6 +4631,71 @@ BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairPolylineToolLowersAndFeedsRender )
             wxS( "\"routing_repair_polyline_1:segment:0\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"routing_repair_polyline_1:segment:1\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_track_segment\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairBusSegmentsToolLowersAndFeedsRender )
+{
+    auto* provider =
+            new ROUTING_REPAIR_BUS_SEGMENTS_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult =
+            publishRequest.m_ToolResults.at( 0 );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolCallId,
+                       wxString( wxS( "call_routing_bus_repair" ) ) );
+    BOOST_CHECK_EQUAL( repairResult.m_ToolName,
+                       wxString( wxS( "routing_repair_bus_segments" ) ) );
+    BOOST_CHECK( repairResult.m_Allowed );
+    BOOST_CHECK( repairResult.m_Executed );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"routing.repair_bus_segments\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"operation_count\":2" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_track_segment\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains( wxS( "\"net\":\"D0\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains( wxS( "\"net\":\"D1\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"routing_bus_repair:lane:0\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"routing_bus_repair:lane:1\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"routing.repair_bus_segments\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"publish_allowed\":false" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_routing_bus_repair" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"routing_bus_repair:lane:0\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"routing_bus_repair:lane:1\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"kind\":\"pcb.create_track_segment\"" ) ) );
 }
