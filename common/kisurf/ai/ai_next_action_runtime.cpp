@@ -7398,6 +7398,75 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
 }
 
 
+AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons )
+{
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result;
+    result.m_TotalRecordCount = aGoldenRecordJsons.size();
+
+    for( size_t i = 0; i < aGoldenRecordJsons.size(); ++i )
+    {
+        AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT record =
+                AiEvaluateNextActionReplayGoldenRecordJson( aGoldenRecordJsons[i] );
+
+        if( !record.m_Valid )
+        {
+            ++result.m_InvalidRecordCount;
+
+            if( result.m_FirstErrorCode.IsEmpty() )
+            {
+                result.m_FirstErrorCode = record.m_ErrorCode;
+                result.m_FirstErrorMessage = record.m_Message;
+                result.m_FirstFailedRecordId = record.m_RecordId;
+            }
+
+            continue;
+        }
+
+        ++result.m_ValidRecordCount;
+
+        if( record.m_Passed )
+        {
+            ++result.m_PassedRecordCount;
+            continue;
+        }
+
+        ++result.m_FailedRecordCount;
+
+        if( result.m_FirstErrorCode.IsEmpty() )
+        {
+            result.m_FirstErrorCode = record.m_ErrorCode;
+            result.m_FirstErrorMessage = record.m_Message;
+            result.m_FirstFailedRecordId = record.m_RecordId;
+        }
+    }
+
+    result.m_Valid = result.m_InvalidRecordCount == 0;
+    result.m_Passed = result.m_Valid && result.m_FailedRecordCount == 0;
+
+    nlohmann::json summary =
+            { { "valid", result.m_Valid },
+              { "passed", result.m_Passed },
+              { "total_record_count", result.m_TotalRecordCount },
+              { "valid_record_count", result.m_ValidRecordCount },
+              { "invalid_record_count", result.m_InvalidRecordCount },
+              { "passed_record_count", result.m_PassedRecordCount },
+              { "failed_record_count", result.m_FailedRecordCount } };
+
+    if( !result.m_FirstErrorCode.IsEmpty() )
+    {
+        summary["first_error_code"] = toUtf8String( result.m_FirstErrorCode );
+        summary["first_error_message"] =
+                toUtf8String( result.m_FirstErrorMessage );
+        summary["first_failed_record_id"] =
+                toUtf8String( result.m_FirstFailedRecordId );
+    }
+
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
