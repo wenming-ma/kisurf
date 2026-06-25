@@ -2284,6 +2284,99 @@ nlohmann::json objectDetailsJson( const AI_OBJECT_REF& aObject )
 }
 
 
+nlohmann::json cappedJsonArray( const nlohmann::json& aSource, size_t aLimit,
+                                bool& aTruncated )
+{
+    nlohmann::json result = nlohmann::json::array();
+
+    if( !aSource.is_array() )
+        return result;
+
+    for( const nlohmann::json& entry : aSource )
+    {
+        if( result.size() >= aLimit )
+        {
+            aTruncated = true;
+            break;
+        }
+
+        result.push_back( entry );
+    }
+
+    return result;
+}
+
+
+nlohmann::json effectiveConstraintSummaryJson( const nlohmann::json& aEffective )
+{
+    if( !aEffective.is_object() )
+        return nlohmann::json::object();
+
+    nlohmann::json summary = nlohmann::json::object();
+
+    copyJsonFieldIfPresent( summary, aEffective, "drc_engine_present" );
+    copyJsonFieldIfPresent( summary, aEffective, "rules_valid" );
+    copyJsonFieldIfPresent( summary, aEffective, "geometry_dependent_rules_present" );
+    copyJsonFieldIfPresent( summary, aEffective, "worst_constraint_sample_truncated" );
+    copyJsonFieldIfPresent( summary, aEffective,
+                            "pair_effective_constraint_sample_truncated" );
+
+    bool worstTruncated = false;
+    bool pairTruncated = false;
+    summary["worst_constraints"] =
+            cappedJsonArray( aEffective.value( "worst_constraints",
+                                               nlohmann::json::array() ),
+                             8, worstTruncated );
+    summary["pair_effective_constraints"] =
+            cappedJsonArray( aEffective.value( "pair_effective_constraints",
+                                               nlohmann::json::array() ),
+                             8, pairTruncated );
+
+    if( worstTruncated )
+        summary["worst_constraint_sample_truncated"] = true;
+
+    if( pairTruncated )
+        summary["pair_effective_constraint_sample_truncated"] = true;
+
+    return summary;
+}
+
+
+nlohmann::json constraintSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    if( aContext.m_Summary.IsEmpty() )
+        return nlohmann::json::object();
+
+    nlohmann::json boardSummary = objectFromJsonText( aContext.m_Summary );
+
+    if( !boardSummary.is_object() || !boardSummary.contains( "constraint_facts" )
+        || !boardSummary["constraint_facts"].is_object() )
+    {
+        return nlohmann::json::object();
+    }
+
+    const nlohmann::json& constraints = boardSummary["constraint_facts"];
+    nlohmann::json        summary =
+            { { "source", "context_summary.constraint_facts" } };
+
+    copyJsonFieldIfPresent( summary, constraints, "minimums" );
+    copyJsonFieldIfPresent( summary, constraints, "rule_area_count" );
+    copyJsonFieldIfPresent( summary, constraints, "keepout_count" );
+    copyJsonFieldIfPresent( summary, constraints, "keepout_sample_truncated" );
+
+    if( constraints.contains( "effective_constraints" ) )
+    {
+        nlohmann::json effective =
+                effectiveConstraintSummaryJson( constraints["effective_constraints"] );
+
+        if( !effective.empty() )
+            summary["effective_constraints"] = std::move( effective );
+    }
+
+    return summary;
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -3199,6 +3292,11 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 visibleObjectSummariesJson( context.m_VisibleObjects ) },
               { "selected_object_count", context.m_SelectedObjects.size() },
               { "anchor_count", context.m_Anchors.size() } };
+
+    nlohmann::json constraints = constraintSummaryJson( context );
+
+    if( !constraints.empty() )
+        packet["constraint_summary"] = std::move( constraints );
 
     if( std::optional<LOCALITY_REGION> locality =
                 localityRegionForToolState( context.m_ToolState ) )
