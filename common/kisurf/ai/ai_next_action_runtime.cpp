@@ -6938,6 +6938,106 @@ wxString AI_NEXT_ACTION_BUDGET_COUNTERS::AsJsonText() const
 }
 
 
+AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
+AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
+{
+    auto fail =
+            []( const wxString& aErrorCode,
+                const wxString& aMessage )
+            {
+                AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT result;
+                result.m_Valid = false;
+                result.m_ErrorCode = aErrorCode;
+                result.m_Message = aMessage;
+                return result;
+            };
+
+    auto pass =
+            []()
+            {
+                AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT result;
+                result.m_Valid = true;
+                return result;
+            };
+
+    nlohmann::json trace =
+            nlohmann::json::parse( toUtf8String( aReplayTraceJson ), nullptr, false );
+
+    if( trace.is_discarded() || !trace.is_object() )
+        return fail( wxS( "invalid_json" ), wxS( "Replay trace must be a JSON object." ) );
+
+    if( !trace.contains( "schema" ) || !trace["schema"].is_object() )
+        return fail( wxS( "missing_schema" ), wxS( "Replay trace schema is required." ) );
+
+    const nlohmann::json& schema = trace["schema"];
+
+    if( !schema.contains( "name" ) || !schema["name"].is_string()
+        || schema["name"].get<std::string>() != "kisurf.next_action.replay_trace" )
+    {
+        return fail( wxS( "unsupported_schema_name" ),
+                     wxS( "Replay trace schema name is unsupported." ) );
+    }
+
+    if( !schema.contains( "version" ) || !schema["version"].is_number_unsigned() )
+    {
+        return fail( wxS( "missing_schema_version" ),
+                     wxS( "Replay trace schema version is required." ) );
+    }
+
+    if( schema["version"].get<unsigned>() != AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION )
+    {
+        return fail( wxS( "unsupported_schema_version" ),
+                     wxS( "Replay trace schema version is unsupported." ) );
+    }
+
+    const std::vector<std::pair<const char*, const char*>> requiredObjectFields = {
+        { "semantic_event", "semantic event" },
+        { "observation_packet", "observation packet" },
+        { "llm_decision", "LLM decision" },
+        { "tool_results", "tool results" },
+        { "llm_review_decision", "LLM review decision" }
+    };
+
+    for( const auto& [field, label] : requiredObjectFields )
+    {
+        if( !trace.contains( field ) || !trace[field].is_object() )
+        {
+            return fail( wxS( "missing_required_field" ),
+                         wxString::Format( wxS( "Replay trace missing %s." ),
+                                           fromUtf8String( label ) ) );
+        }
+    }
+
+    if( !trace.contains( "runtime" ) || !trace["runtime"].is_string()
+        || trace["runtime"].get<std::string>() != "next_action" )
+    {
+        return fail( wxS( "missing_required_field" ),
+                     wxS( "Replay trace runtime must be next_action." ) );
+    }
+
+    if( !trace.contains( "runtime_step_id" )
+        || !trace["runtime_step_id"].is_number_unsigned() )
+    {
+        return fail( wxS( "missing_required_field" ),
+                     wxS( "Replay trace runtime_step_id is required." ) );
+    }
+
+    if( !trace.contains( "terminal_state" ) || !trace["terminal_state"].is_string() )
+    {
+        return fail( wxS( "missing_required_field" ),
+                     wxS( "Replay trace terminal_state is required." ) );
+    }
+
+    if( !trace.contains( "attempts" ) || !trace["attempts"].is_array() )
+    {
+        return fail( wxS( "missing_required_field" ),
+                     wxS( "Replay trace attempts array is required." ) );
+    }
+
+    return pass();
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
@@ -9637,7 +9737,10 @@ std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> AI_NEXT_ACTION_RUNTIME::ReplayTr
         }
 
         nlohmann::json trace =
-                { { "runtime", "next_action" },
+                { { "schema",
+                    { { "name", "kisurf.next_action.replay_trace" },
+                      { "version", AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION } } },
+                  { "runtime", "next_action" },
                   { "runtime_step_id", step.m_Id },
                   { "suggestion_stream_id", toUtf8String( step.m_SuggestionStreamId ) },
                   { "status", nextActionStepStatusJsonName( step.m_Status ) },
