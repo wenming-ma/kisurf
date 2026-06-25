@@ -176,6 +176,33 @@ public:
 };
 
 
+class KICOMMON_API AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND() = default;
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND(
+            const AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND& ) = delete;
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND& operator=(
+            const AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND& ) = delete;
+
+    void AddBackend( std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND> aBackend );
+
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override;
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override;
+    void AbortSurfaceTransaction() override;
+
+private:
+    std::vector<std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>> m_Backends;
+    size_t                                                           m_BegunCount = 0;
+    bool                                                             m_InTransaction = false;
+};
+
+
 class AI_STRUCTURED_SURFACE_APPLY_ADAPTER :
         public AI_ACCEPT_APPLY_ADAPTER
 {

@@ -703,6 +703,110 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsIntoFieldStateBackend )
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughCompositeSurfaceBackend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "composite surface accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.netclass\","
+                 "\"expected_surface_revision\":1,"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.rules\","
+                 "\"expected_surface_revision\":2,"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto netclassBackend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* netclass = netclassBackend.get();
+    netclass->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.netclass\":{\"revision\":1,"
+                 "\"fields\":{\"class\":\"Signal\"}}}}" );
+
+    auto rulesBackend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* rules = rulesBackend.get();
+    rules->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.rules\":{\"revision\":2,"
+                 "\"fields\":{\"clearance\":\"0.15mm\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND composite;
+    composite.AddBackend( std::move( netclassBackend ) );
+    composite.AddBackend( std::move( rulesBackend ) );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( composite );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 2 );
+    BOOST_CHECK_EQUAL( netclass->m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( rules->m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( netclass->m_CommitCount, 1 );
+    BOOST_CHECK_EQUAL( rules->m_CommitCount, 1 );
+    BOOST_CHECK( netclass->m_StateJson.Contains( wxS( "\"class\":\"Power\"" ) ) );
+    BOOST_CHECK( rules->m_StateJson.Contains( wxS( "\"clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( CompositeSurfaceBackendAbortPropagatesToChildren )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "composite surface failure" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.netclass\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto netclassBackend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* netclass = netclassBackend.get();
+    netclass->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.netclass\":{\"fields\":"
+                 "{\"class\":\"Signal\"}}}}" );
+
+    auto failingBackend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* failing = failingBackend.get();
+    failing->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.rules\":{\"fields\":"
+                 "{\"clearance\":\"0.15mm\"}}}}" );
+    failing->m_CommitOk = false;
+
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND composite;
+    composite.AddBackend( std::move( netclassBackend ) );
+    composite.AddBackend( std::move( failingBackend ) );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( composite );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "commit_failed" ) ) );
+    BOOST_CHECK_EQUAL( netclass->m_AbortCount, 1 );
+    BOOST_CHECK_EQUAL( failing->m_AbortCount, 1 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
 BOOST_AUTO_TEST_CASE( WxPropertyGridBackendImplementsStructuredSurfaceBackendContract )
 {
     BOOST_CHECK( ( std::is_base_of_v<AI_STRUCTURED_SURFACE_STATE_BACKEND,

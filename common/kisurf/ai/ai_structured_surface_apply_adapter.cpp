@@ -293,6 +293,51 @@ wxString jsonCellValueToWx( const nlohmann::json& aValue )
 }
 
 
+bool mergeStructuredSurfaceState( nlohmann::json& aTarget,
+                                  const nlohmann::json& aSource,
+                                  wxString& aError )
+{
+    if( !aSource.is_object() )
+        return true;
+
+    for( auto it = aSource.begin(); it != aSource.end(); ++it )
+    {
+        if( it.key() == "surfaces" )
+        {
+            if( !it.value().is_object() )
+            {
+                aError = wxS( "Composite structured surface child has invalid surfaces." );
+                return false;
+            }
+
+            for( auto surfaceIt = it.value().begin();
+                 surfaceIt != it.value().end(); ++surfaceIt )
+            {
+                if( aTarget["surfaces"].contains( surfaceIt.key() ) )
+                {
+                    aError = wxS( "Composite structured surface child duplicates surface_id." );
+                    return false;
+                }
+
+                aTarget["surfaces"][surfaceIt.key()] = surfaceIt.value();
+            }
+
+            continue;
+        }
+
+        if( aTarget.contains( it.key() ) && aTarget[it.key()] != it.value() )
+        {
+            aError = wxS( "Composite structured surface child has conflicting metadata." );
+            return false;
+        }
+
+        aTarget[it.key()] = it.value();
+    }
+
+    return true;
+}
+
+
 class WX_GRID_STRUCTURED_SURFACE_IO : public AI_STRUCTURED_SURFACE_GRID_IO
 {
 public:
@@ -910,6 +955,96 @@ AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND::
         AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND(
                 makeWxPropertyGridSurfaceIo( aPropertyGrid ), aSurfaceId )
 {
+}
+
+
+void AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::AddBackend(
+        std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND> aBackend )
+{
+    if( aBackend )
+        m_Backends.push_back( std::move( aBackend ) );
+}
+
+
+bool AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::BeginSurfaceTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aSurfaceStateJson,
+        wxString& aError )
+{
+    if( m_Backends.empty() )
+    {
+        aError = wxS( "Composite structured surface backend has no children." );
+        return false;
+    }
+
+    nlohmann::json mergedState = nlohmann::json::object();
+    m_BegunCount = 0;
+
+    for( std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>& backend :
+         m_Backends )
+    {
+        wxString childStateJson;
+
+        if( !backend->BeginSurfaceTransaction( aSession, childStateJson,
+                                               aError ) )
+        {
+            AbortSurfaceTransaction();
+            return false;
+        }
+
+        ++m_BegunCount;
+
+        if( !mergeStructuredSurfaceState( mergedState,
+                                          objectFromJsonText( childStateJson ),
+                                          aError ) )
+        {
+            AbortSurfaceTransaction();
+            return false;
+        }
+    }
+
+    const std::string dumpedState = mergedState.dump();
+    aSurfaceStateJson = wxString::FromUTF8( dumpedState.c_str() );
+    aError.clear();
+    m_InTransaction = true;
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::CommitSurfaceTransaction(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    if( !m_InTransaction )
+    {
+        aError = wxS( "Composite structured surface transaction has not started." );
+        return false;
+    }
+
+    for( std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>& backend :
+         m_Backends )
+    {
+        if( !backend->CommitSurfaceTransaction( aSurfaceStateJson, aChanged,
+                                                aError ) )
+        {
+            return false;
+        }
+    }
+
+    m_BegunCount = 0;
+    m_InTransaction = false;
+    aError.clear();
+    return true;
+}
+
+
+void AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::AbortSurfaceTransaction()
+{
+    const size_t count = m_InTransaction ? m_Backends.size() : m_BegunCount;
+
+    for( size_t i = 0; i < count && i < m_Backends.size(); ++i )
+        m_Backends[i]->AbortSurfaceTransaction();
+
+    m_BegunCount = 0;
+    m_InTransaction = false;
 }
 
 
