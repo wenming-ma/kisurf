@@ -1147,6 +1147,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsZonesAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["first_layer"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( details["corner_count"].get<int>(), 4 );
     BOOST_CHECK_EQUAL( details["position"]["x"].get<int>(), 0 );
+    BOOST_REQUIRE( details.contains( "bbox" ) );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), 500 );
     BOOST_CHECK_EQUAL( details["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( details["net_name"].get<std::string>(), "/GND" );
     BOOST_CHECK_EQUAL( details["priority"].get<int>(), 2 );
@@ -1191,6 +1194,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "zone" );
     BOOST_CHECK_EQUAL( details["zone_kind"].get<std::string>(), "keepout" );
     BOOST_CHECK_EQUAL( details["name"].get<std::string>(), "NO_ROUTING" );
+    BOOST_REQUIRE( details.contains( "bbox" ) );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), 500 );
     BOOST_CHECK_EQUAL( details["is_rule_area"].get<bool>(), true );
     BOOST_CHECK_EQUAL( details["has_keepout"].get<bool>(), true );
     BOOST_CHECK_EQUAL( details["keepout"]["tracks"].get<bool>(), true );

@@ -1028,7 +1028,7 @@ wxString makeZoneDetailsJson( const ZONE& aZone )
 
     return wxString::Format( wxS( "{\"kind\":\"zone\",\"zone_kind\":%s,"
                                   "\"name\":%s,\"layers\":%s,\"first_layer\":%s,"
-                                  "\"corner_count\":%d,\"position\":%s,"
+                                  "\"corner_count\":%d,\"position\":%s,\"bbox\":%s,"
                                   "\"net_code\":%d,\"net_name\":%s,\"priority\":%u,"
                                   "\"is_rule_area\":%s,\"has_keepout\":%s,"
                                   "\"keepout\":{\"tracks\":%s,\"vias\":%s,"
@@ -1038,6 +1038,7 @@ wxString makeZoneDetailsJson( const ZONE& aZone )
                              layerSetDetailsJson( aZone, aZone.GetLayerSet() ),
                              quotedJson( boardLayerName( aZone, aZone.GetFirstLayer() ) ),
                              aZone.GetNumCorners(), pointDetailsJson( aZone.GetPosition() ),
+                             boxRectDetailsJson( aZone.GetBoundingBox() ),
                              aZone.GetNetCode(), quotedJson( aZone.GetNetname() ),
                              aZone.GetAssignedPriority(), boolJson( isRuleArea ),
                              boolJson( hasKeepout ),
