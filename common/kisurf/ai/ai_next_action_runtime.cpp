@@ -4555,6 +4555,36 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             { { "type", "string" },
                               { "description",
                                 "Optional model-readable alias for this patch attempt." } };
+                    parameters["properties"]["expected_surface_revision"] =
+                            { { "description",
+                                "Optional surface revision captured during observation; "
+                                "accept replay rejects the patch if the live surface revision "
+                                "has changed." },
+                              { "oneOf",
+                                nlohmann::json::array(
+                                        { { { "type", "integer" } },
+                                          { { "type", "number" } },
+                                          { { "type", "string" } } } ) } };
+                    parameters["properties"]["expected_schema_version"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional schema version captured during observation; accept "
+                                "replay rejects the patch if the current schema differs." } };
+                    parameters["properties"]["expected_selection_fingerprint"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional focused selection fingerprint captured during "
+                                "observation; accept replay rejects the patch if focus moved." } };
+                    parameters["properties"]["expected_overlap_set"] =
+                            { { "description",
+                                "Optional overlap set captured during observation; accept replay "
+                                "rejects the patch if overlapping rows, fields, or controls "
+                                "changed." },
+                              { "oneOf",
+                                nlohmann::json::array(
+                                        { { { "type", "array" } },
+                                          { { "type", "object" } },
+                                          { { "type", "string" } } } ) } };
                     parameters["required"] = nlohmann::json::array(
                             { "surface_id", "patch" } );
                 }

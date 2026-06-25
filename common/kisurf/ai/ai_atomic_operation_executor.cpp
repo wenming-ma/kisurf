@@ -848,6 +848,15 @@ AI_ATOMIC_EXECUTION_RESULT applySurfacePatch( AI_EXECUTION_SESSION& aSession,
     if( aArgs.contains( "alias" ) )
         resultJson["alias"] = aArgs["alias"];
 
+    for( const char* key : { "expected_surface_revision",
+                             "expected_schema_version",
+                             "expected_selection_fingerprint",
+                             "expected_overlap_set" } )
+    {
+        if( aArgs.contains( key ) )
+            resultJson[key] = aArgs[key];
+    }
+
     std::vector<wxString> warnings = {
         wxS( "SurfacePatch is recorded in the hidden session journal; native "
              "structured-surface apply is not connected yet." )
