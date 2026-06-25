@@ -5058,6 +5058,128 @@ nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
 }
 
 
+bool operationCanBeAttemptedDirectly(
+        const AI_SUGGESTION_OPERATION& aOperation )
+{
+    return aOperation.IsPlaceViaPreview()
+           || aOperation.IsRouteSegmentPreview()
+           || aOperation.IsCreateShapePreview()
+           || aOperation.IsCreateCopperZonePreview()
+           || aOperation.IsPanelFillColumnPreview();
+}
+
+
+std::optional<AI_SUGGESTION_RECORD> candidateRecordFromToolResultJson(
+        const nlohmann::json& aRecord,
+        const AI_OBSERVATION_PACKET& aObservation )
+{
+    if( !aRecord.is_object()
+        || aRecord.value( "publish_allowed", false )
+        || !aRecord.contains( "arguments" )
+        || !aRecord["arguments"].is_object() )
+    {
+        return std::nullopt;
+    }
+
+    nlohmann::json arguments = aRecord["arguments"];
+    const std::string sourceTool =
+            aRecord.value( "source_tool", std::string() );
+
+    if( !sourceTool.empty()
+        && ( !arguments.contains( "source_tool" )
+             || !arguments["source_tool"].is_string() ) )
+    {
+        arguments["source_tool"] = sourceTool;
+    }
+
+    const wxString argumentsJson = fromUtf8String( arguments.dump() );
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( argumentsJson );
+
+    if( !operation || !operationCanBeAttemptedDirectly( *operation ) )
+        return std::nullopt;
+
+    AI_SUGGESTION_RECORD suggestion;
+    suggestion.m_EditorKind = aObservation.m_ContextSnapshot.m_EditorKind;
+    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
+    suggestion.m_ContextVersion = aObservation.m_ContextVersion.m_ContextVersion;
+    suggestion.m_TriggerActivitySequence =
+            aObservation.m_Activity.m_Sequence;
+    suggestion.m_Title = fromUtf8String(
+            aRecord.value( "title", std::string( "Tool generated candidate" ) ) );
+    suggestion.m_Body = fromUtf8String(
+            aRecord.value( "body", std::string() ) );
+    suggestion.m_ContextKind = fromUtf8String(
+            aRecord.value( "context_kind",
+                           toUtf8String( aObservation.m_Kind ) ) );
+    suggestion.m_ArgumentsJson = argumentsJson;
+    suggestion.m_PreviewOnly = true;
+
+    nlohmann::json details =
+            { { "source", "decision_tool_result" },
+              { "source_tool", sourceTool },
+              { "tool_candidate_index",
+                unsignedField( aRecord, "index", 0 ) },
+              { "direct_attemptable", true } };
+    suggestion.m_ContextDetailsJson = fromUtf8String( details.dump() );
+    suggestion.m_Fingerprint << wxS( "decision-tool-candidate|" )
+                             << aObservation.m_ContextVersion.AsJsonText()
+                             << wxS( "|" )
+                             << fromUtf8String( sourceTool )
+                             << wxS( "|" ) << suggestion.m_ArgumentsJson;
+    return suggestion;
+}
+
+
+std::vector<AI_SUGGESTION_RECORD> decisionToolGeneratedCandidates(
+        const AI_NEXT_ACTION_LLM_DECISION& aDecision,
+        const AI_OBSERVATION_PACKET& aObservation )
+{
+    std::vector<AI_SUGGESTION_RECORD> candidates;
+    nlohmann::json decision = parseObjectBody( aDecision.m_RawJson );
+
+    if( !decision.contains( "provider_tool_results" )
+        || !decision["provider_tool_results"].is_array() )
+    {
+        return candidates;
+    }
+
+    for( const nlohmann::json& toolRecord : decision["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object()
+            || !toolRecord.value( "allowed", false )
+            || !toolRecord.value( "executed", false )
+            || !toolRecord.contains( "result" )
+            || !toolRecord["result"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& result = toolRecord["result"];
+
+        if( result.value( "status", std::string() )
+                    != "candidates_generated"
+            || !result.contains( "candidates" )
+            || !result["candidates"].is_array() )
+        {
+            continue;
+        }
+
+        for( const nlohmann::json& candidateJson : result["candidates"] )
+        {
+            std::optional<AI_SUGGESTION_RECORD> candidate =
+                    candidateRecordFromToolResultJson( candidateJson,
+                                                       aObservation );
+
+            if( candidate )
+                candidates.push_back( std::move( *candidate ) );
+        }
+    }
+
+    return candidates;
+}
+
+
 std::optional<std::string> stringField( const nlohmann::json& aObject,
                                         const char* aField )
 {
@@ -8969,7 +9091,14 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
         return std::nullopt;
     }
 
-    std::vector<AI_SUGGESTION_RECORD> candidates = m_Tools.GenerateCandidates( observation );
+    std::vector<AI_SUGGESTION_RECORD> candidates =
+            decisionToolGeneratedCandidates( decision, observation );
+    std::vector<AI_SUGGESTION_RECORD> workStateCandidates =
+            m_Tools.GenerateCandidates( observation );
+
+    candidates.insert( candidates.end(),
+                       std::make_move_iterator( workStateCandidates.begin() ),
+                       std::make_move_iterator( workStateCandidates.end() ) );
 
     if( candidates.empty() )
     {

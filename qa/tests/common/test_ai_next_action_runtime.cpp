@@ -4956,6 +4956,46 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeAttemptsDecisionToolGeneratedCandidate )
+{
+    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_parallel_segment_candidates" ),
+            wxS( "routing" ),
+            0,
+            wxS( "{\"reference_start\":{\"x\":10,\"y\":10},"
+                 "\"reference_end\":{\"x\":110,\"y\":10},"
+                 "\"offset\":{\"x\":0,\"y\":40},"
+                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    nlohmann::json arguments = nlohmann::json::parse(
+            suggestion->m_ArgumentsJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( arguments["source_tool"].get<std::string>(),
+                       "routing.generate_parallel_segment_candidates" );
+    BOOST_CHECK_EQUAL( arguments["start"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( arguments["end"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( arguments["parallel_facts"]["offset"]["y"].get<int>(),
+                       40 );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
+            wxS( "parallel_reference_offset" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "pcb.create_track_segment" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"routing.generate_parallel_segment_candidates\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
 {
     auto* placementProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
