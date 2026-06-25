@@ -2408,6 +2408,34 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             placementPacket["placement_anchors"].at( 0 )["position"]["x"].get<int>(),
             220 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_candidate_facts" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["placement_candidate_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["anchor_id"]
+                    .get<std::string>(),
+            "place_candidate_1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["reference_position"]
+                    ["x"].get<int>(),
+            180 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["candidate_position"]
+                    ["x"].get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["dx"].get<int>(),
+            40 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["dy"].get<int>(),
+            10 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["manhattan_distance"]
+                    .get<int>(),
+            50 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )["placeable_kind"]
+                    .get<std::string>(),
+            "via" );
     BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 5 );
     BOOST_CHECK_EQUAL(
