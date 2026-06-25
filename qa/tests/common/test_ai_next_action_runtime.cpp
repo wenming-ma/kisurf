@@ -1376,6 +1376,14 @@ public:
 class ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
+    explicit ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER(
+            bool aUseConstraintAwareCandidate = false,
+            bool aValidateBeforePublish = false ) :
+            m_UseConstraintAwareCandidate( aUseConstraintAwareCandidate ),
+            m_ValidateBeforePublish( aValidateBeforePublish )
+    {
+    }
+
     AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
     {
         ++m_CallCount;
@@ -1435,17 +1443,39 @@ public:
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_generate_replace_path_candidate" );
-                call.m_ToolName = wxS( "routing_generate_replace_path_candidates" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"replace_handles\":[%s],"
-                             "\"replacement_points\":["
-                             "{\"x\":1000000,\"y\":1000000},"
-                             "{\"x\":1400000,\"y\":1250000},"
-                             "{\"x\":1800000,\"y\":1000000}],"
-                             "\"net\":\"GND\","
-                             "\"layer\":\"F.Cu\","
-                             "\"width\":150000}" ),
-                        wxString::FromUTF8( handleJson.c_str() ) );
+
+                if( m_UseConstraintAwareCandidate )
+                {
+                    call.m_ToolName =
+                            wxS( "routing_generate_constraint_aware_reroute_candidates" );
+                    call.m_ArgumentsJson = wxString::Format(
+                            wxS( "{\"replace_handles\":[%s],"
+                                 "\"replacement_points\":["
+                                 "{\"x\":1000000,\"y\":1000000},"
+                                 "{\"x\":1400000,\"y\":1250000},"
+                                 "{\"x\":1800000,\"y\":1000000}],"
+                                 "\"net\":\"GND\","
+                                 "\"layer\":\"F.Cu\","
+                                 "\"width\":150000,"
+                                 "\"constraints\":{\"min_clearance\":200000,"
+                                 "\"max_vias\":0}}" ),
+                            wxString::FromUTF8( handleJson.c_str() ) );
+                }
+                else
+                {
+                    call.m_ToolName = wxS( "routing_generate_replace_path_candidates" );
+                    call.m_ArgumentsJson = wxString::Format(
+                            wxS( "{\"replace_handles\":[%s],"
+                                 "\"replacement_points\":["
+                                 "{\"x\":1000000,\"y\":1000000},"
+                                 "{\"x\":1400000,\"y\":1250000},"
+                                 "{\"x\":1800000,\"y\":1000000}],"
+                                 "\"net\":\"GND\","
+                                 "\"layer\":\"F.Cu\","
+                                 "\"width\":150000}" ),
+                            wxString::FromUTF8( handleJson.c_str() ) );
+                }
+
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
@@ -1485,6 +1515,20 @@ public:
                 return response;
             }
 
+            if( aRequest.m_ToolResults.size() == 4 && m_ValidateBeforePublish )
+            {
+                response.m_Body = wxS( "Validate the hinted constraint-aware replacement path." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_candidate_plan" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"level\":\"drc_lite\",\"scope\":\"affected_area\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
             response.m_Body = publishReview();
             return response;
         }
@@ -1495,6 +1539,8 @@ public:
 
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    bool                             m_UseConstraintAwareCandidate = false;
+    bool                             m_ValidateBeforePublish = false;
 };
 
 
@@ -5374,6 +5420,93 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesRoutingCandidateBoundedPlanThroughScriptToo
             wxS( "\"call_execute_candidate_plan\"" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
             wxS( "\"replace_path_polyline:segment:1\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksConstraintReroutePublishWithoutHintedValidation )
+{
+    auto* provider =
+            new ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER( true );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 4 );
+
+    const AI_TOOL_CALL_RECORD& candidateResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL(
+            candidateResult.m_ToolName,
+            wxString( wxS( "routing_generate_constraint_aware_reroute_candidates" ) ) );
+    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
+            wxS( "run_validate_hidden_attempt_before_publish" ) ) );
+
+    const AI_TOOL_CALL_RECORD& scriptResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL( scriptResult.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"status\":\"script_plan_executed\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "validation_hint_not_satisfied" ) ) );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePublishesConstraintRerouteAfterHintedValidation )
+{
+    auto* provider =
+            new ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER( true, true );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 5 );
+
+    const AI_TOOL_CALL_RECORD& validationResult =
+            publishRequest.m_ToolResults.at( 4 );
+    BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
+                       wxString( wxS( "call_validate_candidate_plan" ) ) );
+    BOOST_CHECK_EQUAL( validationResult.m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK( validationResult.m_Allowed );
+    BOOST_CHECK( validationResult.m_Executed );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"tool\":\"validate.hidden_attempt\"" ) ) );
+    BOOST_CHECK( validationResult.m_ResultJson.Contains(
+            wxS( "\"scope\":\"affected_area\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+    BOOST_CHECK( !runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "validation_hint_not_satisfied" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"call_validate_candidate_plan\"" ) ) );
 }
 
 

@@ -278,6 +278,8 @@ PendingAttempt
 - 更新：Routing replace / constraint-aware reroute candidate 返回的 bounded plan 已统一为 `kind + arguments` operation shape，和 `script.run_bounded_plan` / `repair.apply_bounded_plan` 的 provider-callable schema 保持一致，避免模型复制候选 plan 进入脚本或 repair 工具时出现参数丢失。
 
 - 新增测试覆盖：review loop 可先用 `script.run_bounded_plan` 创建 hidden route subject，再调用 `routing.generate_replace_path_candidates`，随后把候选返回的 bounded plan 原样传回 `script.run_bounded_plan` 执行，并通过 `render.hidden_attempt` 观察同一 active attempt frame。这证明 integrated candidate tool 与 script layer 已能在同一 LLM-mediated loop 中串接。
+
+- 更新：Preview Gate 已开始执行 validation hint contract。只要 review tool results 中出现 `validation_hint:"run_validate_hidden_attempt_before_publish"`，例如 constraint-aware reroute candidate，runtime 就要求后续成功执行 `validate.hidden_attempt`；否则即使模型 review basis 全真也会以 `validation_hint_not_satisfied` 阻止发布。后续 validate 成功后该 pending hint 才会被清除。
 - Active attempt 的 budget counters 已开始以 journal truth 为准：bounded script batch 合并后会从当前 `operations[]` 重算 mutation count、created object count 和 touched object set；`rollback_attempt` 后也会重新计算，确保 Preview Gate 看到的是当前 hidden attempt frame，而不是已经撤回的旧 batch。
 - Candidate generation 已从 runtime 内部无条件 fan-out 改成 work-state selected：Placement 只调用 placement candidate tool，Routing 只调用 routing candidate tool，Structured Surface 只调用 surface fill candidate tool；attempt provenance 记录 `candidate_generation.selection_mode=work_state_selected`、`selected_tool` 和 skipped tools。
 - LLM decision 已开始支持 `selected_candidate_index`：模型拿到 candidate tool result 后可以显式选择候选；runtime 会用该候选进入 hidden attempt。越界 index 会直接 abandon 当前 semantic step，不能静默回退到第一个候选。

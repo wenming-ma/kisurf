@@ -881,6 +881,103 @@ bool decisionSurfaceTargetScopeMatchesRenderedPatchPreviews(
 }
 
 
+bool jsonContainsValidationBeforePublishHint( const nlohmann::json& aValue )
+{
+    if( aValue.is_object() )
+    {
+        if( aValue.contains( "validation_hint" )
+            && aValue["validation_hint"].is_string()
+            && aValue["validation_hint"].get<std::string>()
+                       == "run_validate_hidden_attempt_before_publish" )
+        {
+            return true;
+        }
+
+        for( const auto& entry : aValue.items() )
+        {
+            if( jsonContainsValidationBeforePublishHint( entry.value() ) )
+                return true;
+        }
+
+        return false;
+    }
+
+    if( aValue.is_array() )
+    {
+        for( const nlohmann::json& entry : aValue )
+        {
+            if( jsonContainsValidationBeforePublishHint( entry ) )
+                return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool toolRecordIsExecutedValidation( const nlohmann::json& aToolRecord )
+{
+    if( !aToolRecord.is_object()
+        || !aToolRecord.value( "allowed", false )
+        || !aToolRecord.value( "executed", false ) )
+    {
+        return false;
+    }
+
+    const std::string providerToolName =
+            aToolRecord.value( "tool_name", std::string() );
+
+    if( providerToolName == "validate_hidden_attempt"
+        || providerToolName == "validate.hidden_attempt" )
+    {
+        return true;
+    }
+
+    if( !aToolRecord.contains( "result" )
+        || !aToolRecord["result"].is_object() )
+    {
+        return false;
+    }
+
+    return aToolRecord["result"].value( "tool", std::string() )
+           == "validate.hidden_attempt";
+}
+
+
+bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
+{
+    nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
+
+    if( !reviewTrace.contains( "provider_tool_results" )
+        || !reviewTrace["provider_tool_results"].is_array() )
+    {
+        return true;
+    }
+
+    bool validationPending = false;
+
+    for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object() )
+            continue;
+
+        if( toolRecordIsExecutedValidation( toolRecord ) )
+        {
+            validationPending = false;
+            continue;
+        }
+
+        if( toolRecord.contains( "result" )
+            && jsonContainsValidationBeforePublishHint( toolRecord["result"] ) )
+        {
+            validationPending = true;
+        }
+    }
+
+    return !validationPending;
+}
+
+
 bool decisionOpportunityMatchesCandidate(
         const wxString& aDecisionJson,
         const AI_SUGGESTION_RECORD& aCandidate )
@@ -9404,6 +9501,10 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
 
     if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult, wxS( "review_basis_failed" ) );
+
+    if( !reviewValidationHintsSatisfied( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult,
+                          wxS( "validation_hint_not_satisfied" ) );
 
     if( !attemptBudgetWithinPolicy( aAttempt ) )
         appendGateReason( publish.m_GateResult, wxS( "budget_policy_failed" ) );
