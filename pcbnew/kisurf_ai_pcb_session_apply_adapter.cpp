@@ -4,6 +4,7 @@
 #include <board_commit.h>
 #include <board_item.h>
 #include <eda_shape.h>
+#include <footprint.h>
 #include <kiid.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <lset.h>
@@ -785,6 +786,24 @@ bool applyTypedProperties( BOARD_ITEM& aItem, const nlohmann::json& aProps,
         }
 
         zone->SetNeedRefill( true );
+        return true;
+    }
+
+    if( FOOTPRINT* footprint = dynamic_cast<FOOTPRINT*>( &aItem ) )
+    {
+        if( aProps.contains( "orientation_degrees" ) )
+        {
+            if( !aProps["orientation_degrees"].is_number() )
+            {
+                aError = wxS( "Footprint orientation_degrees property must be numeric." );
+                return false;
+            }
+
+            footprint->SetOrientation(
+                    EDA_ANGLE( aProps["orientation_degrees"].get<double>(),
+                               DEGREES_T ) );
+        }
+
         return true;
     }
 
