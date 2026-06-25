@@ -52,6 +52,34 @@ std::string stringField( const nlohmann::json& aObject, const char* aKey )
 
     return aObject[aKey].get<std::string>();
 }
+
+
+bool scalarValuesEqual( const nlohmann::json& aExpected,
+                        const nlohmann::json& aActual )
+{
+    if( aExpected.type() == aActual.type() )
+        return aExpected == aActual;
+
+    if( aExpected.is_number() && aActual.is_number() )
+        return aExpected.get<double>() == aActual.get<double>();
+
+    return false;
+}
+
+
+const nlohmann::json* surfaceRevisionField( const nlohmann::json& aSurface )
+{
+    for( const char* key : { "revision", "surface_revision" } )
+    {
+        if( aSurface.contains( key )
+            && ( aSurface[key].is_string() || aSurface[key].is_number() ) )
+        {
+            return &aSurface[key];
+        }
+    }
+
+    return nullptr;
+}
 }
 
 
@@ -157,6 +185,29 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
 
     const std::string tableId = stringField( args, "table_id" );
     nlohmann::json workingState = objectFromJsonText( m_WorkingStateJson );
+
+    if( args.contains( "expected_surface_revision" ) )
+    {
+        const nlohmann::json* currentRevision = nullptr;
+
+        if( workingState.contains( "surfaces" )
+            && workingState["surfaces"].is_object()
+            && workingState["surfaces"].contains( surfaceId )
+            && workingState["surfaces"][surfaceId].is_object() )
+        {
+            currentRevision =
+                    surfaceRevisionField( workingState["surfaces"][surfaceId] );
+        }
+
+        if( !currentRevision
+            || !scalarValuesEqual( args["expected_surface_revision"],
+                                   *currentRevision ) )
+        {
+            aError = wxS( "SurfacePatch stale surface revision." );
+            return false;
+        }
+    }
+
     nlohmann::json& surface = workingState["surfaces"][surfaceId];
     bool changed = false;
 
