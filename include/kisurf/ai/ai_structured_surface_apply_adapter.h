@@ -16,6 +16,7 @@
 #include <wx/arrstr.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 class wxGrid;
@@ -198,6 +199,7 @@ public:
 
 private:
     std::vector<std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>> m_Backends;
+    std::vector<std::vector<std::string>>                             m_BackendSurfaceIds;
     size_t                                                           m_BegunCount = 0;
     bool                                                             m_InTransaction = false;
 };

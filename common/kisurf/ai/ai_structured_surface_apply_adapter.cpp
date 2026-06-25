@@ -338,6 +338,68 @@ bool mergeStructuredSurfaceState( nlohmann::json& aTarget,
 }
 
 
+bool collectStructuredSurfaceIds( const nlohmann::json& aState,
+                                  std::vector<std::string>& aSurfaceIds,
+                                  wxString& aError )
+{
+    aSurfaceIds.clear();
+
+    if( !aState.is_object() || !aState.contains( "surfaces" ) )
+        return true;
+
+    if( !aState["surfaces"].is_object() )
+    {
+        aError = wxS( "Structured surface state has invalid surfaces." );
+        return false;
+    }
+
+    for( auto surfaceIt = aState["surfaces"].begin();
+         surfaceIt != aState["surfaces"].end(); ++surfaceIt )
+    {
+        aSurfaceIds.push_back( surfaceIt.key() );
+    }
+
+    return true;
+}
+
+
+bool ownsStructuredSurfaceId(
+        const std::vector<std::vector<std::string>>& aBackendSurfaceIds,
+        const std::string& aSurfaceId )
+{
+    for( const std::vector<std::string>& childSurfaceIds : aBackendSurfaceIds )
+    {
+        if( std::find( childSurfaceIds.begin(), childSurfaceIds.end(),
+                       aSurfaceId ) != childSurfaceIds.end() )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+nlohmann::json scopedStructuredSurfaceState(
+        const nlohmann::json& aState,
+        const std::vector<std::string>& aSurfaceIds )
+{
+    nlohmann::json scopedState = aState;
+    scopedState["surfaces"] = nlohmann::json::object();
+
+    if( !aState.contains( "surfaces" ) || !aState["surfaces"].is_object() )
+        return scopedState;
+
+    for( const std::string& surfaceId : aSurfaceIds )
+    {
+        if( aState["surfaces"].contains( surfaceId ) )
+            scopedState["surfaces"][surfaceId] = aState["surfaces"][surfaceId];
+    }
+
+    return scopedState;
+}
+
+
 class WX_GRID_STRUCTURED_SURFACE_IO : public AI_STRUCTURED_SURFACE_GRID_IO
 {
 public:
@@ -978,6 +1040,7 @@ bool AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::BeginSurfaceTransaction(
 
     nlohmann::json mergedState = nlohmann::json::object();
     m_BegunCount = 0;
+    m_BackendSurfaceIds.clear();
 
     for( std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>& backend :
          m_Backends )
@@ -993,9 +1056,19 @@ bool AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::BeginSurfaceTransaction(
 
         ++m_BegunCount;
 
-        if( !mergeStructuredSurfaceState( mergedState,
-                                          objectFromJsonText( childStateJson ),
+        nlohmann::json childState = objectFromJsonText( childStateJson );
+        std::vector<std::string> childSurfaceIds;
+
+        if( !collectStructuredSurfaceIds( childState, childSurfaceIds,
                                           aError ) )
+        {
+            AbortSurfaceTransaction();
+            return false;
+        }
+
+        m_BackendSurfaceIds.push_back( childSurfaceIds );
+
+        if( !mergeStructuredSurfaceState( mergedState, childState, aError ) )
         {
             AbortSurfaceTransaction();
             return false;
@@ -1019,16 +1092,42 @@ bool AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::CommitSurfaceTransaction(
         return false;
     }
 
-    for( std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>& backend :
-         m_Backends )
+    if( m_BackendSurfaceIds.size() != m_Backends.size() )
     {
-        if( !backend->CommitSurfaceTransaction( aSurfaceStateJson, aChanged,
-                                                aError ) )
+        aError = wxS( "Composite structured surface ownership is incomplete." );
+        return false;
+    }
+
+    nlohmann::json state = objectFromJsonText( aSurfaceStateJson );
+    std::vector<std::string> surfaceIds;
+
+    if( !collectStructuredSurfaceIds( state, surfaceIds, aError ) )
+        return false;
+
+    for( const std::string& surfaceId : surfaceIds )
+    {
+        if( !ownsStructuredSurfaceId( m_BackendSurfaceIds, surfaceId ) )
+        {
+            aError = wxS( "Composite structured surface commit has no child backend for surface." );
+            return false;
+        }
+    }
+
+    for( size_t i = 0; i < m_Backends.size(); ++i )
+    {
+        nlohmann::json childState =
+                scopedStructuredSurfaceState( state, m_BackendSurfaceIds[i] );
+        const std::string dumpedState = childState.dump();
+        wxString childStateJson = wxString::FromUTF8( dumpedState.c_str() );
+
+        if( !m_Backends[i]->CommitSurfaceTransaction( childStateJson,
+                                                      aChanged, aError ) )
         {
             return false;
         }
     }
 
+    m_BackendSurfaceIds.clear();
     m_BegunCount = 0;
     m_InTransaction = false;
     aError.clear();
@@ -1044,6 +1143,7 @@ void AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND::AbortSurfaceTransaction()
         m_Backends[i]->AbortSurfaceTransaction();
 
     m_BegunCount = 0;
+    m_BackendSurfaceIds.clear();
     m_InTransaction = false;
 }
 
