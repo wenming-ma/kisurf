@@ -17,6 +17,7 @@
 
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 class wxGrid;
@@ -68,6 +69,10 @@ public:
     virtual wxString CellValue( int aRow, int aColumn ) const = 0;
     virtual void SetCellValue( int aRow, int aColumn,
                                const wxString& aValue ) = 0;
+    virtual std::vector<std::pair<int, int>> SelectedCells() const
+    {
+        return {};
+    }
     virtual bool IsCellEditControlShown() const { return false; }
     virtual void SaveEditControlValue() {}
 };
@@ -129,6 +134,7 @@ public:
     virtual void SetFieldValue( const wxString& aFieldId,
                                 const wxString& aValue ) = 0;
     virtual bool HasField( const wxString& aFieldId ) const;
+    virtual wxString FocusedFieldId() const { return wxEmptyString; }
     virtual bool IsFieldEditControlShown() const { return false; }
     virtual void SaveFieldEditControlValue() {}
 };
