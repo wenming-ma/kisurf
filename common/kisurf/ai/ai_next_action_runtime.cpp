@@ -7073,7 +7073,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
                     continue;
 
                 if( !issue.contains( "geometry" ) && !issue.contains( "bbox" )
-                    && !issue.contains( "region" ) )
+                    && !issue.contains( "region" )
+                    && !issue.contains( "main_item_bbox" )
+                    && !issue.contains( "aux_item_bbox" ) )
                 {
                     continue;
                 }
@@ -7081,7 +7083,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
                 nlohmann::json fact = nlohmann::json::object();
 
                 for( const char* key : { "kind", "severity", "message", "code",
-                                         "rule", "net", "layer" } )
+                                         "rule", "net", "layer", "layer_name",
+                                         "main_item_uuid", "aux_item_uuid",
+                                         "main_item_type", "aux_item_type" } )
                 {
                     if( issue.contains( key ) )
                         fact[key] = issue[key];
@@ -7095,6 +7099,12 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
 
                 if( issue.contains( "region" ) )
                     fact["region"] = issue["region"];
+
+                if( issue.contains( "main_item_bbox" ) )
+                    fact["main_item_bbox"] = issue["main_item_bbox"];
+
+                if( issue.contains( "aux_item_bbox" ) )
+                    fact["aux_item_bbox"] = issue["aux_item_bbox"];
 
                 issueGeometryFacts.push_back( std::move( fact ) );
 

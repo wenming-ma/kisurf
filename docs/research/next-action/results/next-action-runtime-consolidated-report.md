@@ -310,7 +310,7 @@ PendingAttempt
 - 更新：footprint orientation / side transform 还补齐了专用 active-frame repair wrapper 第一刀；它解决的是模型在 inner loop 中快速修正方向/侧面的工具入口。当前 orientation 与 side flip 已有 native accept replay；session preview 也已能把 seeded live footprint clone 成 preview-owned footprint，并按 hidden shadow state 渲染 position / orientation / side。仍需要继续补齐更完整的 placement/routing 视觉反馈闭环。
 - 更新：bus routing 还补齐了多 lane segment active-frame repair wrapper 第一刀；它解决的是一次工具调用生成多条 bus lane 的 hidden mutation batch，不等于 production-grade full bus routing / PNS-backed path planning 已完成。
 - 更新：observation contract 已开始保留 geometry-specific rule coverage facts；这只是更深规则覆盖的 projection 第一刀，仍需要 native PCB adapter 持续提供更完整的 geometry-dependent effective rule samples。
-- 更新：native PCB validation service 已开始把 DRC issue 的 main / aux item bbox 投影为 `main_item_bbox` / `aux_item_bbox`，让模型 review 不只能看到 issue point 和 item uuid，还能拿到相关对象的 bounded geometry facts。
+- 更新：native PCB validation service 已开始把 DRC issue 的 main / aux item bbox 投影为 `main_item_bbox` / `aux_item_bbox`，runtime 也会把这些字段提升进顶层 `issue_geometry_facts`，让模型 review 不只能看到 issue point 和 item uuid，还能拿到相关对象的 bounded geometry facts。
 - 更新：observation contract 已开始保留 component graph nodes / edges；这只是 deeper connectivity graph reconstruction 的 projection 第一刀，仍需要 native PCB adapter 持续提供更完整的 board connectivity graph。
 - 更新：Preview Gate 已开始消费 issue-level blocking facts；这比只看 failed/error severity 更适合 native geometry validation，因为很多 EDA 检查会把 collision/overlap 作为结构化 issue 标志而不是直接把整体验证状态置为 failed。
 - 更新：Preview Gate 已开始消费 validation 子事实中的 `rule_load` / `connectivity` / `refill` 阻断标记；native DRC 即使整体返回 `validated`，只要规则加载或派生状态明确 `blocks_publish`，或者 connectivity / refill 等派生状态为 stale、out-of-date、dirty、incomplete、required、needs-rebuild，runtime 也不会把结果 promotion 成用户可见 preview。
