@@ -2492,6 +2492,66 @@ nlohmann::json boardContextSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 }
 
 
+std::string normalizedNetName( std::string aNetName )
+{
+    if( !aNetName.empty() && aNetName.front() == '/' )
+        aNetName.erase( aNetName.begin() );
+
+    return aNetName;
+}
+
+
+bool netNamesMatch( const std::string& aLeft, const std::string& aRight )
+{
+    return aLeft == aRight
+           || normalizedNetName( aLeft ) == normalizedNetName( aRight );
+}
+
+
+nlohmann::json activeNetSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    if( aContext.m_Summary.IsEmpty()
+        || aContext.m_ToolState.m_ModeContextJson.IsEmpty() )
+    {
+        return nlohmann::json::object();
+    }
+
+    nlohmann::json modeContext =
+            objectFromJsonText( aContext.m_ToolState.m_ModeContextJson );
+
+    if( !modeContext.contains( "net" ) || !modeContext["net"].is_string() )
+        return nlohmann::json::object();
+
+    const std::string activeNet = modeContext["net"].get<std::string>();
+    nlohmann::json    boardSummary = objectFromJsonText( aContext.m_Summary );
+
+    if( !boardSummary.is_object() || !boardSummary.contains( "net_facts" )
+        || !boardSummary["net_facts"].is_array() )
+    {
+        return nlohmann::json::object();
+    }
+
+    for( const nlohmann::json& netFact : boardSummary["net_facts"] )
+    {
+        if( !netFact.is_object() || !netFact.contains( "name" )
+            || !netFact["name"].is_string() )
+        {
+            continue;
+        }
+
+        if( !netNamesMatch( activeNet, netFact["name"].get<std::string>() ) )
+            continue;
+
+        nlohmann::json summary = netFact;
+        summary["source"] = "context_summary.net_facts";
+        summary["requested_net"] = activeNet;
+        return summary;
+    }
+
+    return nlohmann::json::object();
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -3619,6 +3679,11 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
 
     if( !connectivity.empty() )
         packet["connectivity_summary"] = std::move( connectivity );
+
+    nlohmann::json activeNet = activeNetSummaryJson( context );
+
+    if( !activeNet.empty() )
+        packet["active_net_summary"] = std::move( activeNet );
 
     if( std::optional<LOCALITY_REGION> locality =
                 localityRegionForToolState( context.m_ToolState ) )

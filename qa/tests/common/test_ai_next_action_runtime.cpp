@@ -2578,7 +2578,13 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"net_component_summary_sample_truncated\":false,"
                  "\"unconnected_edges\":[{\"net_code\":1,"
                  "\"net_name\":\"GND\",\"visible\":true}],"
-                 "\"unconnected_edge_sample_truncated\":false}}" );
+                 "\"unconnected_edge_sample_truncated\":false},"
+                 "\"net_facts\":[{\"code\":1,\"name\":\"GND\","
+                 "\"netclass\":{\"name\":\"Default\",\"clearance\":90000,"
+                 "\"track_width\":150000,\"via_diameter\":450000,"
+                 "\"via_drill\":250000},"
+                 "\"topology\":{\"node_count\":7,\"component_count\":2,"
+                 "\"visible_unconnected_edge_count\":1}}]}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
@@ -2636,6 +2642,20 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             1 );
     BOOST_REQUIRE_EQUAL(
             routingPacket["connectivity_summary"]["unconnected_edges"].size(),
+            1 );
+    BOOST_REQUIRE( routingPacket.contains( "active_net_summary" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["source"].get<std::string>(),
+            "context_summary.net_facts" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["name"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["netclass"]["track_width"].get<int>(),
+            150000 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["topology"]
+                    ["visible_unconnected_edge_count"].get<int>(),
             1 );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
