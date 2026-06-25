@@ -2574,6 +2574,34 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
             320 );
+    BOOST_REQUIRE( routingPacket.contains( "routing_corridor_facts" ) );
+    BOOST_REQUIRE_EQUAL( routingPacket["routing_corridor_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["anchor_id"].get<std::string>(),
+            "route_candidate_1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["start"]["x"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["end"]["x"].get<int>(),
+            320 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["dx"].get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["dy"].get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["segment_style"]
+                    .get<std::string>(),
+            "horizontal" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["manhattan_length"]
+                    .get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["net"].get<std::string>(),
+            "GND" );
     BOOST_REQUIRE( routingPacket.contains( "visible_object_summaries" ) );
     BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 4 );
     BOOST_CHECK_EQUAL(
