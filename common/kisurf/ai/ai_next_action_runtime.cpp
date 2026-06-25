@@ -370,6 +370,12 @@ bool isRoutingRepairPolylineTool( const std::string& aToolName )
 }
 
 
+bool isRoutingParallelCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "routing.generate_parallel_segment_candidates";
+}
+
+
 bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
@@ -3793,6 +3799,11 @@ wxString operationSummary( const AI_SUGGESTION_RECORD& aSuggestion )
 
 std::string candidateSourceToolName( const AI_SUGGESTION_RECORD& aSuggestion )
 {
+    nlohmann::json arguments = objectFromJsonText( aSuggestion.m_ArgumentsJson );
+
+    if( arguments.contains( "source_tool" ) && arguments["source_tool"].is_string() )
+        return arguments["source_tool"].get<std::string>();
+
     std::optional<AI_SUGGESTION_OPERATION> operation =
             ParseAiSuggestionOperation( aSuggestion.m_ArgumentsJson );
 
@@ -4240,8 +4251,15 @@ nlohmann::json candidateLandingFactsJson(
 
     if( operation->IsRouteSegmentPreview() )
     {
+        const nlohmann::json arguments = objectFromJsonText( aCandidate.m_ArgumentsJson );
+        const bool isParallelCandidate =
+                arguments.value( "source_tool", std::string() )
+                == "routing.generate_parallel_segment_candidates";
+
         return { { "kind", "routing_landing" },
-                 { "source", "operation.end" },
+                 { "source",
+                   isParallelCandidate ? "parallel_reference.offset"
+                                       : "operation.end" },
                  { "point", pointJson( operation->m_End ) },
                  { "start", pointJson( operation->m_Start ) },
                  { "net", toUtf8String( operation->m_NetName ) },
@@ -4271,12 +4289,152 @@ nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
     if( arguments.contains( "operation" ) )
         record["operation"] = arguments["operation"];
 
+    if( arguments.contains( "parallel_facts" ) && arguments["parallel_facts"].is_object() )
+        record["parallel_facts"] = arguments["parallel_facts"];
+
     nlohmann::json landingFacts = candidateLandingFactsJson( aCandidate );
 
     if( !landingFacts.empty() )
         record["landing_facts"] = std::move( landingFacts );
 
     return record;
+}
+
+
+std::optional<std::string> stringField( const nlohmann::json& aObject,
+                                        const char* aField )
+{
+    if( !aObject.is_object() || !aObject.contains( aField )
+        || !aObject[aField].is_string() )
+    {
+        return std::nullopt;
+    }
+
+    return aObject[aField].get<std::string>();
+}
+
+
+std::optional<int> positiveIntField( const nlohmann::json& aObject,
+                                     const char* aField )
+{
+    if( !aObject.is_object() || !aObject.contains( aField )
+        || !aObject[aField].is_number_integer()
+        || aObject[aField].get<int>() <= 0 )
+    {
+        return std::nullopt;
+    }
+
+    return aObject[aField].get<int>();
+}
+
+
+nlohmann::json routingParallelCandidatePayloadJson(
+        const nlohmann::json& aArgs,
+        const AI_OBSERVATION_PACKET& aObservation )
+{
+    int referenceStartX = 0;
+    int referenceStartY = 0;
+    int referenceEndX = 0;
+    int referenceEndY = 0;
+    int offsetX = 0;
+    int offsetY = 0;
+
+    if( !jsonPointToInts( aArgs.value( "reference_start",
+                                       nlohmann::json::object() ),
+                          referenceStartX, referenceStartY )
+        || !jsonPointToInts( aArgs.value( "reference_end",
+                                          nlohmann::json::object() ),
+                             referenceEndX, referenceEndY )
+        || !jsonPointToInts( aArgs.value( "offset", nlohmann::json::object() ),
+                             offsetX, offsetY ) )
+    {
+        return { { "tool", "routing.generate_parallel_segment_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_parallel_segment_candidates requires "
+                   "reference_start, reference_end, and offset points." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    const nlohmann::json modeContext =
+            objectFromJsonText(
+                    aObservation.m_ContextSnapshot.m_ToolState.m_ModeContextJson );
+    std::optional<std::string> net = stringField( aArgs, "net" );
+    std::optional<std::string> layer = stringField( aArgs, "layer" );
+    std::optional<int>         width = positiveIntField( aArgs, "width" );
+
+    if( !net )
+        net = stringField( modeContext, "net" );
+
+    if( !layer )
+        layer = stringField( modeContext, "layer" );
+
+    if( !width )
+        width = positiveIntField( modeContext, "width" );
+
+    if( !net || !layer || !width )
+    {
+        return { { "tool", "routing.generate_parallel_segment_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_parallel_segment_candidates requires net, "
+                   "layer, and width from arguments or active routing context." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    const int startX = referenceStartX + offsetX;
+    const int startY = referenceStartY + offsetY;
+    const int endX = referenceEndX + offsetX;
+    const int endY = referenceEndY + offsetY;
+    nlohmann::json parallelFacts =
+            { { "reference_start", pointRecordJson( referenceStartX, referenceStartY ) },
+              { "reference_end", pointRecordJson( referenceEndX, referenceEndY ) },
+              { "offset", pointRecordJson( offsetX, offsetY ) },
+              { "candidate_start", pointRecordJson( startX, startY ) },
+              { "candidate_end", pointRecordJson( endX, endY ) },
+              { "segment_style",
+                toUtf8String( routingSegmentStyle( referenceEndX - referenceStartX,
+                                                   referenceEndY - referenceStartY ) ) },
+              { "generation_strategy", "parallel_reference_offset" } };
+    nlohmann::json operation =
+            { { "operation", "route_segment_preview" },
+              { "source_tool", "routing.generate_parallel_segment_candidates" },
+              { "candidate_strategy", "parallel_reference_offset" },
+              { "net", *net },
+              { "layer", *layer },
+              { "width", *width },
+              { "start", pointRecordJson( startX, startY ) },
+              { "end", pointRecordJson( endX, endY ) },
+              { "parallel_facts", parallelFacts } };
+    nlohmann::json candidate =
+            { { "index", 0 },
+              { "title", "Parallel route segment" },
+              { "body", "Candidate route segment parallel to a reference segment." },
+              { "source_tool", "routing.generate_parallel_segment_candidates" },
+              { "context_kind", "routing" },
+              { "preview_object_count", 1 },
+              { "edit_object_count", 1 },
+              { "arguments", operation },
+              { "operation", "route_segment_preview" },
+              { "parallel_facts", parallelFacts },
+              { "landing_facts",
+                { { "kind", "routing_landing" },
+                  { "source", "parallel_reference.offset" },
+                  { "point", pointRecordJson( endX, endY ) },
+                  { "start", pointRecordJson( startX, startY ) },
+                  { "net", *net },
+                  { "layer", *layer },
+                  { "width", *width } } },
+              { "publish_allowed", false } };
+
+    return { { "tool", "routing.generate_parallel_segment_candidates" },
+             { "status", "candidates_generated" },
+             { "candidate_count", 1 },
+             { "candidates", nlohmann::json::array( { candidate } ) } };
 }
 
 
@@ -5159,6 +5317,13 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_routing_segment_library" },
                 { "can_publish", false } },
+              { { "name", "routing.generate_parallel_segment_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "routing" },
+                { "side_effect", "read_only" },
+                { "candidate_source", "internal_parallel_routing_library" },
+                { "can_publish", false } },
               { { "name", "surface.generate_fill_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -5340,6 +5505,37 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "When omitted, the latest merged script batch is restored." } };
                     parameters["required"] = nlohmann::json::array(
                             { "checkpoint_id" } );
+                }
+                else if( isRoutingParallelCandidateTool( aName ) )
+                {
+                    parameters["properties"]["reference_start"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Start point of the already-routed reference segment." } };
+                    parameters["properties"]["reference_end"] =
+                            { { "type", "object" },
+                              { "description",
+                                "End point of the already-routed reference segment." } };
+                    parameters["properties"]["offset"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Integer x/y offset to translate the reference segment "
+                                "into a parallel route candidate." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional target net; defaults to the active routing net." } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional target layer; defaults to the active routing layer." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description",
+                                "Optional target width; defaults to the active routing width." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "reference_start", "reference_end", "offset" } );
                 }
                 else if( isPlacementRepairViaTool( aName ) )
                 {
@@ -5796,6 +5992,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "routing.generate_segment_candidates" );
                 }
 
+                if( name == "routing_generate_parallel_segment_candidates"
+                    || name == "routing.generate_parallel_segment_candidates" )
+                {
+                    return std::string(
+                            "routing.generate_parallel_segment_candidates" );
+                }
+
                 if( name == "surface_generate_fill_candidates"
                     || name == "surface.generate_fill_candidates" )
                 {
@@ -5951,6 +6154,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                   { "status", "candidates_generated" },
                   { "candidate_count", candidates.size() },
                   { "candidates", candidates } } );
+    }
+
+    if( toolName == "routing.generate_parallel_segment_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                routingParallelCandidatePayloadJson( args, aObservation );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "routing.generate_parallel_segment_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
     }
 
     if( toolName == "shadow.apply_candidate" )
