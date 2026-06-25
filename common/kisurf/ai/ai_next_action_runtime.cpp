@@ -3339,6 +3339,86 @@ nlohmann::json pointRecordJson( int aX, int aY )
 }
 
 
+nlohmann::json placementCandidateFactJson(
+        const AI_CONTEXT_ANCHOR& aAnchor,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        int aReferenceX,
+        int aReferenceY )
+{
+    const int dx = aAnchor.m_Position.x - aReferenceX;
+    const int dy = aAnchor.m_Position.y - aReferenceY;
+    const int absDx = std::abs( dx );
+    const int absDy = std::abs( dy );
+    nlohmann::json fact =
+            { { "source", "cursor_attached_item_to_anchor" },
+              { "anchor_id", toUtf8String( aAnchor.m_Id ) },
+              { "anchor_kind", toUtf8String( aAnchor.KindAsString() ) },
+              { "anchor_label", toUtf8String( aAnchor.m_Label ) },
+              { "placeable_kind", placeableKindForToolState( aToolState.m_Kind ) },
+              { "reference_position", pointRecordJson( aReferenceX, aReferenceY ) },
+              { "candidate_position",
+                pointRecordJson( aAnchor.m_Position.x, aAnchor.m_Position.y ) },
+              { "dx", dx },
+              { "dy", dy },
+              { "abs_dx", absDx },
+              { "abs_dy", absDy },
+              { "manhattan_distance", absDx + absDy },
+              { "confidence", aAnchor.m_Confidence },
+              { "click_required_to_materialize", true } };
+
+    nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
+
+    if( details.is_object() )
+    {
+        copyJsonFieldIfPresent( fact, details, "role" );
+        copyJsonFieldIfPresent( fact, details, "pitch" );
+    }
+
+    return fact;
+}
+
+
+nlohmann::json placementCandidateFactsJson(
+        const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    int referenceX = 0;
+    int referenceY = 0;
+
+    if( aToolState.m_HasCursorBoardPosition )
+    {
+        referenceX = aToolState.m_CursorBoardPosition.x;
+        referenceY = aToolState.m_CursorBoardPosition.y;
+    }
+    else
+    {
+        nlohmann::json modeContext = objectFromJsonText( aToolState.m_ModeContextJson );
+
+        if( !modeContext.contains( "cursor" )
+            || !jsonPointToInts( modeContext["cursor"], referenceX, referenceY ) )
+        {
+            return nlohmann::json::array();
+        }
+    }
+
+    nlohmann::json facts = nlohmann::json::array();
+
+    for( const AI_CONTEXT_ANCHOR& anchor : aAnchors )
+    {
+        if( facts.size() >= 16 )
+            break;
+
+        if( !anchor.m_HasPosition || !isPlacementPacketAnchor( anchor.m_Kind ) )
+            continue;
+
+        facts.push_back(
+                placementCandidateFactJson( anchor, aToolState, referenceX, referenceY ) );
+    }
+
+    return facts;
+}
+
+
 wxString routingSegmentStyle( int aDx, int aDy )
 {
     const int absDx = std::abs( aDx );
@@ -3509,6 +3589,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["placement_anchor_ids"] = anchorIdArrayJson( context.m_Anchors );
         packet["placement_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isPlacementPacketAnchor );
+        packet["placement_candidate_facts"] =
+                placementCandidateFactsJson( context.m_Anchors, context.m_ToolState );
         packet["placement_obstacle_facts"] =
                 placementObstacleFactsJson( context.m_VisibleObjects );
         packet["placement_keepout_facts"] =
