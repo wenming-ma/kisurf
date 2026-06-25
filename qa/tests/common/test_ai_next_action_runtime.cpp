@@ -1983,6 +1983,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains(
             wxS( "\"candidate_source\":\"internal_replace_path_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"routing.generate_constraint_aware_reroute_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"candidate_source\":\"internal_constraint_aware_reroute_library\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
@@ -2041,6 +2045,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingBusRequiredReference = false;
     bool sawRoutingReplacePathCandidateTool = false;
     bool sawRoutingReplacePathRequiredPlan = false;
+    bool sawRoutingConstraintRerouteCandidateTool = false;
+    bool sawRoutingConstraintRerouteRequiredFacts = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawRepairSurfacePatchKind = false;
@@ -2368,6 +2374,47 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     && hasWidth;
         }
 
+        if( functionName == "routing_generate_constraint_aware_reroute_candidates" )
+        {
+            sawRoutingConstraintRerouteCandidateTool = true;
+            const nlohmann::json& parameters = function["parameters"];
+            BOOST_REQUIRE( parameters.contains( "required" ) );
+            bool hasReplaceHandles = false;
+            bool hasReplacementPoints = false;
+            bool hasConstraints = false;
+            bool hasNet = false;
+            bool hasLayer = false;
+            bool hasWidth = false;
+
+            for( const nlohmann::json& value : parameters["required"] )
+            {
+                if( !value.is_string() )
+                    continue;
+
+                if( value.get<std::string>() == "replace_handles" )
+                    hasReplaceHandles = true;
+
+                if( value.get<std::string>() == "replacement_points" )
+                    hasReplacementPoints = true;
+
+                if( value.get<std::string>() == "constraints" )
+                    hasConstraints = true;
+
+                if( value.get<std::string>() == "net" )
+                    hasNet = true;
+
+                if( value.get<std::string>() == "layer" )
+                    hasLayer = true;
+
+                if( value.get<std::string>() == "width" )
+                    hasWidth = true;
+            }
+
+            sawRoutingConstraintRerouteRequiredFacts =
+                    hasReplaceHandles && hasReplacementPoints && hasConstraints
+                    && hasNet && hasLayer && hasWidth;
+        }
+
         if( functionName == "surface_repair_patch" )
         {
             sawSurfaceRepairTool = true;
@@ -2425,6 +2472,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingBusRequiredReference );
     BOOST_CHECK( sawRoutingReplacePathCandidateTool );
     BOOST_CHECK( sawRoutingReplacePathRequiredPlan );
+    BOOST_CHECK( sawRoutingConstraintRerouteCandidateTool );
+    BOOST_CHECK( sawRoutingConstraintRerouteRequiredFacts );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawRepairSurfacePatchKind );
@@ -3333,6 +3382,64 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
     BOOST_CHECK_EQUAL(
             replacePathCandidate["plan"]["operations"].at( 1 )["points"].size(),
             3 );
+
+    auto* constraintRerouteProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_constraint_aware_reroute_candidates" ),
+            wxS( "routing" ),
+            -1,
+            wxS( "{\"replace_handles\":[{\"handle\":\"track-old-1\"}],"
+                 "\"replacement_points\":[{\"x\":10,\"y\":10},"
+                 "{\"x\":70,\"y\":50},{\"x\":120,\"y\":50}],"
+                 "\"constraints\":{\"min_clearance\":200000,"
+                 "\"avoid_keepouts\":true,\"source\":\"drc_lite\"},"
+                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES constraintRerouteServices;
+    AI_NEXT_ACTION_RUNTIME constraintRerouteRuntime{
+            std::unique_ptr<AI_PROVIDER>( constraintRerouteProvider ),
+            &constraintRerouteServices.m_Validation,
+            &constraintRerouteServices.m_Preview };
+
+    BOOST_REQUIRE( constraintRerouteRuntime.Update( makeRoutingTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( constraintRerouteProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL(
+            constraintRerouteProvider->m_Requests.at( 1 ).m_ToolResults.size(),
+            1 );
+
+    nlohmann::json constraintRerouteResult = nlohmann::json::parse(
+            constraintRerouteProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( constraintRerouteResult["tool"].get<std::string>(),
+                       "routing.generate_constraint_aware_reroute_candidates" );
+    BOOST_CHECK_EQUAL( constraintRerouteResult["status"].get<std::string>(),
+                       "candidates_generated" );
+    BOOST_CHECK_EQUAL( constraintRerouteResult["candidate_count"].get<int>(), 1 );
+    BOOST_CHECK( !constraintRerouteResult["publish_allowed"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( constraintRerouteResult["candidates"].size(), 1 );
+
+    const nlohmann::json& constraintCandidate =
+            constraintRerouteResult["candidates"].at( 0 );
+    BOOST_CHECK_EQUAL( constraintCandidate["source_tool"].get<std::string>(),
+                       "routing.generate_constraint_aware_reroute_candidates" );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["constraint_aware_reroute_facts"]
+                    ["constraints"]["min_clearance"].get<int>(),
+            200000 );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["constraint_aware_reroute_facts"]
+                    ["validation_hint"].get<std::string>(),
+            "run_validate_hidden_attempt_before_publish" );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["landing_facts"]["source"].get<std::string>(),
+            "constraint_reroute.replacement_points.end" );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["plan"]["operations"].at( 0 )["kind"]
+                    .get<std::string>(),
+            "pcb.delete_items" );
+    BOOST_CHECK_EQUAL(
+            constraintCandidate["plan"]["operations"].at( 1 )["kind"]
+                    .get<std::string>(),
+            "pcb.create_track_polyline" );
 
     auto* parallelProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_parallel_segment_candidates" ),
