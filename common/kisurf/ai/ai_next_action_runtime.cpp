@@ -5191,20 +5191,22 @@ nlohmann::json routingReplacePathCandidatePayloadJson(
             { { "operations",
                 nlohmann::json::array(
                         { { { "kind", "pcb.delete_items" },
-                            { "handles", aArgs["replace_handles"] },
-                            { "alias", "replace_path_delete" },
-                            { "metadata",
-                              { { "source_tool",
-                                  "routing.generate_replace_path_candidates" } } } },
+                            { "arguments",
+                              { { "handles", aArgs["replace_handles"] },
+                                { "alias", "replace_path_delete" },
+                                { "metadata",
+                                  { { "source_tool",
+                                      "routing.generate_replace_path_candidates" } } } } } },
                           { { "kind", "pcb.create_track_polyline" },
-                            { "points", replacementPoints },
-                            { "layer", layer },
-                            { "net", net },
-                            { "width", width },
-                            { "alias", "replace_path_polyline" },
-                            { "metadata",
-                              { { "source_tool",
-                                  "routing.generate_replace_path_candidates" } } } } } ) } };
+                            { "arguments",
+                              { { "points", replacementPoints },
+                                { "layer", layer },
+                                { "net", net },
+                                { "width", width },
+                                { "alias", "replace_path_polyline" },
+                                { "metadata",
+                                  { { "source_tool",
+                                      "routing.generate_replace_path_candidates" } } } } } } } ) } };
     nlohmann::json candidate =
             { { "index", 0 },
               { "title", "Replace route path" },
@@ -5288,9 +5290,9 @@ nlohmann::json routingConstraintAwareRerouteCandidatePayloadJson(
     candidate["arguments"]["candidate_strategy"] =
             "constraint_aware_delete_then_create_polyline";
     candidate["arguments"]["constraint_aware_reroute_facts"] = facts;
-    candidate["plan"]["operations"].at( 0 )["metadata"]["source_tool"] =
+    candidate["plan"]["operations"].at( 0 )["arguments"]["metadata"]["source_tool"] =
             "routing.generate_constraint_aware_reroute_candidates";
-    candidate["plan"]["operations"].at( 1 )["metadata"]["source_tool"] =
+    candidate["plan"]["operations"].at( 1 )["arguments"]["metadata"]["source_tool"] =
             "routing.generate_constraint_aware_reroute_candidates";
     candidate["landing_facts"]["source"] =
             "constraint_reroute.replacement_points.end";
