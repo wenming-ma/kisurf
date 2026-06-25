@@ -174,6 +174,19 @@ const nlohmann::json* findComponentContainingLabel( const nlohmann::json& aCompo
 }
 
 
+const nlohmann::json* findNetComponentSummaryByCode( const nlohmann::json& aSummaries,
+                                                     int aNetCode )
+{
+    for( const nlohmann::json& summary : aSummaries )
+    {
+        if( summary["net_code"].get<int>() == aNetCode )
+            return &summary;
+    }
+
+    return nullptr;
+}
+
+
 void appendRectangle( ZONE& aZone )
 {
     aZone.AppendCorner( VECTOR2I( 0, 0 ), -1 );
@@ -541,6 +554,27 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
             topology["ratsnest_component_edges"][0]["target_component"].get<int>() );
     BOOST_CHECK_EQUAL(
             topology["ratsnest_component_edge_sample_truncated"].get<bool>(), false );
+
+    nlohmann::json connectivity = summary["connectivity_summary"];
+    BOOST_REQUIRE( connectivity.contains( "net_component_summaries" ) );
+
+    const nlohmann::json* sigSummary =
+            findNetComponentSummaryByCode( connectivity["net_component_summaries"], 1 );
+
+    BOOST_REQUIRE( sigSummary );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["sample_component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["component_sample_truncated"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["ratsnest_component_edge_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["visible_ratsnest_component_edge_count"].get<int>(), 1 );
+    BOOST_REQUIRE_EQUAL( ( *sigSummary )["components"].size(), 2u );
+
+    const nlohmann::json* summaryRoutedComponent =
+            findComponentContainingLabel( ( *sigSummary )["components"], "track:0,0->100000,0" );
+
+    BOOST_REQUIRE( summaryRoutedComponent );
+    BOOST_CHECK_EQUAL( ( *summaryRoutedComponent )["item_count"].get<int>(), 3 );
 }
 
 
