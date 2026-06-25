@@ -3,7 +3,6 @@
 #include <kisurf/ai/ai_provider.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
-#include <kisurf/ai/ai_suggestion_orchestrator.h>
 
 #include <memory>
 #include <deque>
@@ -111,29 +110,6 @@ public:
     }
 
     int m_CallCount = 0;
-};
-
-
-class FAKE_SUGGESTION_PROVIDER : public AI_SUGGESTION_PROVIDER
-{
-public:
-    std::optional<AI_SUGGESTION_RECORD> Suggest(
-            const AI_SUGGESTION_TRIGGER& aTrigger ) override
-    {
-        ++m_CallCount;
-        m_LastTrigger = aTrigger;
-
-        if( !m_NextSuggestion )
-            return std::nullopt;
-
-        AI_SUGGESTION_RECORD suggestion = *m_NextSuggestion;
-        m_NextSuggestion.reset();
-        return suggestion;
-    }
-
-    int                                m_CallCount = 0;
-    AI_SUGGESTION_TRIGGER              m_LastTrigger;
-    std::optional<AI_SUGGESTION_RECORD> m_NextSuggestion;
 };
 
 
@@ -498,7 +474,7 @@ BOOST_AUTO_TEST_CASE( SendAppendsUserAndAgentMessages )
 
 BOOST_AUTO_TEST_CASE( ReloadDefaultProvidersPreservesPanelModelState )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     model.SendUserText( wxS( "inspect board" ), AI_EDITOR_KIND::Pcb );
 
@@ -528,7 +504,7 @@ BOOST_AUTO_TEST_CASE( ReloadDefaultProvidersPreservesPanelModelState )
 
 BOOST_AUTO_TEST_CASE( RecordActivityReturnsSequencedRecord )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     AI_ACTIVITY_RECORD activity;
     activity.m_ActionName = wxS( "common.Interactive.selected" );
@@ -548,7 +524,7 @@ BOOST_AUTO_TEST_CASE( RecordActivityReturnsSequencedRecord )
 
 BOOST_AUTO_TEST_CASE( BackgroundAgentIsDisabledByDefault )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     BOOST_CHECK( !model.BackgroundAgentEnabled() );
 }
@@ -556,30 +532,19 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentIsDisabledByDefault )
 
 BOOST_AUTO_TEST_CASE( BackgroundAgentDisabledSuppressesAutomaticSuggestions )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
-
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             model.UpdateSuggestionsIfBackgroundEnabled(
                     makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
 }
 
 
-BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledDoesNotUseLegacySuggestionProvider )
+BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledWithoutRuntimeDoesNotPublishSuggestion )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
-
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
     model.SetNextActionProvider( nullptr );
     model.SetBackgroundAgentEnabled( true );
 
@@ -588,18 +553,12 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledDoesNotUseLegacySuggestionProvider )
                     makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
 }
 
 
 BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptable )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
-
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
     auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"attempt\","
                    "\"opportunity_type\":\"placement\"}" ),
@@ -622,7 +581,6 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptabl
                                                         wxS( "activity" ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 0 );
     BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 2 );
     BOOST_CHECK( !suggestion->m_EditObjects.empty() );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "accept_token" ) ) );
@@ -767,7 +725,7 @@ BOOST_AUTO_TEST_CASE( ModelCanMarkActionPreviewSuggestionAccepted )
 
 BOOST_AUTO_TEST_CASE( WorkspaceContextStatePreservesIndependentContextState )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     BOOST_CHECK( model.ActiveWorkspaceContext() == AI_AGENT_WORKSPACE_CONTEXT_KIND::General );
 
@@ -892,7 +850,7 @@ BOOST_AUTO_TEST_CASE( SendUserTextUsesInstalledToolCallHandler )
 
 BOOST_AUTO_TEST_CASE( ObservabilityEntriesExposeRuntimeTraceAndActivity )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<TOOL_CALL_AI_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<TOOL_CALL_AI_PROVIDER>() );
     FAKE_PANEL_TOOL_CALL_HANDLER handler;
     model.SetToolCallHandler( &handler );
 
@@ -926,7 +884,7 @@ BOOST_AUTO_TEST_CASE( ObservabilityEntriesExposeRuntimeTraceAndActivity )
 BOOST_AUTO_TEST_CASE( SendUserTextIncludesPriorRuntimeActivity )
 {
     auto* provider = new RUNTIME_ACTIVITY_CAPTURE_PROVIDER();
-    AI_AGENT_PANEL_MODEL model( std::unique_ptr<AI_PROVIDER>( provider ), nullptr );
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
     FAKE_PANEL_TOOL_CALL_HANDLER handler;
     model.SetToolCallHandler( &handler );
 
@@ -965,7 +923,7 @@ BOOST_AUTO_TEST_CASE( SendUserTextIncludesPriorRuntimeActivity )
 
 BOOST_AUTO_TEST_CASE( ActivityRecordsShareSequenceAcrossUserAndRuntimeRecords )
 {
-    AI_AGENT_PANEL_MODEL model( std::make_unique<TOOL_CALL_AI_PROVIDER>(), nullptr );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<TOOL_CALL_AI_PROVIDER>() );
 
     AI_ACTIVITY_RECORD userActivity;
     userActivity.m_ActionName = wxS( "common.Interactive.selected" );
@@ -988,32 +946,9 @@ BOOST_AUTO_TEST_CASE( ActivityRecordsShareSequenceAcrossUserAndRuntimeRecords )
 }
 
 
-BOOST_AUTO_TEST_CASE( UpdateSuggestionsStoresProviderSuggestion )
-{
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
-
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
-
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_CallCount, 1 );
-    BOOST_CHECK_EQUAL( suggestion->m_Id, 1 );
-    BOOST_REQUIRE_EQUAL( model.Suggestions().size(), 1 );
-    BOOST_CHECK_EQUAL( suggestionProvider->m_LastTrigger.m_Reason,
-                       wxString( wxS( "activity" ) ) );
-}
-
-
 BOOST_AUTO_TEST_CASE( AddSuggestionStoresToolGeneratedSuggestion )
 {
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::make_unique<FAKE_SUGGESTION_PROVIDER>() );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     AI_SUGGESTION_RECORD suggestion;
     suggestion.m_EditorKind = AI_EDITOR_KIND::Pcb;
@@ -1036,64 +971,31 @@ BOOST_AUTO_TEST_CASE( AddSuggestionStoresToolGeneratedSuggestion )
 }
 
 
-BOOST_AUTO_TEST_CASE( DefaultModelDoesNotDirectlyPublishNativeNextActionSuggestions )
+BOOST_AUTO_TEST_CASE( DuplicateActiveSuggestionsSupersedeEarlierRecord )
 {
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            makeViaNextActionContext(), makeSuggestionActivity( 9 ), wxS( "activity" ) );
-
-    BOOST_CHECK( !suggestion.has_value() );
-    BOOST_CHECK( model.Suggestions().empty() );
-}
-
-
-BOOST_AUTO_TEST_CASE( DefaultModelDoesNotDirectlyPublishPanelTableSuggestions )
-{
-    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            makePanelTableContext(), makeSuggestionActivity( 10 ), wxS( "panel edit" ) );
-
-    BOOST_CHECK( !suggestion.has_value() );
-    BOOST_CHECK( model.Suggestions().empty() );
-}
-
-
-BOOST_AUTO_TEST_CASE( DuplicateActiveSuggestionsAreSuppressed )
-{
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
     AI_SUGGESTION_RECORD record = makeModelSuggestion();
     record.m_Fingerprint = wxS( "same" );
-    suggestionProvider->m_NextSuggestion = record;
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    std::optional<AI_SUGGESTION_RECORD> first = model.AddSuggestion( record );
+    BOOST_REQUIRE( first.has_value() );
 
-    BOOST_REQUIRE( model.UpdateSuggestions( makeSuggestionContext(), makeSuggestionActivity(),
-                                            wxS( "activity" ) )
-                           .has_value() );
-
-    suggestionProvider->m_NextSuggestion = record;
-    BOOST_CHECK( !model.UpdateSuggestions( makeSuggestionContext(), makeSuggestionActivity( 2 ),
-                                           wxS( "activity" ) )
-                          .has_value() );
-    BOOST_REQUIRE_EQUAL( model.Suggestions().size(), 1 );
+    std::optional<AI_SUGGESTION_RECORD> second = model.AddSuggestion( record );
+    BOOST_REQUIRE( second.has_value() );
+    BOOST_REQUIRE_EQUAL( model.Suggestions().size(), 2 );
+    BOOST_CHECK( model.FindSuggestion( first->m_Id )->m_Status
+                 == AI_SUGGESTION_STATUS::Superseded );
+    BOOST_CHECK( model.FindSuggestion( second->m_Id )->m_Status
+                 == AI_SUGGESTION_STATUS::Pending );
 }
 
 
-BOOST_AUTO_TEST_CASE( SuggestionLifecycleDelegatesToOrchestrator )
+BOOST_AUTO_TEST_CASE( SuggestionLifecycleUsesRuntimeSuggestionStore )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( makeModelSuggestion() );
     BOOST_REQUIRE( suggestion.has_value() );
 
     FAKE_PREVIEW_ADAPTER previewAdapter;
@@ -1168,21 +1070,16 @@ BOOST_AUTO_TEST_CASE( AnchorFocusSuggestionExposesPreviewOnlyCapability )
 
 BOOST_AUTO_TEST_CASE( LatestActiveSuggestionReturnsNewestPendingOrPreviewingRecord )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
     BOOST_CHECK( !model.LatestActiveSuggestionId().has_value() );
 
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion( wxS( "First" ) );
-    std::optional<AI_SUGGESTION_RECORD> first = model.UpdateSuggestions(
-            makeSuggestionContext( 1 ), makeSuggestionActivity( 1 ), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> first =
+            model.AddSuggestion( makeModelSuggestion( wxS( "First" ) ) );
     BOOST_REQUIRE( first.has_value() );
 
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion( wxS( "Second" ) );
-    std::optional<AI_SUGGESTION_RECORD> second = model.UpdateSuggestions(
-            makeSuggestionContext( 1 ), makeSuggestionActivity( 2 ), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> second =
+            model.AddSuggestion( makeModelSuggestion( wxS( "Second" ) ) );
     BOOST_REQUIRE( second.has_value() );
 
     BOOST_REQUIRE( model.LatestActiveSuggestionId().has_value() );
@@ -1199,15 +1096,12 @@ BOOST_AUTO_TEST_CASE( LatestActiveSuggestionReturnsNewestPendingOrPreviewingReco
 
 BOOST_AUTO_TEST_CASE( ExpireSuggestionsMarksOnlyStaleActiveRecords )
 {
-    auto* suggestionProvider = new FAKE_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = makeModelSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            makeSuggestionContext( 1 ), makeSuggestionActivity(), wxS( "activity" ) );
+    AI_SUGGESTION_RECORD record = makeModelSuggestion();
+    record.m_ContextVersion = makeSuggestionContext( 1 ).m_Version;
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( record );
     BOOST_REQUIRE( suggestion.has_value() );
 
     AI_CONTEXT_VERSION current;

@@ -5811,9 +5811,13 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
     if( !suggestion || !CanAccept( aSuggestionId ) )
         return false;
 
+    const bool runtimeSuggestion = isNextActionRuntimeSuggestion( *suggestion );
+
     if( !sameVersion( suggestion->m_ContextVersion,
                       aCurrentContextVersion.m_ContextVersion )
-        || !runtimeAcceptTokenMatchesDependency( *suggestion, aCurrentContextVersion ) )
+        || ( runtimeSuggestion
+             && !runtimeAcceptTokenMatchesDependency( *suggestion,
+                                                      aCurrentContextVersion ) ) )
     {
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
@@ -6394,7 +6398,9 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::storeSuggestion(
         if( !isActive( existing ) )
             continue;
 
-        const bool sameFingerprint = existing.m_Fingerprint == aSuggestion.m_Fingerprint;
+        const bool sameFingerprint = !existing.m_Fingerprint.IsEmpty()
+                                     && existing.m_Fingerprint
+                                                == aSuggestion.m_Fingerprint;
         const bool runtimeLeaseConflict = isNextActionRuntimeSuggestion( existing )
                                           && isNextActionRuntimeSuggestion( aSuggestion );
 
