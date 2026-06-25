@@ -19,6 +19,7 @@
 #include <vector>
 
 class wxGrid;
+class wxPropertyGrid;
 
 class KICOMMON_API AI_STRUCTURED_SURFACE_STATE_BACKEND
 {
@@ -114,6 +115,64 @@ public:
     AI_STRUCTURED_SURFACE_WX_GRID_BACKEND( wxGrid& aGrid,
                                            const wxString& aSurfaceId,
                                            const wxString& aTableId );
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_FIELD_IO
+{
+public:
+    virtual ~AI_STRUCTURED_SURFACE_FIELD_IO() = default;
+
+    virtual wxArrayString FieldIds() const = 0;
+    virtual wxString FieldValue( const wxString& aFieldId ) const = 0;
+    virtual void SetFieldValue( const wxString& aFieldId,
+                                const wxString& aValue ) = 0;
+    virtual bool HasField( const wxString& aFieldId ) const;
+    virtual bool IsFieldEditControlShown() const { return false; }
+    virtual void SaveFieldEditControlValue() {}
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND(
+            std::unique_ptr<AI_STRUCTURED_SURFACE_FIELD_IO> aFieldIo,
+            const wxString& aSurfaceId );
+
+    void SetSurfaceRevision( uint64_t aRevision );
+    uint64_t SurfaceRevision() const;
+
+    void SetSchemaVersion( const wxString& aSchemaVersion );
+    void SetSelectionFingerprint( const wxString& aSelectionFingerprint );
+    void SetOverlapSet( const std::vector<wxString>& aOverlapSet );
+
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override;
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override;
+    void AbortSurfaceTransaction() override;
+
+private:
+    std::unique_ptr<AI_STRUCTURED_SURFACE_FIELD_IO> m_FieldIo;
+    wxString                                       m_SurfaceId;
+    uint64_t                                       m_SurfaceRevision = 0;
+    wxString                                       m_SchemaVersion;
+    wxString                                       m_SelectionFingerprint;
+    std::vector<wxString>                          m_OverlapSet;
+    bool                                           m_InTransaction = false;
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND :
+        public AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND( wxPropertyGrid& aPropertyGrid,
+                                                    const wxString& aSurfaceId );
 };
 
 

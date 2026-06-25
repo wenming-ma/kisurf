@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <nlohmann/json.hpp>
 #include <wx/grid.h>
+#include <wx/propgrid/propgrid.h>
 
 #include <charconv>
 #include <memory>
@@ -351,6 +352,66 @@ std::unique_ptr<AI_STRUCTURED_SURFACE_GRID_IO> makeWxGridSurfaceIo(
 {
     return std::make_unique<WX_GRID_STRUCTURED_SURFACE_IO>( aGrid );
 }
+
+
+class WX_PROPERTY_GRID_STRUCTURED_SURFACE_IO :
+        public AI_STRUCTURED_SURFACE_FIELD_IO
+{
+public:
+    explicit WX_PROPERTY_GRID_STRUCTURED_SURFACE_IO(
+            wxPropertyGrid& aPropertyGrid ) :
+            m_PropertyGrid( aPropertyGrid )
+    {
+    }
+
+    wxArrayString FieldIds() const override
+    {
+        wxArrayString ids;
+
+        for( wxPropertyGridIterator it = m_PropertyGrid.GetIterator();
+             !it.AtEnd(); ++it )
+        {
+            wxPGProperty* property = *it;
+
+            if( property && !property->GetName().empty() )
+                ids.Add( property->GetName() );
+        }
+
+        return ids;
+    }
+
+    wxString FieldValue( const wxString& aFieldId ) const override
+    {
+        wxPGProperty* property = m_PropertyGrid.GetProperty( aFieldId );
+
+        if( !property )
+            return wxEmptyString;
+
+        return property->GetValueAsString();
+    }
+
+    void SetFieldValue( const wxString& aFieldId,
+                        const wxString& aValue ) override
+    {
+        m_PropertyGrid.SetPropertyValue( aFieldId, aValue );
+    }
+
+    bool HasField( const wxString& aFieldId ) const override
+    {
+        return m_PropertyGrid.GetProperty( aFieldId ) != nullptr;
+    }
+
+private:
+    wxPropertyGrid& m_PropertyGrid;
+};
+
+
+std::unique_ptr<AI_STRUCTURED_SURFACE_FIELD_IO> makeWxPropertyGridSurfaceIo(
+        wxPropertyGrid& aPropertyGrid )
+{
+    return std::make_unique<WX_PROPERTY_GRID_STRUCTURED_SURFACE_IO>(
+            aPropertyGrid );
+}
 }
 
 
@@ -637,6 +698,217 @@ AI_STRUCTURED_SURFACE_WX_GRID_BACKEND::AI_STRUCTURED_SURFACE_WX_GRID_BACKEND(
         wxGrid& aGrid, const wxString& aSurfaceId, const wxString& aTableId ) :
         AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND(
                 makeWxGridSurfaceIo( aGrid ), aSurfaceId, aTableId )
+{
+}
+
+
+bool AI_STRUCTURED_SURFACE_FIELD_IO::HasField(
+        const wxString& aFieldId ) const
+{
+    const wxArrayString fieldIds = FieldIds();
+
+    for( unsigned int i = 0; i < fieldIds.GetCount(); ++i )
+    {
+        if( fieldIds[i] == aFieldId )
+            return true;
+    }
+
+    return false;
+}
+
+
+AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::
+        AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND(
+                std::unique_ptr<AI_STRUCTURED_SURFACE_FIELD_IO> aFieldIo,
+                const wxString& aSurfaceId ) :
+        m_FieldIo( std::move( aFieldIo ) ),
+        m_SurfaceId( aSurfaceId )
+{
+}
+
+
+void AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::SetSurfaceRevision(
+        uint64_t aRevision )
+{
+    m_SurfaceRevision = aRevision;
+}
+
+
+uint64_t AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::SurfaceRevision() const
+{
+    return m_SurfaceRevision;
+}
+
+
+void AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::SetSchemaVersion(
+        const wxString& aSchemaVersion )
+{
+    m_SchemaVersion = aSchemaVersion;
+}
+
+
+void AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::SetSelectionFingerprint(
+        const wxString& aSelectionFingerprint )
+{
+    m_SelectionFingerprint = aSelectionFingerprint;
+}
+
+
+void AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::SetOverlapSet(
+        const std::vector<wxString>& aOverlapSet )
+{
+    m_OverlapSet = aOverlapSet;
+}
+
+
+bool AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::BeginSurfaceTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aSurfaceStateJson,
+        wxString& aError )
+{
+    wxUnusedVar( aSession );
+
+    if( !m_FieldIo || m_SurfaceId.empty() )
+    {
+        aError = wxS( "Field structured surface backend requires field_io and surface_id." );
+        return false;
+    }
+
+    if( m_FieldIo->IsFieldEditControlShown() )
+        m_FieldIo->SaveFieldEditControlValue();
+
+    nlohmann::json state = nlohmann::json::object();
+    nlohmann::json& surface = state["surfaces"][toUtf8String( m_SurfaceId )];
+    surface["kind"] = "fields";
+    surface["revision"] = m_SurfaceRevision;
+
+    if( !m_SchemaVersion.empty() )
+        surface["schema_version"] = toUtf8String( m_SchemaVersion );
+
+    if( !m_SelectionFingerprint.empty() )
+        surface["selection_fingerprint"] =
+                toUtf8String( m_SelectionFingerprint );
+
+    if( !m_OverlapSet.empty() )
+    {
+        nlohmann::json overlap = nlohmann::json::array();
+
+        for( const wxString& item : m_OverlapSet )
+            overlap.push_back( toUtf8String( item ) );
+
+        surface["overlap_set"] = overlap;
+    }
+
+    const wxArrayString fieldIds = m_FieldIo->FieldIds();
+
+    for( unsigned int i = 0; i < fieldIds.GetCount(); ++i )
+    {
+        const wxString& fieldId = fieldIds[i];
+        const std::string fieldIdUtf8 = toUtf8String( fieldId );
+
+        surface["field_order"].push_back( fieldIdUtf8 );
+        surface["schema"]["fields"].push_back(
+                { { "id", fieldIdUtf8 }, { "index", i } } );
+        surface["fields"][fieldIdUtf8] =
+                jsonStringFromWx( m_FieldIo->FieldValue( fieldId ) );
+    }
+
+    const std::string dumpedState = state.dump();
+    aSurfaceStateJson = wxString::FromUTF8( dumpedState.c_str() );
+    aError.clear();
+    m_InTransaction = true;
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::CommitSurfaceTransaction(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    if( !m_InTransaction )
+    {
+        aError = wxS( "Field structured surface transaction has not started." );
+        return false;
+    }
+
+    if( !aChanged )
+    {
+        m_InTransaction = false;
+        aError.clear();
+        return true;
+    }
+
+    nlohmann::json state = objectFromJsonText( aSurfaceStateJson );
+    const std::string surfaceId = toUtf8String( m_SurfaceId );
+
+    if( !state.contains( "surfaces" ) || !state["surfaces"].is_object()
+        || !state["surfaces"].contains( surfaceId )
+        || !state["surfaces"][surfaceId].is_object() )
+    {
+        aError = wxS( "Field structured surface commit missing surface state." );
+        return false;
+    }
+
+    nlohmann::json& surface = state["surfaces"][surfaceId];
+
+    if( !surface.contains( "fields" ) || !surface["fields"].is_object() )
+    {
+        aError = wxS( "Field structured surface commit missing fields." );
+        return false;
+    }
+
+    struct FIELD_CHANGE
+    {
+        wxString m_FieldId;
+        wxString m_Value;
+    };
+
+    std::vector<FIELD_CHANGE> changes;
+
+    for( auto fieldIt = surface["fields"].begin();
+         fieldIt != surface["fields"].end(); ++fieldIt )
+    {
+        const wxString fieldId = wxString::FromUTF8( fieldIt.key().c_str() );
+
+        if( !m_FieldIo->HasField( fieldId ) )
+        {
+            aError = wxS( "Field structured surface commit has an invalid field." );
+            return false;
+        }
+
+        changes.push_back( { fieldId, jsonCellValueToWx( fieldIt.value() ) } );
+    }
+
+    for( const FIELD_CHANGE& change : changes )
+    {
+        if( m_FieldIo->FieldValue( change.m_FieldId ) != change.m_Value )
+            m_FieldIo->SetFieldValue( change.m_FieldId, change.m_Value );
+    }
+
+    if( const nlohmann::json* revision = surfaceRevisionField( surface ) )
+    {
+        if( revision->is_number_unsigned() )
+            m_SurfaceRevision = revision->get<uint64_t>();
+        else if( revision->is_number_integer() && revision->get<int64_t>() >= 0 )
+            m_SurfaceRevision = static_cast<uint64_t>( revision->get<int64_t>() );
+    }
+
+    m_InTransaction = false;
+    aError.clear();
+    return true;
+}
+
+
+void AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND::AbortSurfaceTransaction()
+{
+    m_InTransaction = false;
+}
+
+
+AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND::
+        AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND(
+                wxPropertyGrid& aPropertyGrid,
+                const wxString& aSurfaceId ) :
+        AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND(
+                makeWxPropertyGridSurfaceIo( aPropertyGrid ), aSurfaceId )
 {
 }
 

@@ -172,6 +172,65 @@ public:
 };
 
 
+class RECORDING_FIELD_IO : public AI_STRUCTURED_SURFACE_FIELD_IO
+{
+public:
+    explicit RECORDING_FIELD_IO(
+            std::vector<std::pair<std::string, wxString>> aFields ) :
+            m_Fields( std::move( aFields ) )
+    {
+    }
+
+    wxArrayString FieldIds() const override
+    {
+        wxArrayString ids;
+
+        for( const auto& [id, value] : m_Fields )
+        {
+            wxUnusedVar( value );
+            ids.Add( wxString::FromUTF8( id.c_str() ) );
+        }
+
+        return ids;
+    }
+
+    wxString FieldValue( const wxString& aFieldId ) const override
+    {
+        const std::string fieldId = aFieldId.ToStdString();
+
+        for( const auto& [id, value] : m_Fields )
+        {
+            if( id == fieldId )
+                return value;
+        }
+
+        return wxEmptyString;
+    }
+
+    void SetFieldValue( const wxString& aFieldId,
+                        const wxString& aValue ) override
+    {
+        const std::string fieldId = aFieldId.ToStdString();
+
+        for( auto& [id, value] : m_Fields )
+        {
+            if( id == fieldId )
+            {
+                value = aValue;
+                ++m_SetFieldValueCount;
+                return;
+            }
+        }
+
+        m_Fields.emplace_back( fieldId, aValue );
+        ++m_SetFieldValueCount;
+    }
+
+    std::vector<std::pair<std::string, wxString>> m_Fields;
+    int                                          m_SetFieldValueCount = 0;
+};
+
+
 AI_EXECUTION_SESSION makeSession()
 {
     AI_EXECUTION_SESSION::OPEN_OPTIONS options;
@@ -594,6 +653,60 @@ BOOST_AUTO_TEST_CASE( WxGridBackendImplementsStructuredSurfaceBackendContract )
 {
     BOOST_CHECK( ( std::is_base_of_v<AI_STRUCTURED_SURFACE_STATE_BACKEND,
                                      AI_STRUCTURED_SURFACE_WX_GRID_BACKEND> ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsIntoFieldStateBackend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "field surface accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.rules\","
+                 "\"expected_surface_revision\":10,"
+                 "\"expected_schema_version\":\"rule-fields-v1\","
+                 "\"expected_selection_fingerprint\":\"field:default_clearance\","
+                 "\"expected_overlap_set\":[\"default_clearance\"],"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto fieldIo = std::make_unique<RECORDING_FIELD_IO>(
+            std::vector<std::pair<std::string, wxString>>{
+                    { "default_clearance", wxS( "0.15mm" ) },
+                    { "neckdown", wxS( "disabled" ) } } );
+    RECORDING_FIELD_IO* fields = fieldIo.get();
+
+    AI_STRUCTURED_SURFACE_FIELD_STATE_BACKEND backend(
+            std::move( fieldIo ), wxS( "board_setup.rules" ) );
+    backend.SetSurfaceRevision( 10 );
+    backend.SetSchemaVersion( wxS( "rule-fields-v1" ) );
+    backend.SetSelectionFingerprint( wxS( "field:default_clearance" ) );
+    backend.SetOverlapSet( { wxS( "default_clearance" ) } );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( backend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK_EQUAL( fields->FieldValue( wxS( "default_clearance" ) ),
+                       wxString( wxS( "0.20mm" ) ) );
+    BOOST_CHECK_EQUAL( fields->m_SetFieldValueCount, 1 );
+    BOOST_CHECK_EQUAL( backend.SurfaceRevision(), 11 );
+}
+
+
+BOOST_AUTO_TEST_CASE( WxPropertyGridBackendImplementsStructuredSurfaceBackendContract )
+{
+    BOOST_CHECK( ( std::is_base_of_v<AI_STRUCTURED_SURFACE_STATE_BACKEND,
+                                     AI_STRUCTURED_SURFACE_WX_PROPERTY_GRID_BACKEND> ) );
 }
 
 
