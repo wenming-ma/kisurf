@@ -1715,6 +1715,12 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"requires_review_decision\":\"publish\"" ) ) );
     BOOST_CHECK( !catalog.Contains( wxS( "\"can_publish\":true" ) ) );
     BOOST_CHECK( !catalog.Contains( wxS( "\"name\":\"candidate.generate\"" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_VIA_PATTERN_NEXT_ACTION_PROVIDER" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_PANEL_TABLE_NEXT_ACTION_PROVIDER" ) ) );
 }
 
 
