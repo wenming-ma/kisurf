@@ -758,6 +758,46 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughCompositeSurfaceBackend )
     BOOST_CHECK_EQUAL( rules->m_CommitCount, 1 );
     BOOST_CHECK( netclass->m_StateJson.Contains( wxS( "\"class\":\"Power\"" ) ) );
     BOOST_CHECK( rules->m_StateJson.Contains( wxS( "\"clearance\":\"0.20mm\"" ) ) );
+    BOOST_CHECK( !netclass->m_StateJson.Contains( wxS( "dialog.rules" ) ) );
+    BOOST_CHECK( !rules->m_StateJson.Contains( wxS( "dialog.netclass" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( CompositeSurfaceBackendRejectsUnownedSurfacePatch )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "unowned composite surface" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"dialog.unknown\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"value\","
+                 "\"value\":\"bad\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto netclassBackend = std::make_unique<RECORDING_STRUCTURED_SURFACE_BACKEND>();
+    RECORDING_STRUCTURED_SURFACE_BACKEND* netclass = netclassBackend.get();
+    netclass->m_StateJson =
+            wxS( "{\"surfaces\":{\"dialog.netclass\":{\"fields\":"
+                 "{\"class\":\"Signal\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_COMPOSITE_STATE_BACKEND composite;
+    composite.AddBackend( std::move( netclassBackend ) );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( composite );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "commit_failed" ) ) );
+    BOOST_CHECK_EQUAL( netclass->m_AbortCount, 1 );
+    BOOST_CHECK( netclass->m_StateJson.Contains( wxS( "dialog.netclass" ) ) );
+    BOOST_CHECK( !netclass->m_StateJson.Contains( wxS( "dialog.unknown" ) ) );
 }
 
 
