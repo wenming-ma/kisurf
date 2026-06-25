@@ -382,6 +382,12 @@ bool isRoutingBusCandidateTool( const std::string& aToolName )
 }
 
 
+bool isRoutingReplacePathCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "routing.generate_replace_path_candidates";
+}
+
+
 bool isPlacementFootprintTransformCandidateTool( const std::string& aToolName )
 {
     return aToolName == "placement.generate_footprint_transform_candidates";
@@ -4754,6 +4760,137 @@ nlohmann::json routingBusCandidatePayloadJson(
 }
 
 
+nlohmann::json routingReplacePathCandidatePayloadJson(
+        const nlohmann::json& aArgs )
+{
+    if( !aArgs.contains( "replace_handles" )
+        || !aArgs["replace_handles"].is_array()
+        || aArgs["replace_handles"].empty()
+        || !aArgs.contains( "replacement_points" )
+        || !aArgs["replacement_points"].is_array()
+        || aArgs["replacement_points"].size() < 2
+        || !aArgs.contains( "net" )
+        || !aArgs["net"].is_string()
+        || !aArgs.contains( "layer" )
+        || !aArgs["layer"].is_string()
+        || !aArgs.contains( "width" )
+        || !aArgs["width"].is_number_integer()
+        || aArgs["width"].get<int>() <= 0 )
+    {
+        return { { "tool", "routing.generate_replace_path_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "routing.generate_replace_path_candidates requires "
+                   "replace_handles, replacement_points, net, layer, and width." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    nlohmann::json replacementPoints = nlohmann::json::array();
+    int            startX = 0;
+    int            startY = 0;
+    int            endX = 0;
+    int            endY = 0;
+
+    for( size_t index = 0; index < aArgs["replacement_points"].size(); ++index )
+    {
+        int x = 0;
+        int y = 0;
+
+        if( !jsonPointToInts( aArgs["replacement_points"].at( index ), x, y ) )
+        {
+            return { { "tool", "routing.generate_replace_path_candidates" },
+                     { "status", "malformed_arguments" },
+                     { "error_code", "malformed_arguments" },
+                     { "message",
+                       "routing.generate_replace_path_candidates requires every "
+                       "replacement point to be an x/y point." },
+                     { "candidate_count", 0 },
+                     { "candidates", nlohmann::json::array() } };
+        }
+
+        if( index == 0 )
+        {
+            startX = x;
+            startY = y;
+        }
+
+        if( index + 1 == aArgs["replacement_points"].size() )
+        {
+            endX = x;
+            endY = y;
+        }
+
+        replacementPoints.push_back( pointRecordJson( x, y ) );
+    }
+
+    const std::string net = aArgs["net"].get<std::string>();
+    const std::string layer = aArgs["layer"].get<std::string>();
+    const int width = aArgs["width"].get<int>();
+    nlohmann::json replaceFacts =
+            { { "replace_handle_count", aArgs["replace_handles"].size() },
+              { "point_count", replacementPoints.size() },
+              { "start", pointRecordJson( startX, startY ) },
+              { "end", pointRecordJson( endX, endY ) },
+              { "net", net },
+              { "layer", layer },
+              { "width", width },
+              { "generation_strategy", "delete_then_create_polyline" } };
+    nlohmann::json plan =
+            { { "operations",
+                nlohmann::json::array(
+                        { { { "kind", "pcb.delete_items" },
+                            { "handles", aArgs["replace_handles"] },
+                            { "alias", "replace_path_delete" },
+                            { "metadata",
+                              { { "source_tool",
+                                  "routing.generate_replace_path_candidates" } } } },
+                          { { "kind", "pcb.create_track_polyline" },
+                            { "points", replacementPoints },
+                            { "layer", layer },
+                            { "net", net },
+                            { "width", width },
+                            { "alias", "replace_path_polyline" },
+                            { "metadata",
+                              { { "source_tool",
+                                  "routing.generate_replace_path_candidates" } } } } } ) } };
+    nlohmann::json candidate =
+            { { "index", 0 },
+              { "title", "Replace route path" },
+              { "body",
+                "Candidate bounded plan that deletes existing route items and "
+                "creates a replacement polyline." },
+              { "source_tool", "routing.generate_replace_path_candidates" },
+              { "context_kind", "routing" },
+              { "preview_object_count", 1 },
+              { "edit_object_count", 2 },
+              { "operation", "replace_path_plan" },
+              { "plan", plan },
+              { "arguments",
+                { { "operation", "replace_path_plan" },
+                  { "source_tool", "routing.generate_replace_path_candidates" },
+                  { "candidate_strategy", "delete_then_create_polyline" },
+                  { "plan", plan },
+                  { "replace_path_facts", replaceFacts } } },
+              { "replace_path_facts", replaceFacts },
+              { "landing_facts",
+                { { "kind", "routing_landing" },
+                  { "source", "replace_path.replacement_points.end" },
+                  { "point", pointRecordJson( endX, endY ) },
+                  { "start", pointRecordJson( startX, startY ) },
+                  { "net", net },
+                  { "layer", layer },
+                  { "width", width } } },
+              { "publish_allowed", false } };
+
+    return { { "tool", "routing.generate_replace_path_candidates" },
+             { "status", "candidates_generated" },
+             { "candidate_count", 1 },
+             { "candidates", nlohmann::json::array( { candidate } ) } };
+}
+
+
 nlohmann::json metadataJson( const std::map<wxString, wxString>& aMetadata )
 {
     nlohmann::json metadata = nlohmann::json::object();
@@ -5654,6 +5791,13 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_bus_routing_library" },
                 { "can_publish", false } },
+              { { "name", "routing.generate_replace_path_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "routing" },
+                { "side_effect", "read_only" },
+                { "candidate_source", "internal_replace_path_library" },
+                { "can_publish", false } },
               { { "name", "surface.generate_fill_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -5913,6 +6057,31 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Optional target width; defaults to the active routing width." } };
                     parameters["required"] = nlohmann::json::array(
                             { "reference_start", "reference_end", "lane_offsets" } );
+                }
+                else if( isRoutingReplacePathCandidateTool( aName ) )
+                {
+                    parameters["properties"]["replace_handles"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Existing session handles to delete as part of the "
+                                "replacement path candidate." } };
+                    parameters["properties"]["replacement_points"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Replacement polyline points, at least start and end." } };
+                    parameters["properties"]["net"] =
+                            { { "type", "string" },
+                              { "description", "Target net for the replacement path." } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description", "Target routing layer for the replacement path." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description", "Replacement track width." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "replace_handles", "replacement_points", "net",
+                              "layer", "width" } );
                 }
                 else if( isPlacementRepairViaTool( aName ) )
                 {
@@ -6390,6 +6559,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                             "routing.generate_bus_segment_candidates" );
                 }
 
+                if( name == "routing_generate_replace_path_candidates"
+                    || name == "routing.generate_replace_path_candidates" )
+                {
+                    return std::string(
+                            "routing.generate_replace_path_candidates" );
+                }
+
                 if( name == "surface_generate_fill_candidates"
                     || name == "surface.generate_fill_candidates" )
                 {
@@ -6599,6 +6775,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         const wxString message =
                 malformed
                         ? wxString( wxS( "routing.generate_bus_segment_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
+    }
+
+    if( toolName == "routing.generate_replace_path_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                routingReplacePathCandidatePayloadJson( args );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "routing.generate_replace_path_candidates "
                                          "received malformed arguments." ) )
                         : wxString( wxS( "Candidates generated." ) );
 
