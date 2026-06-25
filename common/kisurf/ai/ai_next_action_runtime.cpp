@@ -2154,6 +2154,18 @@ bool isKeepoutDetails( const nlohmann::json& aDetails )
     if( detailsKindEquals( aDetails, "keepout" ) )
         return true;
 
+    if( aDetails.contains( "zone_kind" ) && aDetails["zone_kind"].is_string()
+        && aDetails["zone_kind"].get<std::string>() == "keepout" )
+    {
+        return true;
+    }
+
+    if( aDetails.contains( "has_keepout" ) && aDetails["has_keepout"].is_boolean()
+        && aDetails["has_keepout"].get<bool>() )
+    {
+        return true;
+    }
+
     if( aDetails.contains( "rule" ) && aDetails["rule"].is_string()
         && aDetails["rule"].get<std::string>().find( "keepout" )
                    != std::string::npos )
@@ -2189,10 +2201,15 @@ nlohmann::json placementKeepoutFactsJson(
         nlohmann::json fact = visibleObjectBaseFact( object );
         fact["kind"] = "keepout";
         copyJsonFieldIfPresent( fact, details, "rule" );
+        copyJsonFieldIfPresent( fact, details, "zone_kind" );
+        copyJsonFieldIfPresent( fact, details, "name" );
         copyJsonFieldIfPresent( fact, details, "bbox" );
         copyJsonFieldIfPresent( fact, details, "polygon" );
         copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layers" );
         copyJsonFieldIfPresent( fact, details, "layer_set" );
+        copyJsonFieldIfPresent( fact, details, "has_keepout" );
+        copyJsonFieldIfPresent( fact, details, "keepout" );
         facts.push_back( std::move( fact ) );
     }
 

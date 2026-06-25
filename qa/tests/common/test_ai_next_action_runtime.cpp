@@ -1410,9 +1410,12 @@ AI_OBJECT_REF keepoutRef()
 {
     return AI_OBJECT_REF(
             KIID(), PCB_ZONE_T, wxS( "keepout:J1" ),
-            wxS( "{\"kind\":\"keepout\",\"rule\":\"no_placement\","
+            wxS( "{\"kind\":\"zone\",\"zone_kind\":\"keepout\",\"name\":\"J1\","
                  "\"bbox\":{\"x\":210,\"y\":20,\"width\":90,\"height\":70},"
-                 "\"layer_set\":[\"F.Cu\",\"B.Cu\"]}" ) );
+                 "\"layers\":{\"names\":[\"F.Cu\",\"B.Cu\"]},"
+                 "\"has_keepout\":true,"
+                 "\"keepout\":{\"tracks\":true,\"vias\":true,"
+                 "\"pads\":true,\"footprints\":true,\"zone_fills\":false}}" ) );
 }
 
 
@@ -2113,6 +2116,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             placementPacket["placement_keepout_facts"].at( 0 )["bbox"]["width"].get<int>(),
             90 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_keepout_facts"].at( 0 )["zone_kind"].get<std::string>(),
+            "keepout" );
+    BOOST_CHECK(
+            placementPacket["placement_keepout_facts"].at( 0 )["keepout"]["tracks"]
+                    .get<bool>() );
     BOOST_REQUIRE( placementPacket.contains( "placement_footprint_geometry_facts" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_footprint_geometry_facts"].size(), 1 );
     BOOST_CHECK_EQUAL(
