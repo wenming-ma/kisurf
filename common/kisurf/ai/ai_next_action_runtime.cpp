@@ -483,6 +483,165 @@ bool decisionSurfaceTargetScopeMatchesCandidate(
 }
 
 
+std::optional<std::string> firstStringField(
+        const nlohmann::json& aObject,
+        std::initializer_list<const char*> aKeys )
+{
+    if( !aObject.is_object() )
+        return std::nullopt;
+
+    for( const char* key : aKeys )
+    {
+        if( aObject.contains( key ) && aObject[key].is_string() )
+            return aObject[key].get<std::string>();
+    }
+
+    return std::nullopt;
+}
+
+
+bool visualTargetStringMatchesScope(
+        const nlohmann::json& aVisualTarget,
+        std::initializer_list<const char*> aActualKeys,
+        const nlohmann::json& aScope,
+        std::initializer_list<const char*> aScopeKeys )
+{
+    std::optional<std::string> expected = firstStringField( aScope, aScopeKeys );
+
+    if( !expected || expected->empty() )
+        return true;
+
+    std::optional<std::string> actual =
+            firstStringField( aVisualTarget, aActualKeys );
+
+    if( !actual || actual->empty() )
+        return false;
+
+    return lowerAscii( *actual ) == lowerAscii( *expected );
+}
+
+
+bool surfacePatchVisualTargetMatchesScope(
+        const nlohmann::json& aVisualTarget,
+        const nlohmann::json& aScope )
+{
+    if( !aVisualTarget.is_object() || !aScope.is_object() )
+        return true;
+
+    if( !visualTargetStringMatchesScope( aVisualTarget, { "surface_id" },
+                                         aScope, { "surface_id",
+                                                   "panel_id" } ) )
+    {
+        return false;
+    }
+
+    if( !visualTargetStringMatchesScope( aVisualTarget, { "table_id" },
+                                         aScope, { "table_id", "table" } ) )
+    {
+        return false;
+    }
+
+    if( !visualTargetStringMatchesScope( aVisualTarget, { "row_id", "row" },
+                                         aScope, { "row_id", "row" } ) )
+    {
+        return false;
+    }
+
+    if( !visualTargetStringMatchesScope( aVisualTarget,
+                                         { "column_id", "column" },
+                                         aScope,
+                                         { "column_id", "column" } ) )
+    {
+        return false;
+    }
+
+    if( !visualTargetStringMatchesScope( aVisualTarget,
+                                         { "field_id", "field" },
+                                         aScope,
+                                         { "field_id", "field",
+                                           "property_id", "property" } ) )
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
+nlohmann::json parseObjectBody( const wxString& aBody );
+
+
+bool decisionSurfaceTargetScopeMatchesRenderedPatchPreviews(
+        const wxString& aDecisionJson,
+        const wxString& aReviewJson )
+{
+    nlohmann::json decision =
+            nlohmann::json::parse( toUtf8String( aDecisionJson ), nullptr, false );
+
+    if( decision.is_discarded() || !decision.is_object()
+        || !decision.contains( "target_scope" )
+        || !decision["target_scope"].is_object() )
+    {
+        return true;
+    }
+
+    nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
+
+    if( !reviewTrace.contains( "provider_tool_results" )
+        || !reviewTrace["provider_tool_results"].is_array() )
+    {
+        return true;
+    }
+
+    const nlohmann::json& scope = decision["target_scope"];
+
+    for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object() || !toolRecord.contains( "result" )
+            || !toolRecord["result"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& result = toolRecord["result"];
+
+        if( !result.contains( "surface_patch_previews" )
+            || !result["surface_patch_previews"].is_array() )
+        {
+            continue;
+        }
+
+        for( const nlohmann::json& preview : result["surface_patch_previews"] )
+        {
+            if( !preview.is_object()
+                || !preview.contains( "surface_patch_diff_entries" )
+                || !preview["surface_patch_diff_entries"].is_array() )
+            {
+                continue;
+            }
+
+            for( const nlohmann::json& entry :
+                 preview["surface_patch_diff_entries"] )
+            {
+                if( !entry.is_object() || !entry.contains( "visual_target" )
+                    || !entry["visual_target"].is_object() )
+                {
+                    continue;
+                }
+
+                if( !surfacePatchVisualTargetMatchesScope(
+                            entry["visual_target"], scope ) )
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+
 bool decisionOpportunityMatchesCandidate(
         const wxString& aDecisionJson,
         const AI_SUGGESTION_RECORD& aCandidate )
@@ -6651,6 +6810,13 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
     {
         appendGateReason( publish.m_GateResult,
                           wxS( "semantic_relevance_failed" ) );
+    }
+
+    if( !decisionSurfaceTargetScopeMatchesRenderedPatchPreviews(
+                aStep.m_LlmDecisionJson, aReview.m_RawJson ) )
+    {
+        appendGateReason( publish.m_GateResult,
+                          wxS( "surface_patch_target_scope_failed" ) );
     }
 
     if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
