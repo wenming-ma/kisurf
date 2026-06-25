@@ -5385,6 +5385,61 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetEvaluationAggregatesRecordResults )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetJsonEvaluationUsesVersionedDatasetSchema )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json record =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-dataset-json" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "min_hidden_operation_count", 1 } } } };
+
+    nlohmann::json dataset =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_dataset" },
+                  { "version",
+                    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_SCHEMA_VERSION } } },
+              { "id", "next-action-placement-smoke" },
+              { "records", nlohmann::json::array( { record } ) } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayGoldenDatasetJson(
+                    wxString::FromUTF8( dataset.dump().c_str() ) );
+
+    BOOST_CHECK( evaluation.m_Valid );
+    BOOST_CHECK( evaluation.m_Passed );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 1 );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"dataset_id\":\"next-action-placement-smoke\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 {
     auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
