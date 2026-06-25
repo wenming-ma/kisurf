@@ -109,6 +109,25 @@ const nlohmann::json* surfaceRevisionField( const nlohmann::json& aSurface )
 }
 
 
+void advanceNumericSurfaceRevision( nlohmann::json& aSurface )
+{
+    for( const char* key : { "revision", "surface_revision" } )
+    {
+        if( !aSurface.contains( key ) )
+            continue;
+
+        if( aSurface[key].is_number_unsigned() )
+        {
+            aSurface[key] = aSurface[key].get<uint64_t>() + 1;
+            continue;
+        }
+
+        if( aSurface[key].is_number_integer() )
+            aSurface[key] = aSurface[key].get<int64_t>() + 1;
+    }
+}
+
+
 const nlohmann::json* jsonMetadataField( const nlohmann::json& aObject,
                                          const char* aKey )
 {
@@ -435,6 +454,8 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
 
     if( changed )
     {
+        advanceNumericSurfaceRevision( surface );
+
         const std::string dumpedState = workingState.dump();
         m_WorkingStateJson = wxString::FromUTF8( dumpedState.c_str() );
         m_SurfaceChanged = true;
