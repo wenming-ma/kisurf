@@ -449,6 +449,117 @@ bool renderFactsBlockPreviewPublish( const wxString& aRenderOutputsJson )
 }
 
 
+wxString atomicFailureResultJson( const AI_ATOMIC_EXECUTION_RESULT& aExecution,
+                                  const char* aFallbackStatus )
+{
+    nlohmann::json result =
+            nlohmann::json::parse( toUtf8String( aExecution.m_ResultJson ),
+                                   nullptr, false );
+
+    if( result.is_discarded() || !result.is_object() )
+        result = nlohmann::json::object();
+
+    result["ok"] = false;
+
+    if( !result.contains( "status" ) || !result["status"].is_string()
+        || result["status"].get<std::string>().empty() )
+    {
+        result["status"] = aFallbackStatus;
+    }
+
+    if( !result.contains( "error_code" ) || !result["error_code"].is_string()
+        || result["error_code"].get<std::string>().empty() )
+    {
+        result["error_code"] = aExecution.m_ErrorCode.IsEmpty()
+                                       ? std::string( aFallbackStatus )
+                                       : toUtf8String( aExecution.m_ErrorCode );
+    }
+
+    if( !result.contains( "message" ) || !result["message"].is_string()
+        || result["message"].get<std::string>().empty() )
+    {
+        result["message"] = aExecution.m_Message.IsEmpty()
+                                    ? std::string( "Atomic operation failed." )
+                                    : toUtf8String( aExecution.m_Message );
+    }
+
+    return fromUtf8String( result.dump() );
+}
+
+
+bool operationResultBlocksPreviewPublish( const nlohmann::json& aResult )
+{
+    if( aResult.contains( "ok" ) && aResult["ok"].is_boolean()
+        && !aResult["ok"].get<bool>() )
+    {
+        return true;
+    }
+
+    if( aResult.contains( "error_code" ) && aResult["error_code"].is_string()
+        && !aResult["error_code"].get<std::string>().empty() )
+    {
+        return true;
+    }
+
+    if( aResult.contains( "status" ) && aResult["status"].is_string()
+        && textContainsBlockingStatus( aResult["status"].get<std::string>() ) )
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+bool sessionJournalBlocksPreviewPublish( const wxString& aJournalJson )
+{
+    nlohmann::json journal =
+            nlohmann::json::parse( toUtf8String( aJournalJson ), nullptr, false );
+
+    if( journal.is_discarded() || !journal.is_object()
+        || !journal.contains( "operations" )
+        || !journal["operations"].is_array() )
+    {
+        return true;
+    }
+
+    std::optional<bool> finalMutationFailed;
+
+    for( const nlohmann::json& operation : journal["operations"] )
+    {
+        if( !operation.is_object()
+            || !operation.contains( "result" )
+            || !operation["result"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& result = operation["result"];
+
+        const bool isMutation =
+                operation.contains( "is_mutation" )
+                && operation["is_mutation"].is_boolean()
+                && operation["is_mutation"].get<bool>();
+
+        const bool resultBlocks =
+                operationResultBlocksPreviewPublish( result );
+
+        if( isMutation )
+        {
+            finalMutationFailed = resultBlocks;
+            continue;
+        }
+
+        if( resultBlocks )
+        {
+            return true;
+        }
+    }
+
+    return finalMutationFailed.value_or( false );
+}
+
+
 bool requiredBoolIsTrue( const nlohmann::json& aObject, const char* aKey )
 {
     return aObject.contains( aKey ) && aObject[aKey].is_boolean()
@@ -8751,9 +8862,9 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                 AI_SESSION_OPERATION_RECORD record;
                 record.m_Kind = operationKind;
                 record.m_ArgumentsJson = operationArgsJson;
-                record.m_ResultJson = execution.m_ResultJson.IsEmpty()
-                                              ? wxString( wxS( "{}" ) )
-                                              : execution.m_ResultJson;
+                record.m_ResultJson =
+                        atomicFailureResultJson( execution,
+                                                 "script_operation_failed" );
                 record.m_Warnings = execution.m_Warnings;
                 session->AppendOperation( std::move( record ) );
 
@@ -10015,9 +10126,9 @@ AI_NEXT_ACTION_ATTEMPT_RECORD AI_NEXT_ACTION_RUNTIME::buildAttempt(
                 AI_SESSION_OPERATION_RECORD operation;
                 operation.m_Kind = aKind;
                 operation.m_ArgumentsJson = aArgumentsJson;
-                operation.m_ResultJson = aExecution.m_ResultJson.IsEmpty()
-                                                 ? wxString( wxS( "{}" ) )
-                                                 : aExecution.m_ResultJson;
+                operation.m_ResultJson =
+                        atomicFailureResultJson( aExecution,
+                                                 "operation_failed" );
                 operation.m_Warnings = aExecution.m_Warnings;
                 session->AppendOperation( std::move( operation ) );
             };
@@ -10151,6 +10262,9 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
 
     if( !attemptBudgetWithinPolicy( aAttempt ) )
         appendGateReason( publish.m_GateResult, wxS( "budget_policy_failed" ) );
+
+    if( sessionJournalBlocksPreviewPublish( aAttempt.m_JournalJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "journal_gate_failed" ) );
 
     if( renderFactsBlockPreviewPublish( aAttempt.m_RenderOutputsJson ) )
         appendGateReason( publish.m_GateResult, wxS( "render_gate_failed" ) );
