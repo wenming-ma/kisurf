@@ -152,6 +152,44 @@ bool issueArrayHasBlockingSeverity( const nlohmann::json& aIssues )
 }
 
 
+bool validationSubfactBlocksPublish( const nlohmann::json& aFact )
+{
+    if( aFact.is_array() )
+    {
+        for( const nlohmann::json& entry : aFact )
+        {
+            if( validationSubfactBlocksPublish( entry ) )
+                return true;
+        }
+
+        return false;
+    }
+
+    if( !aFact.is_object() )
+        return false;
+
+    if( aFact.contains( "blocking" ) && aFact["blocking"].is_boolean()
+        && aFact["blocking"].get<bool>() )
+    {
+        return true;
+    }
+
+    if( aFact.contains( "blocks_publish" ) && aFact["blocks_publish"].is_boolean()
+        && aFact["blocks_publish"].get<bool>() )
+    {
+        return true;
+    }
+
+    if( aFact.contains( "status" ) && aFact["status"].is_string()
+        && textContainsBlockingStatus( aFact["status"].get<std::string>() ) )
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
 bool validationObjectBlocksPublish( const nlohmann::json& aValidation )
 {
     if( !aValidation.is_object() )
@@ -167,6 +205,15 @@ bool validationObjectBlocksPublish( const nlohmann::json& aValidation )
         && issueArrayHasBlockingSeverity( aValidation["issues"] ) )
     {
         return true;
+    }
+
+    for( const char* factName : { "rule_load", "connectivity", "refill" } )
+    {
+        if( aValidation.contains( factName )
+            && validationSubfactBlocksPublish( aValidation[factName] ) )
+        {
+            return true;
+        }
     }
 
     return false;
