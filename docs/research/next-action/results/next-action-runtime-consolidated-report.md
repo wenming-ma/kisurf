@@ -284,6 +284,8 @@ PendingAttempt
 - 更新：validation hint gate 已进一步检查顺序。hint 出现后如果模型先 validate、再执行新的 hidden mutation batch，runtime 会重新标记 validation pending；也就是说 hinted validation 必须覆盖最终准备发布的 hidden state，而不是覆盖旧状态。
 
 - 更新：validation hint gate 已区分 candidate exploration 和 mutation adoption。模型只是生成 / 查看带 validation hint 的 constraint-aware candidate 不会立即阻止 publish；只有 hint 激活后实际执行了 hidden mutation batch，runtime 才要求后续 validate。这避免把“探索候选”误判为“采纳候选”。
+
+- 更新：validation hint gate 已跟踪 pending mutation 的 `tool_call_id`；如果模型用 `rollback.attempt` 撤回了对应 hinted mutation，runtime 会清除该 pending validation，避免要求模型验证已经不存在的 hidden state。
 - Active attempt 的 budget counters 已开始以 journal truth 为准：bounded script batch 合并后会从当前 `operations[]` 重算 mutation count、created object count 和 touched object set；`rollback_attempt` 后也会重新计算，确保 Preview Gate 看到的是当前 hidden attempt frame，而不是已经撤回的旧 batch。
 - Candidate generation 已从 runtime 内部无条件 fan-out 改成 work-state selected：Placement 只调用 placement candidate tool，Routing 只调用 routing candidate tool，Structured Surface 只调用 surface fill candidate tool；attempt provenance 记录 `candidate_generation.selection_mode=work_state_selected`、`selected_tool` 和 skipped tools。
 - LLM decision 已开始支持 `selected_candidate_index`：模型拿到 candidate tool result 后可以显式选择候选；runtime 会用该候选进入 hidden attempt。越界 index 会直接 abandon 当前 semantic step，不能静默回退到第一个候选。
