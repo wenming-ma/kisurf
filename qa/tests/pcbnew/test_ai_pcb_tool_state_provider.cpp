@@ -14,10 +14,13 @@
 
 #include <board.h>
 #include <board_design_settings.h>
+#include <callback_gal.h>
+#include <gal/gal_display_options.h>
 #include <json_common.h>
 #include <pcb_track.h>
 #include <tool/tool_event.h>
 #include <tool/tool_manager.h>
+#include <view/view.h>
 
 #include <string>
 
@@ -136,6 +139,60 @@ BOOST_AUTO_TEST_CASE( RoutingModeContextIncludesBoardLayerWidthAndCursor )
     BOOST_CHECK_EQUAL( mode["width"].get<int>(), 123000 );
     BOOST_CHECK_EQUAL( mode["cursor"]["x"].get<int>(), 44 );
     BOOST_CHECK_EQUAL( mode["cursor"]["y"].get<int>(), 55 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RoutingModeContextIncludesViewportAndCursorRegion )
+{
+    BOARD board;
+    KIGFX::GAL_DISPLAY_OPTIONS galOptions;
+    CALLBACK_GAL gal(
+            galOptions,
+            []( const VECTOR2I&, const VECTOR2I& ) {},
+            []( const VECTOR2I&, const VECTOR2I&, const VECTOR2I& ) {} );
+    gal.SetScreenSize( VECTOR2I( 5000, 3000 ) );
+
+    KIGFX::VIEW view;
+    view.SetGAL( &gal );
+    view.SetViewport( BOX2D( VECTOR2D( 1000.0, 2000.0 ), VECTOR2D( 5000.0, 3000.0 ) ) );
+
+    TOOL_MANAGER manager;
+    manager.SetEnvironment( &board, &view, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_TOOL_STATE_PROVIDER provider( &manager );
+
+    TOOL_EVENT event( TC_COMMAND, TA_ACTIVATE, "pcbnew.InteractiveRouter.SingleTrack" );
+    event.SetMousePosition( VECTOR2D( 2500, 3200 ) );
+    manager.ProcessEvent( event );
+
+    AI_TOOL_STATE_SNAPSHOT snapshot = provider.BuildToolState( AI_CONTEXT_VERSION() );
+
+    BOOST_REQUIRE( !snapshot.m_ModeContextJson.IsEmpty() );
+
+    nlohmann::json mode = parseJson( snapshot.m_ModeContextJson );
+    const BOX2D     actualViewport = view.GetViewport();
+    const VECTOR2D  actualCenter = actualViewport.Centre();
+
+    BOOST_REQUIRE( mode.contains( "viewport" ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["x"].get<int>(),
+                       static_cast<int>( actualViewport.GetX() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["y"].get<int>(),
+                       static_cast<int>( actualViewport.GetY() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["width"].get<int>(),
+                       static_cast<int>( actualViewport.GetWidth() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["height"].get<int>(),
+                       static_cast<int>( actualViewport.GetHeight() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["center"]["x"].get<int>(),
+                       static_cast<int>( actualCenter.x ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["center"]["y"].get<int>(),
+                       static_cast<int>( actualCenter.y ) );
+
+    BOOST_REQUIRE( mode.contains( "cursor_region" ) );
+    BOOST_CHECK_EQUAL( mode["cursor_region"]["x"].get<int>(), 2500 );
+    BOOST_CHECK_EQUAL( mode["cursor_region"]["y"].get<int>(), 3200 );
+    BOOST_CHECK_EQUAL( mode["cursor_region"]["width"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( mode["cursor_region"]["height"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( mode["cursor_region"]["source"].get<std::string>(), "cursor" );
 }
 
 

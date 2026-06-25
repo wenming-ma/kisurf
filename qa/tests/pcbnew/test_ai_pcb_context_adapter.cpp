@@ -4,6 +4,11 @@
 #include <kisurf_ai_pcb_context_adapter.h>
 
 #include <board.h>
+#include <board_design_settings.h>
+#include <connectivity/connectivity_data.h>
+#include <drc/drc_engine.h>
+#include <drc/drc_rule.h>
+#include <drc/drc_rule_condition.h>
 #include <footprint.h>
 #include <netinfo.h>
 #include <pad.h>
@@ -17,6 +22,13 @@
 #include <pcb_text.h>
 #include <pcb_textbox.h>
 #include <pcb_track.h>
+#include <project/project_local_settings.h>
+#include <project/net_settings.h>
+#include <settings/settings_manager.h>
+#include <memory>
+#include <set>
+#include <wx/filename.h>
+#include <wx/stdpaths.h>
 #include <zone.h>
 
 namespace
@@ -71,6 +83,110 @@ nlohmann::json detailsForLabel( const std::vector<AI_OBJECT_REF>& aRefs,
     return nlohmann::json::parse( ref->m_DetailsJson.ToStdString() );
 }
 
+
+const nlohmann::json* findLayerById( const nlohmann::json& aLayers, PCB_LAYER_ID aLayer )
+{
+    for( const nlohmann::json& layer : aLayers )
+    {
+        if( layer["id"].get<int>() == static_cast<int>( aLayer ) )
+            return &layer;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findNetByCode( const nlohmann::json& aNets, int aNetCode )
+{
+    for( const nlohmann::json& net : aNets )
+    {
+        if( net["code"].get<int>() == aNetCode )
+            return &net;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findObstacleByKindAndLabel( const nlohmann::json& aObstacles,
+                                                  const std::string& aKind,
+                                                  const std::string& aLabel )
+{
+    for( const nlohmann::json& obstacle : aObstacles )
+    {
+        if( obstacle["kind"].get<std::string>() == aKind
+            && obstacle["label"].get<std::string>() == aLabel )
+        {
+            return &obstacle;
+        }
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findWorstConstraintByType( const nlohmann::json& aConstraints,
+                                                 const std::string& aType )
+{
+    for( const nlohmann::json& constraint : aConstraints )
+    {
+        if( constraint["type"].get<std::string>() == aType )
+            return &constraint;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findPairConstraintByLabels( const nlohmann::json& aConstraints,
+                                                  const std::string& aLabelA,
+                                                  const std::string& aLabelB )
+{
+    for( const nlohmann::json& constraint : aConstraints )
+    {
+        const std::string source = constraint["source_item"]["label"].get<std::string>();
+        const std::string target = constraint["target_item"]["label"].get<std::string>();
+
+        if( ( source == aLabelA && target == aLabelB )
+            || ( source == aLabelB && target == aLabelA ) )
+        {
+            return &constraint;
+        }
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findComponentContainingLabel( const nlohmann::json& aComponents,
+                                                    const std::string& aLabel )
+{
+    for( const nlohmann::json& component : aComponents )
+    {
+        for( const nlohmann::json& item : component["items"] )
+        {
+            if( item["label"].get<std::string>() == aLabel )
+                return &component;
+        }
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* findNetComponentSummaryByCode( const nlohmann::json& aSummaries,
+                                                     int aNetCode )
+{
+    for( const nlohmann::json& summary : aSummaries )
+    {
+        if( summary["net_code"].get<int>() == aNetCode )
+            return &summary;
+    }
+
+    return nullptr;
+}
+
+
 void appendRectangle( ZONE& aZone )
 {
     aZone.AppendCorner( VECTOR2I( 0, 0 ), -1 );
@@ -78,9 +194,425 @@ void appendRectangle( ZONE& aZone )
     aZone.AppendCorner( VECTOR2I( 1000, 500 ), -1 );
     aZone.AppendCorner( VECTOR2I( 0, 500 ), -1 );
 }
+
+
+PAD* addRoundPad( FOOTPRINT& aFootprint, const wxString& aNumber, const VECTOR2I& aPosition,
+                  int aNetCode )
+{
+    PAD* pad = new PAD( &aFootprint );
+
+    pad->SetNumber( aNumber );
+    pad->SetPosition( aPosition );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::CIRCLE );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 1000, 1000 ) );
+    pad->SetLayerSet( LSET( { F_Cu, F_Mask } ) );
+    pad->SetAttribute( PAD_ATTRIB::SMD );
+    pad->SetNetCode( aNetCode );
+
+    aFootprint.Add( pad );
+
+    return pad;
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiPcbContextAdapter )
+
+BOOST_AUTO_TEST_CASE( AdapterAddsBoardSummaryObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/GND" ), 1 ) );
+    board.GetDesignSettings().m_MinClearance = 111000;
+    board.GetDesignSettings().m_CopperEdgeClearance = 222000;
+    board.GetDesignSettings().m_HoleClearance = 333000;
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetClearance( 444000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetTrackWidth( 555000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetViaDiameter( 666000 );
+    board.GetDesignSettings().m_NetSettings->GetDefaultNetclass()->SetViaDrill( 777000 );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+    board.Add( footprint );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 100, 200 ) );
+    track->SetEnd( VECTOR2I( 300, 200 ) );
+    track->SetLayer( F_Cu );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    ZONE* zone = new ZONE( &board );
+    zone->SetLayerSet( LSET( { F_Cu } ) );
+    zone->SetNetCode( 1 );
+    appendRectangle( *zone );
+    board.Add( zone );
+
+    PCB_SHAPE* outline = new PCB_SHAPE( &board, SHAPE_T::RECTANGLE );
+    outline->SetLayer( Edge_Cuts );
+    outline->SetStart( VECTOR2I( 1000, 2000 ) );
+    outline->SetEnd( VECTOR2I( 5000, 7000 ) );
+    outline->SetWidth( 0 );
+    board.Add( outline );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    BOOST_REQUIRE( !snapshot.m_Summary.IsEmpty() );
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    BOOST_CHECK_EQUAL( summary["kind"].get<std::string>(), "pcb_board_summary" );
+    BOOST_CHECK_EQUAL( summary["net_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["footprint_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["track_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["zone_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["edge_cut_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["source"].get<std::string>(),
+                       "board_design_settings" );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["minimum_clearance"].get<int>(), 111000 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["copper_edge_clearance"].get<int>(), 222000 );
+    BOOST_CHECK_EQUAL( summary["clearance_sources"]["hole_clearance"].get<int>(), 333000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["name"].get<std::string>(),
+            "Default" );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["clearance"].get<int>(),
+            444000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["track_width"].get<int>(),
+            555000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["via_diameter"].get<int>(),
+            666000 );
+    BOOST_CHECK_EQUAL(
+            summary["clearance_sources"]["default_netclass"]["via_drill"].get<int>(),
+            777000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["defined"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["x"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["origin"]["y"].get<int>(), 2000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["x"].get<int>(), 5000 );
+    BOOST_CHECK_EQUAL( summary["board_edges_bbox"]["end"]["y"].get<int>(), 7000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsLayerContextObservationFacts )
+{
+    SETTINGS_MANAGER mgr;
+    wxString         projectPath = wxStandardPaths::Get().GetTempDir()
+                           + wxFileName::GetPathSeparator()
+                           + wxS( "kisurf_ai_layer_context.kicad_pro" );
+
+    mgr.LoadProject( projectPath.ToStdString() );
+
+    BOARD board;
+    board.SetProject( &mgr.Prj() );
+    board.SetCopperLayerCount( 4 );
+    board.SetVisibleLayers( LSET( { F_Cu, Edge_Cuts } ) );
+    mgr.Prj().GetLocalSettings().m_ActiveLayer = B_Cu;
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json layerContext = summary["layer_context"];
+
+    BOOST_CHECK_EQUAL( layerContext["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( layerContext["visible_layers_source"].get<std::string>(),
+                       "project_local_settings" );
+    BOOST_CHECK_EQUAL( layerContext["copper_layer_count"].get<int>(), 4 );
+    BOOST_CHECK_GE( layerContext["enabled_layer_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( layerContext["visible_layer_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["id"].get<int>(), static_cast<int>( B_Cu ) );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["name"].get<std::string>(), "B.Cu" );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["visible"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( layerContext["active_layer"]["copper"].get<bool>(), true );
+
+    const nlohmann::json* fCu = findLayerById( layerContext["layers"], F_Cu );
+    const nlohmann::json* bCu = findLayerById( layerContext["layers"], B_Cu );
+    const nlohmann::json* edgeCuts = findLayerById( layerContext["layers"], Edge_Cuts );
+
+    BOOST_REQUIRE( fCu );
+    BOOST_REQUIRE( bCu );
+    BOOST_REQUIRE( edgeCuts );
+    BOOST_CHECK_EQUAL( ( *fCu )["name"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *fCu )["copper"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *fCu )["visible"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *bCu )["copper"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *bCu )["visible"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["name"].get<std::string>(), "Edge.Cuts" );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["copper"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *edgeCuts )["visible"].get<bool>(), true );
+
+    board.ClearProject();
+    mgr.UnloadProject( &mgr.Prj(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsObstacleObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U1" ) );
+    addRoundPad( *footprint, wxS( "1" ), VECTOR2I( 100, 200 ), 1 );
+    board.Add( footprint );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 1000, 0 ) );
+    track->SetLayer( F_Cu );
+    track->SetWidth( 120 );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 500, 600 ) );
+    via->SetWidth( PADSTACK::ALL_LAYERS, 300 );
+    via->SetDrill( 100 );
+    via->SetNetCode( 1 );
+    board.Add( via );
+
+    ZONE* keepout = new ZONE( &board );
+    keepout->SetZoneName( wxS( "NO_ROUTING" ) );
+    keepout->SetIsRuleArea( true );
+    keepout->SetLayerSet( LSET( { F_Cu, B_Cu } ) );
+    keepout->SetDoNotAllowTracks( true );
+    keepout->SetDoNotAllowVias( true );
+    appendRectangle( *keepout );
+    board.Add( keepout );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json obstacleFacts = summary["obstacle_facts"];
+
+    BOOST_CHECK_EQUAL( obstacleFacts["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_count"].get<int>(), 5 );
+    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( obstacleFacts["obstacles"].size(), 5u );
+
+    const nlohmann::json* footprintObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "footprint", "U1" );
+    const nlohmann::json* padObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "pad", "U1.1" );
+    const nlohmann::json* trackObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "track", "track:0,0->1000,0" );
+    const nlohmann::json* viaObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "via", "via:500,600" );
+    const nlohmann::json* keepoutObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "keepout", "keepout:NO_ROUTING" );
+
+    BOOST_REQUIRE( footprintObstacle );
+    BOOST_REQUIRE( padObstacle );
+    BOOST_REQUIRE( trackObstacle );
+    BOOST_REQUIRE( viaObstacle );
+    BOOST_REQUIRE( keepoutObstacle );
+    BOOST_CHECK_EQUAL( ( *padObstacle )["position"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( ( *padObstacle )["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *trackObstacle )["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *trackObstacle )["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *viaObstacle )["position"]["x"].get<int>(), 500 );
+    BOOST_CHECK_EQUAL( ( *keepoutObstacle )["blocks"]["tracks"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *keepoutObstacle )["blocks"]["vias"].get<bool>(), true );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* left = new FOOTPRINT( &board );
+    left->SetReference( wxS( "U1" ) );
+    addRoundPad( *left, wxS( "1" ), VECTOR2I( 0, 0 ), 1 );
+    board.Add( left );
+
+    FOOTPRINT* right = new FOOTPRINT( &board );
+    right->SetReference( wxS( "U2" ) );
+    addRoundPad( *right, wxS( "1" ), VECTOR2I( 100000, 0 ), 1 );
+    board.Add( right );
+
+    BOOST_REQUIRE( board.BuildConnectivity() );
+    BOOST_REQUIRE_EQUAL( board.GetConnectivity()->GetUnconnectedCount( false ), 1u );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json connectivity = summary["connectivity_summary"];
+
+    BOOST_CHECK_EQUAL( connectivity["source"].get<std::string>(), "board_connectivity" );
+    BOOST_CHECK_EQUAL( connectivity["present"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( connectivity["net_count"].get<int>(),
+                       board.GetConnectivity()->GetNetCount() );
+    BOOST_CHECK_EQUAL( connectivity["node_count"].get<int>(),
+                       board.GetConnectivity()->GetNodeCount() );
+    BOOST_CHECK_EQUAL( connectivity["pad_count"].get<int>(),
+                       board.GetConnectivity()->GetPadCount() );
+    BOOST_CHECK_EQUAL( connectivity["ratsnest_unconnected_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( connectivity["visible_ratsnest_unconnected_count"].get<int>(),
+                       board.GetConnectivity()->GetUnconnectedCount( true ) );
+    BOOST_CHECK_EQUAL( connectivity["local_ratsnest_line_count"].get<int>(), 0 );
+
+    BOOST_REQUIRE_EQUAL( connectivity["unconnected_edges"].size(), 1u );
+
+    nlohmann::json edge = connectivity["unconnected_edges"][0];
+    BOOST_CHECK_EQUAL( edge["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( edge["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( edge["visible"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( edge["source"]["item_type"].get<int>(), PCB_PAD_T );
+    BOOST_CHECK_EQUAL( edge["target"]["item_type"].get<int>(), PCB_PAD_T );
+
+    std::set<int> endpointXs = { edge["source"]["position"]["x"].get<int>(),
+                                 edge["target"]["position"]["x"].get<int>() };
+    std::set<int> endpointYs = { edge["source"]["position"]["y"].get<int>(),
+                                 edge["target"]["position"]["y"].get<int>() };
+
+    BOOST_CHECK( endpointXs == std::set<int>( { 0, 100000 } ) );
+    BOOST_CHECK( endpointYs == std::set<int>( { 0 } ) );
+    BOOST_CHECK_EQUAL( connectivity["unconnected_edge_sample_truncated"].get<bool>(), false );
+
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["node_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["pad_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["unconnected_edge_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["topology"]["visible_unconnected_edge_count"].get<int>(), 1 );
+
+    nlohmann::json topology = ( *sigFact )["topology"];
+    BOOST_REQUIRE_EQUAL( topology["items"].size(), 2u );
+    BOOST_CHECK_EQUAL( topology["item_sample_truncated"].get<bool>(), false );
+
+    std::set<std::string> itemRefs = { topology["items"][0]["label"].get<std::string>(),
+                                       topology["items"][1]["label"].get<std::string>() };
+    std::set<int> itemXs = { topology["items"][0]["position"]["x"].get<int>(),
+                             topology["items"][1]["position"]["x"].get<int>() };
+
+    BOOST_CHECK( itemRefs == std::set<std::string>( { "U1.1", "U2.1" } ) );
+    BOOST_CHECK( itemXs == std::set<int>( { 0, 100000 } ) );
+    BOOST_CHECK_EQUAL( topology["items"][0]["kind"].get<std::string>(), "pad" );
+    BOOST_CHECK_EQUAL( topology["items"][1]["kind"].get<std::string>(), "pad" );
+
+    BOOST_REQUIRE_EQUAL( topology["unconnected_edges"].size(), 1u );
+    BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( topology["unconnected_edge_sample_truncated"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
+{
+    BOARD board;
+    board.Add( new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 ) );
+
+    FOOTPRINT* left = new FOOTPRINT( &board );
+    left->SetReference( wxS( "U1" ) );
+    addRoundPad( *left, wxS( "1" ), VECTOR2I( 0, 0 ), 1 );
+    board.Add( left );
+
+    FOOTPRINT* right = new FOOTPRINT( &board );
+    right->SetReference( wxS( "U2" ) );
+    addRoundPad( *right, wxS( "1" ), VECTOR2I( 100000, 0 ), 1 );
+    board.Add( right );
+
+    FOOTPRINT* isolated = new FOOTPRINT( &board );
+    isolated->SetReference( wxS( "U3" ) );
+    addRoundPad( *isolated, wxS( "1" ), VECTOR2I( 300000, 0 ), 1 );
+    board.Add( isolated );
+
+    PCB_TRACK* track = new PCB_TRACK( &board );
+    track->SetStart( VECTOR2I( 0, 0 ) );
+    track->SetEnd( VECTOR2I( 100000, 0 ) );
+    track->SetLayer( F_Cu );
+    track->SetNetCode( 1 );
+    board.Add( track );
+
+    BOOST_REQUIRE( board.BuildConnectivity() );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+
+    nlohmann::json topology = ( *sigFact )["topology"];
+    BOOST_CHECK_EQUAL( topology["component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( topology["component_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( topology["components"].size(), 2u );
+
+    const nlohmann::json* routedComponent =
+            findComponentContainingLabel( topology["components"], "track:0,0->100000,0" );
+    const nlohmann::json* isolatedComponent =
+            findComponentContainingLabel( topology["components"], "U3.1" );
+
+    BOOST_REQUIRE( routedComponent );
+    BOOST_REQUIRE( isolatedComponent );
+    BOOST_CHECK_EQUAL( ( *routedComponent )["item_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( ( *isolatedComponent )["item_count"].get<int>(), 1 );
+
+    BOOST_REQUIRE_EQUAL( topology["ratsnest_component_edges"].size(), 1u );
+    BOOST_CHECK_NE(
+            topology["ratsnest_component_edges"][0]["source_component"].get<int>(),
+            topology["ratsnest_component_edges"][0]["target_component"].get<int>() );
+    BOOST_CHECK_EQUAL(
+            topology["ratsnest_component_edge_sample_truncated"].get<bool>(), false );
+
+    nlohmann::json connectivity = summary["connectivity_summary"];
+    BOOST_REQUIRE( connectivity.contains( "net_component_summaries" ) );
+
+    const nlohmann::json* sigSummary =
+            findNetComponentSummaryByCode( connectivity["net_component_summaries"], 1 );
+
+    BOOST_REQUIRE( sigSummary );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["sample_component_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["component_sample_truncated"].get<bool>(), false );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["ratsnest_component_edge_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *sigSummary )["visible_ratsnest_component_edge_count"].get<int>(), 1 );
+    BOOST_REQUIRE_EQUAL( ( *sigSummary )["components"].size(), 2u );
+
+    const nlohmann::json* summaryRoutedComponent =
+            findComponentContainingLabel( ( *sigSummary )["components"], "track:0,0->100000,0" );
+
+    BOOST_REQUIRE( summaryRoutedComponent );
+    BOOST_CHECK_EQUAL( ( *summaryRoutedComponent )["item_count"].get<int>(), 3 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPerNetNetclassObservationFacts )
+{
+    BOARD board;
+
+    std::shared_ptr<NETCLASS> power = std::make_shared<NETCLASS>( wxS( "Power" ) );
+    power->SetClearance( 123000 );
+    power->SetTrackWidth( 234000 );
+    power->SetViaDiameter( 345000 );
+    power->SetViaDrill( 456000 );
+    board.GetDesignSettings().m_NetSettings->SetNetclass( power->GetName(), power );
+
+    NETINFO_ITEM* sig = new NETINFO_ITEM( &board, wxS( "/SIG" ), 1 );
+    sig->SetNetClass( power );
+    board.Add( sig );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
+
+    BOOST_REQUIRE( sigFact );
+    BOOST_CHECK_EQUAL( ( *sigFact )["name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["name"].get<std::string>(), "Power" );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["clearance"].get<int>(), 123000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["track_width"].get<int>(), 234000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["via_diameter"].get<int>(), 345000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["netclass"]["via_drill"].get<int>(), 456000 );
+}
+
 
 BOOST_AUTO_TEST_CASE( AdapterCollectsFootprintsAndPadsAsVisibleObjects )
 {
@@ -615,6 +1147,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsZonesAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["first_layer"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( details["corner_count"].get<int>(), 4 );
     BOOST_CHECK_EQUAL( details["position"]["x"].get<int>(), 0 );
+    BOOST_REQUIRE( details.contains( "bbox" ) );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), 500 );
     BOOST_CHECK_EQUAL( details["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( details["net_name"].get<std::string>(), "/GND" );
     BOOST_CHECK_EQUAL( details["priority"].get<int>(), 2 );
@@ -626,6 +1161,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsZonesAsVisibleObjects )
 BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
 {
     BOARD board;
+    board.GetDesignSettings().m_TrackMinWidth = 12000;
+    board.GetDesignSettings().m_ViasMinSize = 24000;
+    board.GetDesignSettings().m_MinThroughDrill = 8000;
 
     ZONE* keepout = new ZONE( &board );
     keepout->SetZoneName( wxS( "NO_ROUTING" ) );
@@ -656,6 +1194,9 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["kind"].get<std::string>(), "zone" );
     BOOST_CHECK_EQUAL( details["zone_kind"].get<std::string>(), "keepout" );
     BOOST_CHECK_EQUAL( details["name"].get<std::string>(), "NO_ROUTING" );
+    BOOST_REQUIRE( details.contains( "bbox" ) );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), 500 );
     BOOST_CHECK_EQUAL( details["is_rule_area"].get<bool>(), true );
     BOOST_CHECK_EQUAL( details["has_keepout"].get<bool>(), true );
     BOOST_CHECK_EQUAL( details["keepout"]["tracks"].get<bool>(), true );
@@ -663,6 +1204,223 @@ BOOST_AUTO_TEST_CASE( AdapterCollectsKeepoutRuleAreasAsVisibleObjects )
     BOOST_CHECK_EQUAL( details["keepout"]["pads"].get<bool>(), false );
     BOOST_CHECK_EQUAL( details["keepout"]["footprints"].get<bool>(), false );
     BOOST_CHECK_EQUAL( details["keepout"]["zone_fills"].get<bool>(), false );
+
+    AI_CONTEXT_SNAPSHOT snapshot = index.BuildSnapshot();
+    nlohmann::json      summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json      constraints = summary["constraint_facts"];
+
+    BOOST_CHECK_EQUAL( constraints["source"].get<std::string>(), "board" );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_track_width"].get<int>(), 12000 );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_via_size"].get<int>(), 24000 );
+    BOOST_CHECK_EQUAL( constraints["minimums"]["min_through_drill"].get<int>(), 8000 );
+    BOOST_CHECK_EQUAL( constraints["rule_area_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( constraints["keepout_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( constraints["keepout_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_EQUAL( constraints["keepouts"].size(), 1u );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["name"].get<std::string>(), "NO_ROUTING" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["layers"][0].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["layers"][1].get<std::string>(), "B.Cu" );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["bbox"]["width"].get<int>(), 1000 );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["bbox"]["height"].get<int>(), 500 );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["tracks"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["vias"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( constraints["keepouts"][0]["blocks"]["pads"].get<bool>(), false );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsEffectiveConstraintObservationFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+    const int              ruleClearance = 987654;
+
+    auto rule = std::make_shared<DRC_RULE>( wxT( "AI Physical Hole Clearance" ) );
+
+    DRC_CONSTRAINT constraint( PHYSICAL_HOLE_CLEARANCE_CONSTRAINT );
+    constraint.Value().SetMin( ruleClearance );
+    rule->AddConstraint( constraint );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( rule );
+    settings.m_DRCEngine = engine;
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["drc_engine_present"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( effective["rules_valid"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( effective["worst_constraint_sample_truncated"].get<bool>(), false );
+
+    const nlohmann::json* physicalHole =
+            findWorstConstraintByType( effective["worst_constraints"],
+                                       "physical_hole_clearance" );
+
+    BOOST_REQUIRE( physicalHole );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["enum"].get<int>(),
+                       static_cast<int>( PHYSICAL_HOLE_CLEARANCE_CONSTRAINT ) );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["value"]["min"].get<int>(), ruleClearance );
+    BOOST_CHECK_EQUAL( ( *physicalHole )["value"]["has_min"].get<bool>(), true );
+    BOOST_CHECK( ( *physicalHole )["name"].get<std::string>().find(
+                         "AI Physical Hole Clearance" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPairSpecificEffectiveConstraintFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+
+    std::shared_ptr<NETCLASS> power = std::make_shared<NETCLASS>( wxS( "Power" ) );
+    power->SetClearance( 910000 );
+    settings.m_NetSettings->SetNetclass( power->GetName(), power );
+
+    std::shared_ptr<NETCLASS> logic = std::make_shared<NETCLASS>( wxS( "Logic" ) );
+    logic->SetClearance( 120000 );
+    settings.m_NetSettings->SetNetclass( logic->GetName(), logic );
+
+    NETINFO_ITEM* pwr = new NETINFO_ITEM( &board, wxS( "/PWR" ), 1 );
+    pwr->SetNetClass( power );
+    board.Add( pwr );
+
+    NETINFO_ITEM* sig = new NETINFO_ITEM( &board, wxS( "/SIG" ), 2 );
+    sig->SetNetClass( logic );
+    board.Add( sig );
+
+    PCB_TRACK* pwrTrack = new PCB_TRACK( &board );
+    pwrTrack->SetStart( VECTOR2I( 0, 0 ) );
+    pwrTrack->SetEnd( VECTOR2I( 1000, 0 ) );
+    pwrTrack->SetLayer( F_Cu );
+    pwrTrack->SetWidth( 150000 );
+    pwrTrack->SetNetCode( 1 );
+    board.Add( pwrTrack );
+
+    PCB_TRACK* sigTrack = new PCB_TRACK( &board );
+    sigTrack->SetStart( VECTOR2I( 0, 500000 ) );
+    sigTrack->SetEnd( VECTOR2I( 1000, 500000 ) );
+    sigTrack->SetLayer( F_Cu );
+    sigTrack->SetWidth( 150000 );
+    sigTrack->SetNetCode( 2 );
+    board.Add( sigTrack );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( wxFileName() );
+    settings.m_DRCEngine = engine;
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["pair_effective_constraint_sample_truncated"].get<bool>(),
+                       false );
+    BOOST_REQUIRE_GE( effective["pair_effective_constraints"].size(), 1u );
+
+    const nlohmann::json* pairConstraint =
+            findPairConstraintByLabels( effective["pair_effective_constraints"],
+                                        "track:0,0->1000,0",
+                                        "track:0,500000->1000,500000" );
+
+    BOOST_REQUIRE( pairConstraint );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["type"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["layer"].get<std::string>(), "F.Cu" );
+
+    std::set<std::string> pairNets = {
+        ( *pairConstraint )["source_item"]["net"].get<std::string>(),
+        ( *pairConstraint )["target_item"]["net"].get<std::string>()
+    };
+
+    BOOST_CHECK( pairNets.find( "/PWR" ) != pairNets.end() );
+    BOOST_CHECK( pairNets.find( "/SIG" ) != pairNets.end() );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["min"].get<int>(), 910000 );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["has_min"].get<bool>(), true );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+
+    board.Add( new NETINFO_ITEM( &board, wxS( "/IN_AREA" ), 1 ) );
+    board.Add( new NETINFO_ITEM( &board, wxS( "/OUT_AREA" ), 2 ) );
+
+    ZONE* area = new ZONE( &board );
+    area->SetZoneName( wxS( "AI_RULE_AREA" ) );
+    area->SetIsRuleArea( true );
+    area->SetLayerSet( LSET( { F_Cu } ) );
+
+    SHAPE_POLY_SET areaOutline;
+    areaOutline.NewOutline();
+    areaOutline.Append( VECTOR2I( 0, 0 ) );
+    areaOutline.Append( VECTOR2I( 1000000, 0 ) );
+    areaOutline.Append( VECTOR2I( 1000000, 500000 ) );
+    areaOutline.Append( VECTOR2I( 0, 500000 ) );
+    area->AddPolygon( areaOutline.COutline( 0 ) );
+
+    board.Add( area );
+
+    PCB_TRACK* insideTrack = new PCB_TRACK( &board );
+    insideTrack->SetStart( VECTOR2I( 100000, 100000 ) );
+    insideTrack->SetEnd( VECTOR2I( 200000, 100000 ) );
+    insideTrack->SetLayer( F_Cu );
+    insideTrack->SetWidth( 50000 );
+    insideTrack->SetNetCode( 1 );
+    board.Add( insideTrack );
+
+    PCB_TRACK* outsideTrack = new PCB_TRACK( &board );
+    outsideTrack->SetStart( VECTOR2I( 2000000, 100000 ) );
+    outsideTrack->SetEnd( VECTOR2I( 2100000, 100000 ) );
+    outsideTrack->SetLayer( F_Cu );
+    outsideTrack->SetWidth( 50000 );
+    outsideTrack->SetNetCode( 2 );
+    board.Add( outsideTrack );
+
+    auto rule = std::make_shared<DRC_RULE>( wxS( "AI Area Clearance" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION( wxS( "A.intersectsArea('AI_RULE_AREA')" ) );
+
+    DRC_CONSTRAINT constraint( CLEARANCE_CONSTRAINT );
+    constraint.Value().SetMin( 777000 );
+    rule->AddConstraint( constraint );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( rule );
+    settings.m_DRCEngine = engine;
+
+    DRC_CONSTRAINT direct =
+            engine->EvalRules( CLEARANCE_CONSTRAINT, insideTrack, outsideTrack, F_Cu );
+    BOOST_REQUIRE( direct.GetValue().HasMin() );
+    BOOST_CHECK_EQUAL( direct.GetValue().Min(), 777000 );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    BOOST_CHECK_EQUAL( effective["geometry_dependent_rules_present"].get<bool>(), true );
+
+    const nlohmann::json* pairConstraint =
+            findPairConstraintByLabels( effective["pair_effective_constraints"],
+                                        "track:100000,100000->200000,100000",
+                                        "track:2000000,100000->2100000,100000" );
+
+    BOOST_REQUIRE( pairConstraint );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["type"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["value"]["min"].get<int>(), 777000 );
+    BOOST_CHECK( ( *pairConstraint )["name"].get<std::string>().find(
+                         "AI Area Clearance" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["evaluation_source"].get<std::string>(),
+                       "DRC_ENGINE::EvalRules" );
+    BOOST_CHECK_EQUAL( ( *pairConstraint )["geometry_dependent_rules_present"].get<bool>(),
+                       true );
+    BOOST_CHECK( ( *pairConstraint )["source_item"].contains( "bbox" ) );
+    BOOST_CHECK( ( *pairConstraint )["target_item"].contains( "bbox" ) );
 }
 
 
@@ -777,6 +1535,60 @@ BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToFootprintsAndPads )
     BOOST_CHECK_EQUAL( padDetails["orientation_degrees"].get<double>(), 90.0 );
     BOOST_CHECK_EQUAL( padDetails["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( padDetails["net_name"].get<std::string>(), "/GPIO" );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsFootprintGeometryExtents )
+{
+    BOARD board;
+
+    FOOTPRINT* footprint = new FOOTPRINT( &board );
+    footprint->SetReference( wxS( "U10" ) );
+    footprint->SetLayer( F_Cu );
+
+    PAD* pad = new PAD( footprint );
+    pad->SetNumber( wxS( "1" ) );
+    pad->SetPosition( VECTOR2I( 1000000, 2000000 ) );
+    pad->SetSize( PADSTACK::ALL_LAYERS, VECTOR2I( 200000, 400000 ) );
+    pad->SetShape( PADSTACK::ALL_LAYERS, PAD_SHAPE::RECTANGLE );
+    pad->SetLayerSet( PAD::SMDMask() );
+    footprint->Add( pad );
+
+    PCB_SHAPE* courtyard = new PCB_SHAPE( footprint, SHAPE_T::POLY );
+    courtyard->SetLayer( F_CrtYd );
+    courtyard->SetWidth( 50000 );
+    courtyard->SetPolyPoints( {
+            VECTOR2I( 800000, 1700000 ),
+            VECTOR2I( 1300000, 1700000 ),
+            VECTOR2I( 1300000, 2300000 ),
+            VECTOR2I( 800000, 2300000 ),
+    } );
+    footprint->Add( courtyard );
+
+    board.Add( footprint );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_INDEX              index = adapter.BuildIndex();
+
+    nlohmann::json details = detailsForLabel( index.VisibleObjects(), wxS( "U10" ) );
+    const BOX2I footprintBBox = footprint->GetBoundingBox( false );
+    const BOX2I padsBBox = pad->GetBoundingBox();
+    const SHAPE_POLY_SET& courtyardPoly = footprint->GetCourtyard( F_CrtYd );
+    BOOST_REQUIRE( !courtyardPoly.IsEmpty() );
+    const BOX2I courtyardBBox = courtyardPoly.BBox();
+
+    BOOST_CHECK_EQUAL( details["bbox"]["x"].get<int>(), footprintBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["bbox"]["y"].get<int>(), footprintBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["bbox"]["width"].get<int>(), footprintBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["bbox"]["height"].get<int>(), footprintBBox.GetHeight() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["x"].get<int>(), padsBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["y"].get<int>(), padsBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["width"].get<int>(), padsBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["pads_bbox"]["height"].get<int>(), padsBBox.GetHeight() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["x"].get<int>(), courtyardBBox.GetX() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["y"].get<int>(), courtyardBBox.GetY() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["width"].get<int>(), courtyardBBox.GetWidth() );
+    BOOST_CHECK_EQUAL( details["courtyard_bbox"]["height"].get<int>(), courtyardBBox.GetHeight() );
 }
 
 

@@ -26,26 +26,6 @@
 namespace
 {
 
-class QUEUED_SUGGESTION_PROVIDER : public AI_SUGGESTION_PROVIDER
-{
-public:
-    std::optional<AI_SUGGESTION_RECORD> Suggest(
-            const AI_SUGGESTION_TRIGGER& aTrigger ) override
-    {
-        wxUnusedVar( aTrigger );
-
-        if( !m_NextSuggestion )
-            return std::nullopt;
-
-        AI_SUGGESTION_RECORD suggestion = *m_NextSuggestion;
-        m_NextSuggestion.reset();
-        return suggestion;
-    }
-
-    std::optional<AI_SUGGESTION_RECORD> m_NextSuggestion;
-};
-
-
 class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -651,15 +631,10 @@ BOOST_AUTO_TEST_SUITE( AiPcbSuggestionReview )
 BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesRoutePreviewToOperationEditAdapter )
 {
     PCB_REVIEW_FIXTURE fixture;
-    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = routeSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( routeSuggestion() );
 
     BOOST_REQUIRE( suggestion.has_value() );
 
@@ -776,6 +751,12 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeUsesPublishedAttemptJournalReplay )
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( accepted.has_value() );
     BOOST_CHECK( accepted->m_Status == AI_SUGGESTION_STATUS::Accepted );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( accepted->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
@@ -849,6 +830,14 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidatio
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( expired.has_value() );
     BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
@@ -894,6 +883,14 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidatio
             model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( expired.has_value() );
     BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
     BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
@@ -901,17 +898,12 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeBlocksReplayWhenAcceptGateValidatio
 BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalDoesNotFallbackToEditObjects )
 {
     PCB_REVIEW_FIXTURE fixture;
-    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
     AI_SUGGESTION_RECORD suggestionWithoutJournal = routeSuggestion();
     suggestionWithoutJournal.m_RuntimeProvenanceJson = wxS( "{\"runtime\":\"next_action\"}" );
-    suggestionProvider->m_NextSuggestion = suggestionWithoutJournal;
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( suggestionWithoutJournal );
 
     BOOST_REQUIRE( suggestion.has_value() );
 
@@ -926,18 +918,49 @@ BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalDoesNotFallbackToEdit
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptNextActionRuntimeWithoutJournalExpiresSessionApplySuggestion )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext = runtimeAcceptContext();
+    AI_SUGGESTION_RECORD suggestionWithoutJournal = routeSuggestion();
+    suggestionWithoutJournal.m_ContextVersion = currentContext.m_ContextVersion;
+    suggestionWithoutJournal.m_RuntimeProvenanceJson =
+            wxS( "{\"runtime\":\"next_action\"}" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( suggestionWithoutJournal );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    JOURNAL_REPLAY_SPY_ADAPTER replayAdapter;
+    ACCEPT_GATE_VALIDATION_SERVICE validationService( true );
+
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id,
+                                         replayAdapter, validationService,
+                                         currentContext ) );
+    BOOST_CHECK_EQUAL( replayAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 0 );
+
+    std::optional<AI_SUGGESTION_RECORD> expired =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( expired.has_value() );
+    BOOST_CHECK( expired->m_Status == AI_SUGGESTION_STATUS::Expired );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( expired->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"session_journal_missing\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RejectSuggestionLeavesBoardUnchanged )
 {
     PCB_REVIEW_FIXTURE fixture;
-    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = routeSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( routeSuggestion() );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK( model.RejectSuggestion( suggestion->m_Id ) );
@@ -949,15 +972,10 @@ BOOST_AUTO_TEST_CASE( RejectSuggestionLeavesBoardUnchanged )
 BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesCopperZonePreviewToOperationEditAdapter )
 {
     PCB_REVIEW_FIXTURE fixture;
-    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = zoneSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( zoneSuggestion() );
 
     BOOST_REQUIRE( suggestion.has_value() );
 
@@ -977,15 +995,10 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesCopperZonePreviewToOperationEdit
 BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesShapePreviewToOperationEditAdapter )
 {
     PCB_REVIEW_FIXTURE fixture;
-    auto*              suggestionProvider = new QUEUED_SUGGESTION_PROVIDER();
-    suggestionProvider->m_NextSuggestion = shapeSuggestion();
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
 
-    AI_AGENT_PANEL_MODEL model(
-            std::make_unique<AI_STUB_PROVIDER>(),
-            std::unique_ptr<AI_SUGGESTION_PROVIDER>( suggestionProvider ) );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = model.UpdateSuggestions(
-            suggestionContext(), suggestionActivity(), wxS( "activity" ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.AddSuggestion( shapeSuggestion() );
 
     BOOST_REQUIRE( suggestion.has_value() );
 

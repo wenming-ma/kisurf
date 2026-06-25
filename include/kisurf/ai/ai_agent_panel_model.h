@@ -5,7 +5,6 @@
 #include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_observability_log.h>
 #include <kisurf/ai/ai_runtime.h>
-#include <kisurf/ai/ai_suggestion_orchestrator.h>
 #include <kisurf/ai/ai_types.h>
 
 #include <cstdint>
@@ -26,8 +25,6 @@ class KICOMMON_API AI_AGENT_PANEL_MODEL
 {
 public:
     explicit AI_AGENT_PANEL_MODEL( std::unique_ptr<AI_PROVIDER> aProvider );
-    AI_AGENT_PANEL_MODEL( std::unique_ptr<AI_PROVIDER> aProvider,
-                          std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider );
 
     bool CanSend( const wxString& aText ) const;
     AI_PROVIDER_RESPONSE SendUserText( const wxString& aText, AI_EDITOR_KIND aEditorKind );
@@ -39,7 +36,6 @@ public:
     uint64_t LastRequestId() const { return m_LastRequestId; }
     bool LastRequestCancelled() const;
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
-    void SetSuggestionProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER> aSuggestionProvider );
     void SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void ConfigureNextActionServices( AI_SESSION_PREVIEW_SERVICE* aPreviewService,
                                       AI_SESSION_VALIDATION_SERVICE* aValidationService );
@@ -67,9 +63,6 @@ public:
             AI_AGENT_WORKSPACE_CONTEXT_KIND aMode ) const;
     std::vector<AI_AGENT_WORKSPACE_CONTEXT_STATE> WorkspaceContextStates() const;
 
-    std::optional<AI_SUGGESTION_RECORD> UpdateSuggestions(
-            AI_CONTEXT_SNAPSHOT aContextSnapshot, AI_ACTIVITY_RECORD aActivity,
-            const wxString& aReason );
     std::optional<AI_SUGGESTION_RECORD> UpdateSuggestionsIfBackgroundEnabled(
             AI_CONTEXT_SNAPSHOT aContextSnapshot, AI_ACTIVITY_RECORD aActivity,
             const wxString& aReason );
@@ -82,6 +75,8 @@ public:
     bool PreviewSuggestion( uint64_t aSuggestionId, AI_PREVIEW_MANAGER& aPreviewManager );
     bool AcceptSuggestion( uint64_t aSuggestionId, AI_EDIT_SESSION& aEditSession,
                            const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion );
+    bool RecordSuggestionGateResult( uint64_t aSuggestionId, const wxString& aKey,
+                                     const AI_NEXT_ACTION_GATE_RESULT& aGate );
     bool MarkSuggestionAccepted( uint64_t aSuggestionId );
     bool RejectSuggestion( uint64_t aSuggestionId );
     bool ExpireSuggestion( uint64_t aSuggestionId );
@@ -92,8 +87,6 @@ private:
     AI_ACTIVITY_LOG                         m_ActivityLog;
     AI_RUNTIME                              m_Runtime;
     std::unique_ptr<AI_NEXT_ACTION_RUNTIME> m_NextActionRuntime;
-    std::unique_ptr<AI_SUGGESTION_PROVIDER> m_SuggestionProvider;
-    std::unique_ptr<AI_SUGGESTION_ORCHESTRATOR> m_SuggestionOrchestrator;
     std::vector<AI_AGENT_MESSAGE>           m_Messages;
     std::map<AI_AGENT_WORKSPACE_CONTEXT_KIND, AI_AGENT_WORKSPACE_CONTEXT_STATE>
             m_WorkspaceContextStates;

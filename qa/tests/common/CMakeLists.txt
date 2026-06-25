@@ -35,7 +35,6 @@ set( QA_COMMON_SRCS
     test_ai_model_settings_dialog.cpp
     test_ai_provider.cpp
     test_ai_runtime.cpp
-    test_ai_agent_suggestion_provider.cpp
     test_ai_agent_panel_model.cpp
     test_ai_agent_panel.cpp
     test_ai_agent_panel_semantic.cpp
@@ -51,7 +50,6 @@ set( QA_COMMON_SRCS
     test_ai_callback_action_runner.cpp
     test_ai_activity_log.cpp
     test_ai_editor_activity_recorder.cpp
-    test_ai_suggestion_orchestrator.cpp
     test_ai_context_index.cpp
     test_ai_context_anchor_provider.cpp
     test_ai_visual_snapshot.cpp
@@ -59,7 +57,7 @@ set( QA_COMMON_SRCS
     test_ai_execution_session.cpp
     test_ai_shadow_board.cpp
     test_ai_preview_manager.cpp
-    test_ai_next_action_provider.cpp
+    test_ai_next_action_candidate_library.cpp
     test_ai_suggestion_operations.cpp
     test_ai_semantic_tool_call_handler.cpp
     test_ai_semantic_ui.cpp

@@ -78,6 +78,7 @@ AI_CONTEXT_SNAPSHOT AI_CONTEXT_INDEX::BuildSnapshot() const
     snapshot.m_Visual = m_Visual;
     snapshot.m_Anchors = m_Anchors;
     snapshot.m_PanelStates = m_PanelStates;
+    snapshot.m_Summary = m_Summary;
     return snapshot;
 }
 
@@ -121,6 +122,15 @@ void AI_CONTEXT_INDEX::SetVisualSnapshot( AI_VISUAL_SNAPSHOT aVisual )
     if( m_Visual.HasPixels() || !m_Visual.m_Source.IsEmpty()
         || !m_Visual.m_UnavailableReason.IsEmpty() )
         ++m_Version.m_ViewRevision;
+}
+
+
+void AI_CONTEXT_INDEX::SetSummary( wxString aSummary )
+{
+    m_Summary = std::move( aSummary );
+
+    if( !m_Summary.IsEmpty() )
+        ++m_Version.m_DocumentRevision;
 }
 
 

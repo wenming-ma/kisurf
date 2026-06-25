@@ -12,7 +12,7 @@
 
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_execution_session.h>
-#include <kisurf/ai/ai_next_action_provider.h>
+#include <kisurf/ai/ai_next_action_candidate_library.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
@@ -284,6 +284,29 @@ bool reviewBasisAllowsPreviewPublish( const wxString& aReviewJson )
            && requiredBoolIsTrue( basis, "validation_passed" )
            && requiredBoolIsTrue( basis, "budget_within_limits" )
            && requiredBoolIsTrue( basis, "self_review_passed" );
+}
+
+
+void appendGateReason( AI_NEXT_ACTION_GATE_RESULT& aGate, const wxString& aReason )
+{
+    aGate.m_Reasons.push_back( aReason );
+    aGate.m_Allowed = false;
+}
+
+
+wxString reviewJsonWithPreviewGateResult(
+        const wxString& aReviewJson,
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    nlohmann::json review =
+            nlohmann::json::parse( toUtf8String( aReviewJson ), nullptr, false );
+
+    if( review.is_discarded() || !review.is_object() )
+        review = nlohmann::json::object();
+
+    review["preview_gate_result"] =
+            nlohmann::json::parse( toUtf8String( aGate.AsJsonText() ) );
+    return fromUtf8String( review.dump() );
 }
 
 
@@ -824,6 +847,53 @@ nlohmann::json parseObjectBody( const wxString& aBody )
     nlohmann::json parsed = nlohmann::json::parse( body.substr( first, last - first + 1 ),
                                                    nullptr, false );
     return parsed.is_object() ? parsed : nlohmann::json::object();
+}
+
+
+void attachGateResultToSuggestion( AI_SUGGESTION_RECORD& aSuggestion,
+                                   const wxString& aKey,
+                                   const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    if( aSuggestion.m_RuntimeProvenanceJson.IsEmpty() || aKey.IsEmpty() )
+        return;
+
+    nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
+
+    if( !provenance.is_object() )
+        provenance = nlohmann::json::object();
+
+    nlohmann::json gate =
+            nlohmann::json::parse( toUtf8String( aGate.AsJsonText() ), nullptr,
+                                   false );
+
+    if( gate.is_discarded() || !gate.is_object() )
+        gate = nlohmann::json::object();
+
+    provenance[toUtf8String( aKey )] = std::move( gate );
+    aSuggestion.m_RuntimeProvenanceJson = fromUtf8String( provenance.dump() );
+}
+
+
+AI_NEXT_ACTION_GATE_RESULT acceptGateResult( bool aAllowed,
+                                             std::initializer_list<wxString> aReasons )
+{
+    AI_NEXT_ACTION_GATE_RESULT gate;
+    gate.m_Gate = wxS( "accept" );
+    gate.m_Allowed = aAllowed;
+
+    for( const wxString& reason : aReasons )
+        gate.m_Reasons.push_back( reason );
+
+    return gate;
+}
+
+
+void attachAcceptGateResult( AI_SUGGESTION_RECORD& aSuggestion,
+                             bool aAllowed,
+                             std::initializer_list<wxString> aReasons )
+{
+    attachGateResultToSuggestion( aSuggestion, wxS( "accept_gate_result" ),
+                                  acceptGateResult( aAllowed, aReasons ) );
 }
 
 
@@ -2095,6 +2165,23 @@ nlohmann::json placementObstacleFactJson( const AI_OBJECT_REF& aObject )
         return fact;
     }
 
+    if( aObject.m_Type == PCB_PAD_T || detailsKindEquals( details, "pad" ) )
+    {
+        if( !details.contains( "position" ) && !details.contains( "bbox" ) )
+            return nlohmann::json::object();
+
+        nlohmann::json fact = visibleObjectBaseFact( aObject );
+        fact["kind"] = "pad_obstacle";
+        copyJsonFieldIfPresent( fact, details, "footprint" );
+        copyJsonFieldIfPresent( fact, details, "pad_name" );
+        copyJsonFieldIfPresent( fact, details, "position" );
+        copyJsonFieldIfPresent( fact, details, "bbox" );
+        copyJsonFieldIfPresent( fact, details, "net_name" );
+        copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layer_set" );
+        return fact;
+    }
+
     if( aObject.m_Type == PCB_FOOTPRINT_T || detailsKindEquals( details, "footprint" ) )
     {
         if( !details.contains( "bbox" ) )
@@ -2137,6 +2224,18 @@ bool isKeepoutDetails( const nlohmann::json& aDetails )
     if( detailsKindEquals( aDetails, "keepout" ) )
         return true;
 
+    if( aDetails.contains( "zone_kind" ) && aDetails["zone_kind"].is_string()
+        && aDetails["zone_kind"].get<std::string>() == "keepout" )
+    {
+        return true;
+    }
+
+    if( aDetails.contains( "has_keepout" ) && aDetails["has_keepout"].is_boolean()
+        && aDetails["has_keepout"].get<bool>() )
+    {
+        return true;
+    }
+
     if( aDetails.contains( "rule" ) && aDetails["rule"].is_string()
         && aDetails["rule"].get<std::string>().find( "keepout" )
                    != std::string::npos )
@@ -2172,10 +2271,15 @@ nlohmann::json placementKeepoutFactsJson(
         nlohmann::json fact = visibleObjectBaseFact( object );
         fact["kind"] = "keepout";
         copyJsonFieldIfPresent( fact, details, "rule" );
+        copyJsonFieldIfPresent( fact, details, "zone_kind" );
+        copyJsonFieldIfPresent( fact, details, "name" );
         copyJsonFieldIfPresent( fact, details, "bbox" );
         copyJsonFieldIfPresent( fact, details, "polygon" );
         copyJsonFieldIfPresent( fact, details, "layer" );
+        copyJsonFieldIfPresent( fact, details, "layers" );
         copyJsonFieldIfPresent( fact, details, "layer_set" );
+        copyJsonFieldIfPresent( fact, details, "has_keepout" );
+        copyJsonFieldIfPresent( fact, details, "keepout" );
         facts.push_back( std::move( fact ) );
     }
 
@@ -2209,6 +2313,295 @@ nlohmann::json placementFootprintGeometryFactsJson(
         copyJsonFieldIfPresent( fact, details, "pads_bbox" );
         copyJsonFieldIfPresent( fact, details, "layer" );
         copyJsonFieldIfPresent( fact, details, "side" );
+        facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
+struct LOCALITY_REGION
+{
+    int            m_Left = 0;
+    int            m_Top = 0;
+    int            m_Width = 0;
+    int            m_Height = 0;
+    nlohmann::json m_Record = nlohmann::json::object();
+};
+
+
+bool jsonNumberAsInt( const nlohmann::json& aObject, const char* aField, int& aValue )
+{
+    if( !aObject.contains( aField ) || !aObject[aField].is_number() )
+        return false;
+
+    aValue = aObject[aField].get<int>();
+    return true;
+}
+
+
+nlohmann::json bboxRecordJson( int aLeft, int aTop, int aWidth, int aHeight )
+{
+    return { { "x", aLeft },
+             { "y", aTop },
+             { "width", aWidth },
+             { "height", aHeight } };
+}
+
+
+bool appendPointFromField( std::vector<std::pair<int, int>>& aPoints,
+                           const nlohmann::json& aDetails, const char* aField )
+{
+    if( !aDetails.contains( aField ) || !aDetails[aField].is_object() )
+        return false;
+
+    int x = 0;
+    int y = 0;
+
+    if( !jsonNumberAsInt( aDetails[aField], "x", x )
+        || !jsonNumberAsInt( aDetails[aField], "y", y ) )
+    {
+        return false;
+    }
+
+    aPoints.emplace_back( x, y );
+    return true;
+}
+
+
+std::optional<nlohmann::json> bboxFromPointFields(
+        const nlohmann::json& aDetails, const std::vector<const char*>& aFields )
+{
+    std::vector<std::pair<int, int>> points;
+
+    for( const char* field : aFields )
+        appendPointFromField( points, aDetails, field );
+
+    if( points.empty() )
+        return std::nullopt;
+
+    int minX = points.front().first;
+    int maxX = points.front().first;
+    int minY = points.front().second;
+    int maxY = points.front().second;
+
+    for( const std::pair<int, int>& point : points )
+    {
+        minX = std::min( minX, point.first );
+        maxX = std::max( maxX, point.first );
+        minY = std::min( minY, point.second );
+        maxY = std::max( maxY, point.second );
+    }
+
+    return bboxRecordJson( minX, minY, maxX - minX, maxY - minY );
+}
+
+
+nlohmann::json routingObstacleFactJson( const AI_OBJECT_REF& aObject )
+{
+    const nlohmann::json details = objectDetailsJson( aObject );
+
+    if( details.empty() )
+        return nlohmann::json::object();
+
+    if( aObject.m_Type != PCB_TRACE_T && aObject.m_Type != PCB_ARC_T
+        && !detailsKindEquals( details, "track" )
+        && !detailsKindEquals( details, "arc" ) )
+    {
+        return nlohmann::json::object();
+    }
+
+    const bool isArc = aObject.m_Type == PCB_ARC_T || detailsKindEquals( details, "arc" );
+    std::optional<nlohmann::json> bbox =
+            isArc ? bboxFromPointFields( details, { "start", "mid", "end" } )
+                  : bboxFromPointFields( details, { "start", "end" } );
+
+    if( !bbox )
+        return nlohmann::json::object();
+
+    nlohmann::json fact = visibleObjectBaseFact( aObject );
+    fact["kind"] = isArc ? "routing_arc_obstacle" : "routing_track_obstacle";
+    fact["bbox"] = *bbox;
+    copyJsonFieldIfPresent( fact, details, "start" );
+    copyJsonFieldIfPresent( fact, details, "mid" );
+    copyJsonFieldIfPresent( fact, details, "end" );
+    copyJsonFieldIfPresent( fact, details, "layer" );
+    copyJsonFieldIfPresent( fact, details, "width" );
+    copyJsonFieldIfPresent( fact, details, "net_code" );
+    copyJsonFieldIfPresent( fact, details, "net_name" );
+    return fact;
+}
+
+
+nlohmann::json routingObstacleFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    const size_t    count = std::min<size_t>( aObjects.size(), 32 );
+
+    for( size_t ii = 0; ii < count; ++ii )
+    {
+        nlohmann::json fact = routingObstacleFactJson( aObjects[ii] );
+
+        if( !fact.empty() )
+            facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
+std::optional<LOCALITY_REGION> localityRegionFromObject( const char* aSource,
+                                                         const nlohmann::json& aObject )
+{
+    int centerX = 0;
+    int centerY = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aObject, "width", width )
+        || !jsonNumberAsInt( aObject, "height", height )
+        || width <= 0 || height <= 0 )
+    {
+        return std::nullopt;
+    }
+
+    if( aObject.contains( "center" ) && aObject["center"].is_object() )
+    {
+        const nlohmann::json& center = aObject["center"];
+
+        if( !jsonNumberAsInt( center, "x", centerX )
+            || !jsonNumberAsInt( center, "y", centerY ) )
+        {
+            return std::nullopt;
+        }
+    }
+    else
+    {
+        if( !jsonNumberAsInt( aObject, "x", centerX )
+            || !jsonNumberAsInt( aObject, "y", centerY ) )
+        {
+            return std::nullopt;
+        }
+    }
+
+    LOCALITY_REGION region;
+    region.m_Left = centerX - width / 2;
+    region.m_Top = centerY - height / 2;
+    region.m_Width = width;
+    region.m_Height = height;
+    region.m_Record = { { "source", aSource },
+                        { "bbox", bboxRecordJson( region.m_Left, region.m_Top,
+                                                   region.m_Width, region.m_Height ) },
+                        { "raw", aObject } };
+    return region;
+}
+
+
+std::optional<LOCALITY_REGION> localityRegionForToolState(
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    if( std::optional<nlohmann::json> region =
+                toolContextObjectField( aToolState, "cursor_region" ) )
+    {
+        if( std::optional<LOCALITY_REGION> locality =
+                    localityRegionFromObject( "cursor_region", *region ) )
+        {
+            return locality;
+        }
+    }
+
+    if( std::optional<nlohmann::json> viewport =
+                toolContextObjectField( aToolState, "viewport" ) )
+    {
+        if( std::optional<LOCALITY_REGION> locality =
+                    localityRegionFromObject( "viewport", *viewport ) )
+        {
+            return locality;
+        }
+    }
+
+    return std::nullopt;
+}
+
+
+bool pointIntersectsRegion( const nlohmann::json& aPoint,
+                            const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+
+    if( !jsonNumberAsInt( aPoint, "x", x )
+        || !jsonNumberAsInt( aPoint, "y", y ) )
+    {
+        return false;
+    }
+
+    return x >= aRegion.m_Left && x < aRegion.m_Left + aRegion.m_Width
+           && y >= aRegion.m_Top && y < aRegion.m_Top + aRegion.m_Height;
+}
+
+
+bool bboxIntersectsRegion( const nlohmann::json& aBbox,
+                           const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aBbox, "x", x )
+        || !jsonNumberAsInt( aBbox, "y", y )
+        || !jsonNumberAsInt( aBbox, "width", width )
+        || !jsonNumberAsInt( aBbox, "height", height ) )
+    {
+        return false;
+    }
+
+    return x < aRegion.m_Left + aRegion.m_Width
+           && x + width > aRegion.m_Left
+           && y < aRegion.m_Top + aRegion.m_Height
+           && y + height > aRegion.m_Top;
+}
+
+
+bool factIntersectsRegion( const nlohmann::json& aFact,
+                           const LOCALITY_REGION& aRegion )
+{
+    if( aFact.contains( "bbox" ) && aFact["bbox"].is_object()
+        && bboxIntersectsRegion( aFact["bbox"], aRegion ) )
+    {
+        return true;
+    }
+
+    if( aFact.contains( "position" ) && aFact["position"].is_object()
+        && pointIntersectsRegion( aFact["position"], aRegion ) )
+    {
+        return true;
+    }
+
+    return false;
+}
+
+
+nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObjects,
+                                       const LOCALITY_REGION& aRegion )
+{
+    nlohmann::json facts = nlohmann::json::array();
+    nlohmann::json candidates = placementObstacleFactsJson( aObjects );
+
+    for( nlohmann::json keepout : placementKeepoutFactsJson( aObjects ) )
+        candidates.push_back( std::move( keepout ) );
+
+    for( nlohmann::json routingObstacle : routingObstacleFactsJson( aObjects ) )
+        candidates.push_back( std::move( routingObstacle ) );
+
+    for( nlohmann::json fact : candidates )
+    {
+        if( !factIntersectsRegion( fact, aRegion ) )
+            continue;
+
+        fact["locality_source"] = aRegion.m_Record["source"];
         facts.push_back( std::move( fact ) );
     }
 
@@ -2570,6 +2963,14 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 visibleObjectSummariesJson( context.m_VisibleObjects ) },
               { "selected_object_count", context.m_SelectedObjects.size() },
               { "anchor_count", context.m_Anchors.size() } };
+
+    if( std::optional<LOCALITY_REGION> locality =
+                localityRegionForToolState( context.m_ToolState ) )
+    {
+        packet["locality_region"] = locality->m_Record;
+        packet["local_obstacle_facts"] =
+                localObstacleFactsJson( context.m_VisibleObjects, *locality );
+    }
 
     if( packetKind == "routing" )
     {
@@ -3631,6 +4032,22 @@ wxString AI_ACCEPT_OWNERSHIP_TOKEN::AsJsonText() const
 }
 
 
+wxString AI_NEXT_ACTION_GATE_RESULT::AsJsonText() const
+{
+    nlohmann::json reasons = nlohmann::json::array();
+
+    for( const wxString& reason : m_Reasons )
+        reasons.push_back( toUtf8String( reason ) );
+
+    nlohmann::json payload =
+            { { "gate", toUtf8String( m_Gate ) },
+              { "allowed", m_Allowed },
+              { "reasons", reasons } };
+
+    return fromUtf8String( payload.dump() );
+}
+
+
 bool AI_NEXT_ACTION_PUBLISH_DECISION::IsValid() const
 {
     return m_Publish && m_AttemptId != 0 && m_PreviewLease.IsValid()
@@ -3661,6 +4078,15 @@ wxString AI_NEXT_ACTION_BUDGET_COUNTERS::AsJsonText() const
 }
 
 
+bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
+{
+    return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
+           || aToolState == AI_TOOL_STATE_KIND::PlacingVia
+           || aToolState == AI_TOOL_STATE_KIND::PlacingFootprint
+           || aToolState == AI_TOOL_STATE_KIND::DrawingZone;
+}
+
+
 std::optional<AI_SEMANTIC_EVENT> AI_NEXT_ACTION_SCHEDULER::BuildSemanticEvent(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
@@ -3672,9 +4098,14 @@ std::optional<AI_SEMANTIC_EVENT> AI_NEXT_ACTION_SCHEDULER::BuildSemanticEvent(
 
     wxString action = aTrigger.m_Activity.m_ActionName.Lower();
 
-    if( action.Contains( wxS( "mouse.move" ) )
-        || action.Contains( wxS( "cursor.move" ) )
-        || action.Contains( wxS( "pointer.move" ) ) )
+    const bool rawPointerMove =
+            action.Contains( wxS( "mouse.move" ) )
+            || action.Contains( wxS( "cursor.move" ) )
+            || action.Contains( wxS( "pointer.move" ) );
+
+    if( rawPointerMove
+        && !isActiveNextActionToolState(
+                aTrigger.m_ContextSnapshot.m_ToolState.m_Kind ) )
     {
         return std::nullopt;
     }
@@ -3736,24 +4167,27 @@ std::vector<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_TOOL_REGISTRY::GenerateCandidat
 
     if( packetKind == "placement" )
     {
-        AI_VIA_PATTERN_NEXT_ACTION_PROVIDER viaProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> via = viaProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> via =
+                    AiGenerateViaPatternCandidate( trigger ) )
+        {
             candidates.push_back( *via );
+        }
     }
     else if( packetKind == "routing" )
     {
-        AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER routingProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> route = routingProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> route =
+                    AiGenerateRoutingSegmentCandidate( trigger ) )
+        {
             candidates.push_back( *route );
+        }
     }
     else if( packetKind == "structured_surface" )
     {
-        AI_PANEL_TABLE_NEXT_ACTION_PROVIDER panelProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> panel = panelProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> panel =
+                    AiGeneratePanelTableFillCandidate( trigger ) )
+        {
             candidates.push_back( *panel );
+        }
     }
 
     return candidates;
@@ -3791,21 +4225,21 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "role", "candidate_generation" },
                 { "work_state", "placement" },
                 { "side_effect", "read_only" },
-                { "provider", "AI_VIA_PATTERN_NEXT_ACTION_PROVIDER" },
+                { "candidate_source", "internal_via_pattern_library" },
                 { "can_publish", false } },
               { { "name", "routing.generate_segment_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
                 { "work_state", "routing" },
                 { "side_effect", "read_only" },
-                { "provider", "AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER" },
+                { "candidate_source", "internal_routing_segment_library" },
                 { "can_publish", false } },
               { { "name", "surface.generate_fill_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
                 { "work_state", "structured_surface" },
                 { "side_effect", "read_only" },
-                { "provider", "AI_PANEL_TABLE_NEXT_ACTION_PROVIDER" },
+                { "candidate_source", "internal_surface_fill_library" },
                 { "can_publish", false } },
               { { "name", "shadow.apply_candidate" },
                 { "layer", "atomic" },
@@ -5305,6 +5739,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
         {
             AI_NEXT_ACTION_PUBLISH_DECISION publish =
                     buildPublishDecision( step, attempt, review );
+            step.m_ReviewDecisionJson = publish.m_RawJson;
 
             if( !publish.IsValid() )
             {
@@ -5447,6 +5882,8 @@ bool AI_NEXT_ACTION_RUNTIME::Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aE
 
     if( !sameVersion( suggestion->m_ContextVersion, aCurrentContextVersion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "context_drift" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
@@ -5454,14 +5891,21 @@ bool AI_NEXT_ACTION_RUNTIME::Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aE
 
     if( !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "accept_validation_failed" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
     }
 
     if( !aEditSession.Apply( suggestion->m_EditObjects, suggestion->m_Validation ) )
+    {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "edit_apply_failed" ) } );
         return false;
+    }
 
+    attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
     return true;
@@ -5477,10 +5921,16 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
     if( !suggestion || !CanAccept( aSuggestionId ) )
         return false;
 
+    const bool runtimeSuggestion = isNextActionRuntimeSuggestion( *suggestion );
+
     if( !sameVersion( suggestion->m_ContextVersion,
                       aCurrentContextVersion.m_ContextVersion )
-        || !runtimeAcceptTokenMatchesDependency( *suggestion, aCurrentContextVersion ) )
+        || ( runtimeSuggestion
+             && !runtimeAcceptTokenMatchesDependency( *suggestion,
+                                                      aCurrentContextVersion ) ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "context_drift" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
@@ -5488,16 +5938,37 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
 
     if( !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "accept_validation_failed" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
     }
 
     if( !aEditSession.Apply( suggestion->m_EditObjects, suggestion->m_Validation ) )
+    {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "edit_apply_failed" ) } );
         return false;
+    }
 
+    attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
+    return true;
+}
+
+
+bool AI_NEXT_ACTION_RUNTIME::RecordSuggestionGateResult(
+        uint64_t aSuggestionId, const wxString& aKey,
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    AI_SUGGESTION_RECORD* suggestion = findMutable( aSuggestionId );
+
+    if( !suggestion )
+        return false;
+
+    attachGateResultToSuggestion( *suggestion, aKey, aGate );
     return true;
 }
 
@@ -5941,18 +6412,30 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
     publish.m_Publish = aReview.WantsPublish();
     publish.m_AttemptId = aAttempt.m_Id;
     publish.m_PreviewMode = wxS( "overlay" );
-    publish.m_RawJson = aReview.m_RawJson;
+    publish.m_GateResult.m_Gate = wxS( "preview" );
+    publish.m_GateResult.m_Allowed = publish.m_Publish;
+
+    if( !publish.m_Publish )
+        appendGateReason( publish.m_GateResult, wxS( "review_not_publish" ) );
 
     if( !decisionOpportunityMatchesCandidate( aStep.m_LlmDecisionJson,
-                                              aAttempt.m_Candidate )
-        || !reviewBasisAllowsPreviewPublish( aReview.m_RawJson )
-        || !attemptBudgetWithinPolicy( aAttempt )
-        || renderFactsBlockPreviewPublish( aAttempt.m_RenderOutputsJson )
-        || validationFactsBlockPreviewPublish( aAttempt.m_ValidationFactsJson ) )
+                                              aAttempt.m_Candidate ) )
     {
-        publish.m_Publish = false;
-        return publish;
+        appendGateReason( publish.m_GateResult,
+                          wxS( "semantic_relevance_failed" ) );
     }
+
+    if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "review_basis_failed" ) );
+
+    if( !attemptBudgetWithinPolicy( aAttempt ) )
+        appendGateReason( publish.m_GateResult, wxS( "budget_policy_failed" ) );
+
+    if( renderFactsBlockPreviewPublish( aAttempt.m_RenderOutputsJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "render_gate_failed" ) );
+
+    if( validationFactsBlockPreviewPublish( aAttempt.m_ValidationFactsJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "validation_gate_failed" ) );
 
     if( m_CurrentContextSampler )
     {
@@ -5961,10 +6444,16 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
         if( dependencyFingerprint( current )
             != dependencyFingerprint( aStep.m_ContextVersion ) )
         {
-            publish.m_Publish = false;
-            return publish;
+            appendGateReason( publish.m_GateResult, wxS( "context_drift" ) );
         }
     }
+
+    publish.m_Publish = publish.m_GateResult.m_Allowed;
+    publish.m_RawJson = reviewJsonWithPreviewGateResult( aReview.m_RawJson,
+                                                         publish.m_GateResult );
+
+    if( !publish.m_Publish )
+        return publish;
 
     publish.m_PreviewLease.m_Id = m_NextLeaseId++;
     publish.m_PreviewLease.m_OwnerNamespace = wxS( "nextaction" );
@@ -6022,6 +6511,9 @@ AI_SUGGESTION_RECORD AI_NEXT_ACTION_RUNTIME::publishAttempt(
               { "accept_token",
                 nlohmann::json::parse( toUtf8String(
                         aPublish.m_AcceptToken.AsJsonText() ) ) },
+              { "preview_gate_result",
+                nlohmann::json::parse( toUtf8String(
+                        aPublish.m_GateResult.AsJsonText() ) ) },
               { "attempt", attemptProvenance } };
     suggestion.m_RuntimeProvenanceJson = fromUtf8String( provenance.dump() );
     return suggestion;
@@ -6060,7 +6552,9 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::storeSuggestion(
         if( !isActive( existing ) )
             continue;
 
-        const bool sameFingerprint = existing.m_Fingerprint == aSuggestion.m_Fingerprint;
+        const bool sameFingerprint = !existing.m_Fingerprint.IsEmpty()
+                                     && existing.m_Fingerprint
+                                                == aSuggestion.m_Fingerprint;
         const bool runtimeLeaseConflict = isNextActionRuntimeSuggestion( existing )
                                           && isNextActionRuntimeSuggestion( aSuggestion );
 

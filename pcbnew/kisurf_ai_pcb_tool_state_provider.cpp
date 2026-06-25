@@ -25,6 +25,7 @@
 #include <tool/tool_base.h>
 #include <tool/tool_event.h>
 #include <tool/tool_manager.h>
+#include <view/view.h>
 #include <zone.h>
 
 #include <algorithm>
@@ -198,10 +199,60 @@ nlohmann::json pointJson( const VECTOR2I& aPoint )
 }
 
 
+nlohmann::json boxJson( const BOX2D& aBox )
+{
+    const VECTOR2D center = aBox.Centre();
+
+    return nlohmann::json{
+        { "x", static_cast<int>( aBox.GetX() ) },
+        { "y", static_cast<int>( aBox.GetY() ) },
+        { "width", static_cast<int>( aBox.GetWidth() ) },
+        { "height", static_cast<int>( aBox.GetHeight() ) },
+        { "center",
+          {
+                  { "x", static_cast<int>( center.x ) },
+                  { "y", static_cast<int>( center.y ) },
+          } },
+    };
+}
+
+
 void addCursorIfPresent( nlohmann::json& aJson, const AI_TOOL_STATE_SNAPSHOT& aSnapshot )
 {
     if( aSnapshot.m_HasCursorBoardPosition )
         aJson["cursor"] = pointJson( aSnapshot.m_CursorBoardPosition );
+}
+
+
+void addCursorRegionIfPresent( nlohmann::json& aJson,
+                               const AI_TOOL_STATE_SNAPSHOT& aSnapshot )
+{
+    if( !aSnapshot.m_HasCursorBoardPosition )
+        return;
+
+    aJson["cursor_region"] = {
+        { "source", "cursor" },
+        { "x", aSnapshot.m_CursorBoardPosition.x },
+        { "y", aSnapshot.m_CursorBoardPosition.y },
+        { "width", 0 },
+        { "height", 0 }
+    };
+}
+
+
+void addViewportIfPresent( nlohmann::json& aJson, TOOL_MANAGER* aToolManager )
+{
+    if( !aToolManager )
+        return;
+
+    KIGFX::VIEW* view = aToolManager->GetView();
+
+    if( !view || !view->GetGAL() )
+        return;
+
+    nlohmann::json viewport = boxJson( view->GetViewport() );
+    viewport["zoom"] = view->GetScale();
+    aJson["viewport"] = std::move( viewport );
 }
 
 
@@ -414,6 +465,9 @@ nlohmann::json buildModeContextJson( const AI_TOOL_STATE_SNAPSHOT& aSnapshot, co
     case AI_TOOL_STATE_KIND::Unknown:
         break;
     }
+
+    addViewportIfPresent( modeContext, aToolManager );
+    addCursorRegionIfPresent( modeContext, aSnapshot );
 
     return modeContext;
 }

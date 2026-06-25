@@ -11,6 +11,7 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <set>
 #include <thread>
 
 namespace
@@ -1366,6 +1367,23 @@ AI_OBJECT_REF viaRef( int aX, int aY, const wxString& aNetName = wxS( "GND" ) )
 }
 
 
+AI_OBJECT_REF trackRef( int aStartX, int aStartY, int aEndX, int aEndY,
+                        const wxString& aNetName = wxS( "GND" ) )
+{
+    wxString details;
+    details << wxS( "{\"kind\":\"track\",\"start\":{\"x\":" ) << aStartX
+            << wxS( ",\"y\":" ) << aStartY << wxS( "},\"end\":{\"x\":" )
+            << aEndX << wxS( ",\"y\":" ) << aEndY
+            << wxS( "},\"layer\":\"F.Cu\",\"width\":150000,\"net_name\":\"" )
+            << aNetName << wxS( "\"}" );
+
+    return AI_OBJECT_REF( KIID(), PCB_TRACE_T,
+                          wxString::Format( wxS( "track:%d,%d->%d,%d" ),
+                                            aStartX, aStartY, aEndX, aEndY ),
+                          details );
+}
+
+
 AI_OBJECT_REF footprintRef()
 {
     return AI_OBJECT_REF(
@@ -1377,13 +1395,27 @@ AI_OBJECT_REF footprintRef()
 }
 
 
+AI_OBJECT_REF padRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_PAD_T, wxS( "pad:U4.1" ),
+            wxS( "{\"kind\":\"pad\",\"footprint\":\"U4\",\"pad_name\":\"1\","
+                 "\"position\":{\"x\":240,\"y\":210},"
+                 "\"bbox\":{\"x\":220,\"y\":190,\"width\":40,\"height\":40},"
+                 "\"layer\":\"F.Cu\",\"net_name\":\"GND\"}" ) );
+}
+
+
 AI_OBJECT_REF keepoutRef()
 {
     return AI_OBJECT_REF(
             KIID(), PCB_ZONE_T, wxS( "keepout:J1" ),
-            wxS( "{\"kind\":\"keepout\",\"rule\":\"no_placement\","
+            wxS( "{\"kind\":\"zone\",\"zone_kind\":\"keepout\",\"name\":\"J1\","
                  "\"bbox\":{\"x\":210,\"y\":20,\"width\":90,\"height\":70},"
-                 "\"layer_set\":[\"F.Cu\",\"B.Cu\"]}" ) );
+                 "\"layers\":{\"names\":[\"F.Cu\",\"B.Cu\"]},"
+                 "\"has_keepout\":true,"
+                 "\"keepout\":{\"tracks\":true,\"vias\":true,"
+                 "\"pads\":true,\"footprints\":true,\"zone_fills\":false}}" ) );
 }
 
 
@@ -1500,6 +1532,16 @@ AI_SUGGESTION_TRIGGER makeAutofillTrigger()
     trigger.m_Activity.m_ActionName = wxS( "panel.properties.focusCell" );
     trigger.m_Reason = wxS( "panel focus" );
     trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeIdleMouseMoveTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeAutofillTrigger();
+    trigger.m_Activity.m_Sequence = 46;
+    trigger.m_Activity.m_ActionName = wxS( "mouse.move" );
+    trigger.m_Reason = wxS( "raw cursor move" );
     return trigger;
 }
 
@@ -1622,12 +1664,28 @@ nlohmann::json providerRequestJson( const AI_PROVIDER_REQUEST& aRequest )
 BOOST_AUTO_TEST_SUITE( AiNextActionRuntime )
 
 
-BOOST_AUTO_TEST_CASE( SchedulerSuppressesRawMouseMove )
+BOOST_AUTO_TEST_CASE( SchedulerSuppressesRawMouseMoveOutsideActiveToolState )
 {
     AI_NEXT_ACTION_SCHEDULER scheduler;
 
-    BOOST_CHECK( !scheduler.BuildSemanticEvent( makeMouseMoveTrigger() ).has_value() );
+    BOOST_CHECK( !scheduler.BuildSemanticEvent(
+                           makeIdleMouseMoveTrigger() )
+                          .has_value() );
     BOOST_CHECK( scheduler.BuildSemanticEvent( makeViaTrigger() ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SchedulerAllowsMouseMoveDuringActiveRoutingOrPlacement )
+{
+    AI_NEXT_ACTION_SCHEDULER scheduler;
+
+    BOOST_CHECK( scheduler.BuildSemanticEvent( makeMouseMoveTrigger() ).has_value() );
+
+    AI_NEXT_ACTION_SCHEDULER routingScheduler;
+    AI_SUGGESTION_TRIGGER routing = makeRoutingTrigger();
+    routing.m_Activity.m_ActionName = wxS( "cursor.move" );
+    routing.m_Reason = wxS( "active routing cursor move" );
+    BOOST_CHECK( routingScheduler.BuildSemanticEvent( routing ).has_value() );
 }
 
 
@@ -1683,6 +1741,12 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"requires_review_decision\":\"publish\"" ) ) );
     BOOST_CHECK( !catalog.Contains( wxS( "\"can_publish\":true" ) ) );
     BOOST_CHECK( !catalog.Contains( wxS( "\"name\":\"candidate.generate\"" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_VIA_PATTERN_NEXT_ACTION_PROVIDER" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER" ) ) );
+    BOOST_CHECK( !catalog.Contains(
+            wxS( "AI_PANEL_TABLE_NEXT_ACTION_PROVIDER" ) ) );
 }
 
 
@@ -1998,6 +2062,11 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     placementTrigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
     placementTrigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
             VECTOR2I( 180, 80 );
+    placementTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"cursor_region\":{\"x\":140,\"y\":80,"
+                 "\"width\":100,\"height\":100},"
+                 "\"viewport\":{\"center\":{\"x\":180,\"y\":80},"
+                 "\"zoom\":3.0,\"width\":600,\"height\":400}}" );
     placementTrigger.m_ContextSnapshot.m_Anchors.push_back(
             contextAnchor( wxS( "place_candidate_1" ),
                            AI_CONTEXT_ANCHOR_KIND::PlacementCandidate,
@@ -2079,6 +2148,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             placementPacket["placement_keepout_facts"].at( 0 )["bbox"]["width"].get<int>(),
             90 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_keepout_facts"].at( 0 )["zone_kind"].get<std::string>(),
+            "keepout" );
+    BOOST_CHECK(
+            placementPacket["placement_keepout_facts"].at( 0 )["keepout"]["tracks"]
+                    .get<bool>() );
     BOOST_REQUIRE( placementPacket.contains( "placement_footprint_geometry_facts" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_footprint_geometry_facts"].size(), 1 );
     BOOST_CHECK_EQUAL(
@@ -2089,6 +2164,26 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_footprint_geometry_facts"].at( 0 )
                     ["courtyard_bbox"]["width"].get<int>(),
             120 );
+    BOOST_REQUIRE( placementPacket.contains( "locality_region" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["locality_region"]["source"].get<std::string>(),
+            "cursor_region" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["locality_region"]["bbox"]["x"].get<int>(),
+            90 );
+    BOOST_REQUIRE( placementPacket.contains( "local_obstacle_facts" ) );
+
+    std::set<std::string> localObstacleLabels;
+
+    for( const nlohmann::json& fact : placementPacket["local_obstacle_facts"] )
+        localObstacleLabels.insert( fact["label"].get<std::string>() );
+
+    BOOST_CHECK( localObstacleLabels.find( "via:100,50" )
+                 != localObstacleLabels.end() );
+    BOOST_CHECK( localObstacleLabels.find( "footprint:U1" )
+                 != localObstacleLabels.end() );
+    BOOST_CHECK( localObstacleLabels.find( "via:300,50" )
+                 == localObstacleLabels.end() );
 
     auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
@@ -2104,8 +2199,19 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             contextAnchor( wxS( "route_candidate_1" ),
                            AI_CONTEXT_ANCHOR_KIND::RouteCandidate,
                            wxS( "Route candidate 1" ), 320, 200 ) );
+    routingTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000,"
+                 "\"start\":{\"x\":100,\"y\":200},"
+                 "\"cursor\":{\"x\":260,\"y\":200},"
+                 "\"cursor_region\":{\"x\":250,\"y\":210,"
+                 "\"width\":180,\"height\":120}}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            trackRef( 180, 210, 300, 210, wxS( "GND" ) ) );
+    routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            trackRef( 1000, 1000, 1200, 1000, wxS( "GND" ) ) );
 
     BOOST_CHECK( !routingRuntime.Update( routingTrigger ).has_value() );
     BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.size(), 1 );
@@ -2146,11 +2252,24 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
             320 );
     BOOST_REQUIRE( routingPacket.contains( "visible_object_summaries" ) );
-    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 1 );
+    BOOST_REQUIRE_EQUAL( routingPacket["visible_object_summaries"].size(), 4 );
     BOOST_CHECK_EQUAL(
             routingPacket["visible_object_summaries"].at( 0 )["details"]["net_name"]
                     .get<std::string>(),
             "GND" );
+    BOOST_REQUIRE( routingPacket.contains( "local_obstacle_facts" ) );
+
+    std::set<std::string> routingLocalObstacleLabels;
+
+    for( const nlohmann::json& fact : routingPacket["local_obstacle_facts"] )
+        routingLocalObstacleLabels.insert( fact["label"].get<std::string>() );
+
+    BOOST_CHECK( routingLocalObstacleLabels.find( "track:180,210->300,210" )
+                 != routingLocalObstacleLabels.end() );
+    BOOST_CHECK( routingLocalObstacleLabels.find( "pad:U4.1" )
+                 != routingLocalObstacleLabels.end() );
+    BOOST_CHECK( routingLocalObstacleLabels.find( "track:1000,1000->1200,1000" )
+                 == routingLocalObstacleLabels.end() );
 
     auto* autofillProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
@@ -2292,6 +2411,10 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "fnv1a64:" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "tool_results" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "session_journal" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "pcb.create_via" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
             wxS( "placement.generate_via_pattern_candidates" ) ) );
@@ -3068,6 +3191,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWhenNativeBudgetCountersExceedPolicy 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "budget_policy_failed" ) ) );
 }
 
 
@@ -3498,6 +3627,12 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenReviewOmitsGateBasis )
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "review_basis_failed" ) ) );
 }
 
 
@@ -3800,6 +3935,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenCurrentContextDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -3833,6 +3976,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenDependencyFingerprintDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -3868,6 +4019,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenViewportFingerprintDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -3902,6 +4061,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotAcceptGrade 
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
 }
 
 
@@ -3936,6 +4103,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotExactPreview
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
 }
 
 
