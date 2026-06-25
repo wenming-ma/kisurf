@@ -965,6 +965,29 @@ bool toolRecordIsExecutedHiddenMutation( const nlohmann::json& aToolRecord )
 }
 
 
+std::string toolRecordRolledBackToolCallId( const nlohmann::json& aToolRecord )
+{
+    if( !aToolRecord.is_object()
+        || !aToolRecord.value( "allowed", false )
+        || !aToolRecord.value( "executed", false )
+        || !aToolRecord.contains( "result" )
+        || !aToolRecord["result"].is_object() )
+    {
+        return std::string();
+    }
+
+    const nlohmann::json& result = aToolRecord["result"];
+
+    if( result.value( "tool", std::string() ) != "rollback.attempt"
+        || result.value( "status", std::string() ) != "rolled_back" )
+    {
+        return std::string();
+    }
+
+    return result.value( "rolled_back_tool_call_id", std::string() );
+}
+
+
 bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 {
     nlohmann::json reviewTrace = parseObjectBody( aReviewJson );
@@ -975,8 +998,9 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
         return true;
     }
 
-    bool validationPending = false;
-    bool validationHintActive = false;
+    bool                  validationHintActive = false;
+    bool                  validationPendingWithoutToolId = false;
+    std::set<std::string> pendingMutationToolCallIds;
 
     for( const nlohmann::json& toolRecord : reviewTrace["provider_tool_results"] )
     {
@@ -985,9 +1009,16 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
 
         if( toolRecordIsExecutedValidation( toolRecord ) )
         {
-            validationPending = false;
+            pendingMutationToolCallIds.clear();
+            validationPendingWithoutToolId = false;
             continue;
         }
+
+        const std::string rolledBackToolCallId =
+                toolRecordRolledBackToolCallId( toolRecord );
+
+        if( !rolledBackToolCallId.empty() )
+            pendingMutationToolCallIds.erase( rolledBackToolCallId );
 
         if( toolRecord.contains( "result" )
             && jsonContainsValidationBeforePublishHint( toolRecord["result"] ) )
@@ -996,11 +1027,18 @@ bool reviewValidationHintsSatisfied( const wxString& aReviewJson )
         if( validationHintActive
             && toolRecordIsExecutedHiddenMutation( toolRecord ) )
         {
-            validationPending = true;
+            const std::string toolCallId =
+                    toolRecord.value( "tool_call_id", std::string() );
+
+            if( toolCallId.empty() )
+                validationPendingWithoutToolId = true;
+            else
+                pendingMutationToolCallIds.insert( toolCallId );
         }
     }
 
-    return !validationPending;
+    return pendingMutationToolCallIds.empty()
+           && !validationPendingWithoutToolId;
 }
 
 
