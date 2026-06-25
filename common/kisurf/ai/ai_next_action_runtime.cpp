@@ -1676,6 +1676,53 @@ nlohmann::json toolCallRecordsJson(
 }
 
 
+std::vector<AI_TOOL_CALL_RECORD> toolCallRecordsFromReviewJson(
+        const wxString& aReviewJson )
+{
+    std::vector<AI_TOOL_CALL_RECORD> records;
+    nlohmann::json review = parseObjectBody( aReviewJson );
+
+    if( !review.contains( "provider_tool_results" )
+        || !review["provider_tool_results"].is_array() )
+    {
+        return records;
+    }
+
+    for( const nlohmann::json& item : review["provider_tool_results"] )
+    {
+        if( !item.is_object() )
+            continue;
+
+        AI_TOOL_CALL_RECORD record;
+
+        if( item.contains( "request_id" ) && item["request_id"].is_number_unsigned() )
+            record.m_RequestId = item["request_id"].get<uint64_t>();
+
+        record.m_ToolCallId = fromUtf8String(
+                item.value( "tool_call_id", std::string() ) );
+        record.m_ToolName = fromUtf8String(
+                item.value( "tool_name", std::string() ) );
+        record.m_ArgumentsJson = fromUtf8String(
+                item.value( "arguments_json", std::string( "{}" ) ) );
+        record.m_Allowed = item.value( "allowed", false );
+        record.m_Executed = item.value( "executed", false );
+        record.m_ErrorCode = fromUtf8String(
+                item.value( "error_code", std::string() ) );
+        record.m_Message = fromUtf8String(
+                item.value( "message", std::string() ) );
+
+        if( item.contains( "result" ) )
+            record.m_ResultJson = fromUtf8String( item["result"].dump() );
+        else
+            record.m_ResultJson = wxS( "{}" );
+
+        records.push_back( std::move( record ) );
+    }
+
+    return records;
+}
+
+
 void attachProviderToolResults( nlohmann::json& aBody,
                                 const AI_PROVIDER_RESPONSE& aResponse )
 {
@@ -2659,6 +2706,74 @@ bool attemptBudgetWithinPolicy( const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
             aAttempt.m_BudgetCounters,
             attemptPolicyForWorkState( budgetPolicyWorkStateForCandidate(
                     aAttempt.m_Candidate ) ) );
+}
+
+
+bool attemptHasReviewToolRoundsRemaining(
+        const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
+{
+    const ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState(
+            budgetPolicyWorkStateForCandidate( aAttempt.m_Candidate ) );
+    return aAttempt.m_BudgetCounters.m_ToolRoundCount < policy.m_MaxToolRounds;
+}
+
+
+bool previewGateFailureCanReenterReview(
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    if( aGate.m_Allowed )
+        return false;
+
+    bool hasRepairableReason = false;
+
+    for( const wxString& reason : aGate.m_Reasons )
+    {
+        if( reason == wxS( "context_drift" )
+            || reason == wxS( "budget_policy_failed" )
+            || reason == wxS( "semantic_relevance_failed" )
+            || reason == wxS( "surface_patch_target_scope_failed" ) )
+        {
+            return false;
+        }
+
+        if( reason == wxS( "render_freshness_failed" )
+            || reason == wxS( "render_hint_not_satisfied" )
+            || reason == wxS( "validation_freshness_failed" )
+            || reason == wxS( "validation_hint_not_satisfied" ) )
+        {
+            hasRepairableReason = true;
+        }
+    }
+
+    return hasRepairableReason;
+}
+
+
+AI_TOOL_CALL_RECORD previewGateFeedbackToolResult(
+        uint64_t aRequestId,
+        const AI_NEXT_ACTION_PUBLISH_DECISION& aPublish,
+        size_t aFeedbackRound )
+{
+    AI_TOOL_CALL_RECORD feedback;
+    feedback.m_RequestId = aRequestId;
+    feedback.m_ToolCallId = wxString::Format(
+            wxS( "runtime_preview_gate_feedback_%llu" ),
+            static_cast<unsigned long long>( aFeedbackRound ) );
+    feedback.m_ToolName = wxS( "preview_gate_feedback" );
+    feedback.m_ArgumentsJson = wxS( "{}" );
+    feedback.m_Allowed = true;
+    feedback.m_Executed = true;
+    feedback.m_Message = wxS( "preview gate rejected publish; continue review" );
+
+    nlohmann::json result =
+            { { "tool", "preview.gate_feedback" },
+              { "direct_publish", false },
+              { "publish_allowed", false },
+              { "preview_gate_result",
+                parseObjectBody( aPublish.m_GateResult.AsJsonText() ) },
+              { "publish_decision", parseObjectBody( aPublish.m_RawJson ) } };
+    feedback.m_ResultJson = fromUtf8String( result.dump() );
+    return feedback;
 }
 
 
@@ -8764,7 +8879,7 @@ AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
 {
     AI_PROVIDER_RESPONSE response = m_Provider->Generate( aRequest );
 
-    std::vector<AI_TOOL_CALL_RECORD> handledToolCalls;
+    std::vector<AI_TOOL_CALL_RECORD> handledToolCalls = aRequest.m_ToolResults;
     size_t                           toolRounds = 0;
     AI_EXECUTION_SESSION*            attemptFrame = nullptr;
 
@@ -8895,57 +9010,89 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
         step.m_AttemptIds.push_back( attempt.m_Id );
         step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Reviewing;
 
-        AI_NEXT_ACTION_REVIEW_DECISION review =
-                runReviewTurn( step, observation, attempt );
-        step.m_ReviewDecisionJson = review.m_RawJson;
-        attachReviewProviderToolResultsToAttempt( attempt, review.m_RawJson );
+        std::vector<AI_TOOL_CALL_RECORD> reviewInitialToolResults;
+        size_t                           gateFeedbackRounds = 0;
+        bool                             tryNextCandidate = false;
+        bool                             stopAttemptLoop = false;
 
-        for( AI_NEXT_ACTION_ATTEMPT_RECORD& storedAttempt : m_Attempts )
+        for( ;; )
         {
-            if( storedAttempt.m_Id == attempt.m_Id )
+            AI_NEXT_ACTION_REVIEW_DECISION review =
+                    runReviewTurn( step, observation, attempt,
+                                   reviewInitialToolResults );
+            step.m_ReviewDecisionJson = review.m_RawJson;
+            attachReviewProviderToolResultsToAttempt( attempt, review.m_RawJson );
+
+            for( AI_NEXT_ACTION_ATTEMPT_RECORD& storedAttempt : m_Attempts )
             {
-                storedAttempt.m_JournalJson = attempt.m_JournalJson;
-                storedAttempt.m_ProvenanceJson = attempt.m_ProvenanceJson;
-                storedAttempt.m_BudgetCounters = attempt.m_BudgetCounters;
+                if( storedAttempt.m_Id == attempt.m_Id )
+                {
+                    storedAttempt.m_JournalJson = attempt.m_JournalJson;
+                    storedAttempt.m_ProvenanceJson = attempt.m_ProvenanceJson;
+                    storedAttempt.m_BudgetCounters = attempt.m_BudgetCounters;
+                    break;
+                }
+            }
+
+            if( review.WantsPublish() )
+            {
+                AI_NEXT_ACTION_PUBLISH_DECISION publish =
+                        buildPublishDecision( step, attempt, review );
+                step.m_ReviewDecisionJson = publish.m_RawJson;
+
+                if( !publish.IsValid() )
+                {
+                    if( previewGateFailureCanReenterReview( publish.m_GateResult )
+                        && gateFeedbackRounds < 2
+                        && attemptHasReviewToolRoundsRemaining( attempt ) )
+                    {
+                        reviewInitialToolResults =
+                                toolCallRecordsFromReviewJson( publish.m_RawJson );
+                        reviewInitialToolResults.push_back(
+                                previewGateFeedbackToolResult(
+                                        step.m_Id * 10 + 2, publish,
+                                        ++gateFeedbackRounds ) );
+                        continue;
+                    }
+
+                    tryNextCandidate = ii + 1 < candidates.size();
+                    stopAttemptLoop = true;
+                    break;
+                }
+
+                AI_SUGGESTION_RECORD suggestion =
+                        publishAttempt( step, attempt, publish );
+                std::optional<AI_SUGGESTION_RECORD> stored =
+                        storeSuggestion( suggestion );
+
+                if( stored )
+                {
+                    step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Published;
+                    step.m_PublishedSuggestionId = stored->m_Id;
+                    m_Steps.push_back( step );
+                    return stored;
+                }
+            }
+
+            if( review.m_Kind != AI_NEXT_ACTION_DECISION_KIND::Retry
+                && review.m_Kind != AI_NEXT_ACTION_DECISION_KIND::RollbackRetry )
+            {
+                stopAttemptLoop = true;
                 break;
             }
-        }
 
-        if( review.WantsPublish() )
-        {
-            AI_NEXT_ACTION_PUBLISH_DECISION publish =
-                    buildPublishDecision( step, attempt, review );
-            step.m_ReviewDecisionJson = publish.m_RawJson;
+            if( !m_Attempts.empty() && m_Attempts.back().m_Id == attempt.m_Id )
+                m_Attempts.back().m_RollbackJson =
+                        m_Tools.RollbackAttempt( attempt.m_BaseCheckpointId );
 
-            if( !publish.IsValid() )
-            {
-                if( ii + 1 < candidates.size() )
-                    continue;
-
-                break;
-            }
-
-            AI_SUGGESTION_RECORD suggestion = publishAttempt( step, attempt, publish );
-            std::optional<AI_SUGGESTION_RECORD> stored = storeSuggestion( suggestion );
-
-            if( stored )
-            {
-                step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Published;
-                step.m_PublishedSuggestionId = stored->m_Id;
-                m_Steps.push_back( step );
-                return stored;
-            }
-        }
-
-        if( review.m_Kind != AI_NEXT_ACTION_DECISION_KIND::Retry
-            && review.m_Kind != AI_NEXT_ACTION_DECISION_KIND::RollbackRetry )
-        {
             break;
         }
 
-        if( !m_Attempts.empty() && m_Attempts.back().m_Id == attempt.m_Id )
-            m_Attempts.back().m_RollbackJson =
-                    m_Tools.RollbackAttempt( attempt.m_BaseCheckpointId );
+        if( tryNextCandidate )
+            continue;
+
+        if( stopAttemptLoop )
+            break;
     }
 
     step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
@@ -9497,7 +9644,8 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
 AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
         const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
         const AI_OBSERVATION_PACKET& aObservation,
-        AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
+        AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt,
+        const std::vector<AI_TOOL_CALL_RECORD>& aInitialToolResults )
 {
     AI_NEXT_ACTION_REVIEW_DECISION review;
     review.m_AttemptId = aAttempt.m_Id;
@@ -9578,15 +9726,11 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
     }
 
     if( !previousAttempts.empty() )
-    {
         reviewInput["previous_attempts"] = previousAttempts;
 
-        if( !aStep.m_ReviewDecisionJson.IsEmpty() )
-        {
-            reviewInput["previous_review_decision"] =
-                    parseObjectBody( aStep.m_ReviewDecisionJson );
-        }
-    }
+    if( !aStep.m_ReviewDecisionJson.IsEmpty() )
+        reviewInput["previous_review_decision"] =
+                parseObjectBody( aStep.m_ReviewDecisionJson );
 
     reviewInput["internal_tool_catalog"] =
             nlohmann::json::parse( toUtf8String( m_Tools.ToolCatalogJson() ) );
@@ -9598,6 +9742,7 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
     request.m_ContextVersion = aObservation.m_ContextVersion.m_ContextVersion;
     request.m_ContextSnapshot = aObservation.m_ContextSnapshot;
     request.m_UserText = fromUtf8String( reviewInput.dump() );
+    request.m_ToolResults = aInitialToolResults;
     request.m_SystemPromptOverride =
             wxS( "You are reviewing a hidden KiSurf Next Action attempt. Decide "
                  "whether to publish, retry, rollback_retry, or abandon. "

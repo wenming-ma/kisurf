@@ -310,7 +310,8 @@ private:
     AI_NEXT_ACTION_REVIEW_DECISION runReviewTurn(
             const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
             const AI_OBSERVATION_PACKET& aObservation,
-            AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt );
+            AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt,
+            const std::vector<AI_TOOL_CALL_RECORD>& aInitialToolResults = {} );
     AI_PROVIDER_RESPONSE generateWithToolLoop(
             AI_PROVIDER_REQUEST aRequest,
             const AI_OBSERVATION_PACKET& aObservation,
