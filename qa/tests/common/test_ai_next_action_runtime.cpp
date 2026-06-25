@@ -523,6 +523,92 @@ public:
 };
 
 
+class SURFACE_PATCH_WRONG_COLUMN_THEN_RENDER_NEXT_ACTION_PROVIDER :
+        public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "surface patch wrong column next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"attempt\","
+                         "\"opportunity_type\":\"structured_surface\","
+                         "\"selected_candidate_index\":0,"
+                         "\"target_scope\":{\"kind\":\"column\","
+                         "\"panel_id\":\"board_setup.clearance\","
+                         "\"surface_id\":\"board_setup.clearance\","
+                         "\"table_id\":\"clearance.rules\","
+                         "\"column\":\"class\"},"
+                         "\"reason_code\":\"surface_patch_wrong_column_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need mismatched SurfacePatch facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_wrong_surface_patch" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{"
+                             "\"kind\":\"surface.apply_patch\","
+                             "\"arguments\":{"
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"target_scope\":{\"kind\":\"column\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"column\":\"clearance\"},"
+                             "\"patch\":{\"kind\":\"SurfacePatch\","
+                             "\"operations\":[{\"op\":\"set_cell\","
+                             "\"row_id\":\"row.power\","
+                             "\"column_id\":\"clearance\","
+                             "\"value\":\"0.20mm\"}]},"
+                             "\"alias\":\"surface_patch_wrong_column\"}}]},"
+                             "\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered mismatched SurfacePatch facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_wrong_surface_patch" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SURFACE_PATCH_REVISE_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -3993,6 +4079,32 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksSurfacePublishWhenDecisionTargetScopeMismatch
             wxS( "\"selected_tool\":\"surface.generate_fill_candidates\"" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
             wxS( "\"column_id\":\"class\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksSurfacePatchPublishWhenRenderedTargetScopeMismatchesDecision )
+{
+    auto* provider =
+            new SURFACE_PATCH_WRONG_COLUMN_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makePanelFillTriggerWithTargetScope() ).has_value() );
+    BOOST_REQUIRE_GE( provider->m_CallCount, 4 );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "surface_patch_target_scope_failed" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"surface_patch_previews\"" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"column_id\":\"clearance\"" ) ) );
 }
 
 
