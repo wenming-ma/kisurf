@@ -1,5 +1,5 @@
 #include <kisurf/ai/ai_agent_panel_model.h>
-#include <kisurf/ai/ai_agent_suggestion_provider.h>
+#include <kisurf/ai/ai_provider.h>
 
 #include <utility>
 

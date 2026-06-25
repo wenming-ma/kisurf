@@ -35,7 +35,6 @@ set( QA_COMMON_SRCS
     test_ai_model_settings_dialog.cpp
     test_ai_provider.cpp
     test_ai_runtime.cpp
-    test_ai_agent_suggestion_provider.cpp
     test_ai_agent_panel_model.cpp
     test_ai_agent_panel.cpp
     test_ai_agent_panel_semantic.cpp

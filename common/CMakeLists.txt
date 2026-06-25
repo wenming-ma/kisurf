@@ -132,7 +132,6 @@ set( KICOMMON_SRCS
     kisurf/ai/ai_agent_panel_base.cpp
     kisurf/ai/ai_agent_panel_model.cpp
     kisurf/ai/ai_agent_panel_semantic.cpp
-    kisurf/ai/ai_agent_suggestion_provider.cpp
     kisurf/ai/ai_model_config.cpp
     kisurf/ai/ai_model_settings_dialog_base.cpp
     kisurf/ai/ai_observability_log.cpp
