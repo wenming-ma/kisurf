@@ -2228,6 +2228,26 @@ wxString makeFootprintObstacleJson( const FOOTPRINT& aFootprint )
 }
 
 
+wxString makePadObstacleJson( const FOOTPRINT& aFootprint, const PAD& aPad )
+{
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":\"pad\",\"label\":%s,"
+                 "\"footprint_reference\":%s,\"pad_number\":%s,"
+                 "\"net_code\":%d,\"net_name\":%s,\"layer\":%s,"
+                 "\"layers\":%s,\"position\":%s,\"bbox\":%s,"
+                 "\"shape\":%s,\"size\":%s}" ),
+            quotedJson( aPad.m_Uuid.AsString() ), static_cast<int>( aPad.Type() ),
+            quotedJson( padContextLabel( aFootprint, aPad ) ),
+            quotedJson( aFootprint.GetReference() ), quotedJson( aPad.GetNumber() ),
+            aPad.GetNetCode(), quotedJson( aPad.GetNetname() ),
+            quotedJson( boardLayerName( aPad, aPad.GetLayer() ) ),
+            layerSetDetailsJson( aPad, aPad.GetLayerSet() ),
+            pointDetailsJson( aPad.GetPosition() ), boxRectDetailsJson( aPad.GetBoundingBox() ),
+            quotedJson( padShapeToken( aPad.GetShape( PADSTACK::ALL_LAYERS ) ) ),
+            pointDetailsJson( aPad.GetSize( PADSTACK::ALL_LAYERS ) ) );
+}
+
+
 wxString makeRoutingObstacleJson( const PCB_TRACK& aTrack )
 {
     const wxString kind = connectedItemKindToken( aTrack );
@@ -2302,8 +2322,16 @@ wxString makeObstacleFactsJson( const BOARD& aBoard )
     size_t                obstacleCount = 0;
 
     for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
         appendObstacleEntry( obstacleEntries, obstacleSampleTruncated, obstacleCount,
                              makeFootprintObstacleJson( *footprint ) );
+
+        for( PAD* pad : footprint->Pads() )
+        {
+            appendObstacleEntry( obstacleEntries, obstacleSampleTruncated, obstacleCount,
+                                 makePadObstacleJson( *footprint, *pad ) );
+        }
+    }
 
     for( PCB_TRACK* track : aBoard.Tracks() )
     {

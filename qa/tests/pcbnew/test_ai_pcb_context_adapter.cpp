@@ -387,12 +387,14 @@ BOOST_AUTO_TEST_CASE( AdapterAddsObstacleObservationFacts )
     nlohmann::json obstacleFacts = summary["obstacle_facts"];
 
     BOOST_CHECK_EQUAL( obstacleFacts["source"].get<std::string>(), "board" );
-    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( obstacleFacts["obstacle_count"].get<int>(), 5 );
     BOOST_CHECK_EQUAL( obstacleFacts["obstacle_sample_truncated"].get<bool>(), false );
-    BOOST_REQUIRE_EQUAL( obstacleFacts["obstacles"].size(), 4u );
+    BOOST_REQUIRE_EQUAL( obstacleFacts["obstacles"].size(), 5u );
 
     const nlohmann::json* footprintObstacle =
             findObstacleByKindAndLabel( obstacleFacts["obstacles"], "footprint", "U1" );
+    const nlohmann::json* padObstacle =
+            findObstacleByKindAndLabel( obstacleFacts["obstacles"], "pad", "U1.1" );
     const nlohmann::json* trackObstacle =
             findObstacleByKindAndLabel( obstacleFacts["obstacles"], "track", "track:0,0->1000,0" );
     const nlohmann::json* viaObstacle =
@@ -401,9 +403,12 @@ BOOST_AUTO_TEST_CASE( AdapterAddsObstacleObservationFacts )
             findObstacleByKindAndLabel( obstacleFacts["obstacles"], "keepout", "keepout:NO_ROUTING" );
 
     BOOST_REQUIRE( footprintObstacle );
+    BOOST_REQUIRE( padObstacle );
     BOOST_REQUIRE( trackObstacle );
     BOOST_REQUIRE( viaObstacle );
     BOOST_REQUIRE( keepoutObstacle );
+    BOOST_CHECK_EQUAL( ( *padObstacle )["position"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( ( *padObstacle )["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( ( *trackObstacle )["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( ( *trackObstacle )["layer"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( ( *viaObstacle )["position"]["x"].get<int>(), 500 );
