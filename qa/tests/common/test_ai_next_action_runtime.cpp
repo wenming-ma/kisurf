@@ -169,6 +169,59 @@ public:
 };
 
 
+class RENDER_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    explicit RENDER_TOOL_NEXT_ACTION_PROVIDER( wxString aRenderArgumentsJson ) :
+            m_RenderArgumentsJson( std::move( aRenderArgumentsJson ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "render tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need requested render facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_requested" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = m_RenderArgumentsJson;
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    wxString                         m_RenderArgumentsJson;
+};
+
+
 class CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -1691,9 +1744,10 @@ class PASSING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
 public:
     AI_SESSION_PREVIEW_RESULT RenderPreview(
             const AI_EXECUTION_SESSION& aSession,
-            const wxString& ) override
+            const wxString& aRenderArgs ) override
     {
         ++m_RenderCount;
+        m_RenderArgs.push_back( aRenderArgs.ToStdString() );
 
         AI_SESSION_PREVIEW_RESULT result;
         result.m_Ok = true;
@@ -1708,7 +1762,8 @@ public:
 
     void ClearPreview( uint64_t ) override {}
 
-    int m_RenderCount = 0;
+    int                      m_RenderCount = 0;
+    std::vector<std::string> m_RenderArgs;
 };
 
 
@@ -5277,6 +5332,46 @@ BOOST_AUTO_TEST_CASE( RuntimeValidateToolPassesRequestedValidationArgs )
             wxS( "\"validation_args\"" ) ) );
     BOOST_CHECK( publishRequest.m_ToolResults.front().m_ResultJson.Contains(
             wxS( "\"full_drc\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRenderToolPassesRequestedRenderArgs )
+{
+    auto* provider = new RENDER_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "{\"mode\":\"visual_review\","
+                 "\"region\":{\"x\":10,\"y\":20,\"w\":300,\"h\":400},"
+                 "\"layer_mask\":[\"F.Cu\",\"B.Cu\"]}" ) );
+
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( previewService.m_RenderArgs.size(), 2 );
+
+    nlohmann::json toolRenderArgs =
+            nlohmann::json::parse( previewService.m_RenderArgs.back() );
+
+    BOOST_CHECK_EQUAL( toolRenderArgs["mode"].get<std::string>(),
+                       "visual_review" );
+    BOOST_CHECK_EQUAL( toolRenderArgs["scope"].get<std::string>(),
+                       "session" );
+    BOOST_CHECK_EQUAL( toolRenderArgs["region"]["w"].get<int>(), 300 );
+    BOOST_REQUIRE_EQUAL( toolRenderArgs["layer_mask"].size(), 2 );
+    BOOST_CHECK_EQUAL( toolRenderArgs["layer_mask"].at( 0 ).get<std::string>(),
+                       "F.Cu" );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 1 );
+    BOOST_CHECK( publishRequest.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"render_args\"" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"visual_review\"" ) ) );
 }
 
 

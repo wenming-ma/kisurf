@@ -6294,6 +6294,32 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                     parameters["required"] = nlohmann::json::array(
                             { "candidate_index" } );
                 }
+                else if( aName == "render.hidden_attempt" )
+                {
+                    parameters["properties"]["scope"] =
+                            { { "type", "string" },
+                              { "enum",
+                                nlohmann::json::array( { "session",
+                                                          "affected_area",
+                                                          "selection",
+                                                          "region" } ) },
+                              { "description",
+                                "Render scope requested for the hidden attempt." } };
+                    parameters["properties"]["mode"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Render mode requested for model review, for example visual_review." } };
+                    parameters["properties"]["region"] =
+                            { { "type", "object" },
+                              { "additionalProperties", true },
+                              { "description",
+                                "Optional board or viewport region to render." } };
+                    parameters["properties"]["layer_mask"] =
+                            { { "type", "array" },
+                              { "items", { { "type", "string" } } },
+                              { "description",
+                                "Optional layer names to include in the rendered view." } };
+                }
                 else if( aName == "validate.hidden_attempt" )
                 {
                     parameters["properties"]["scope"] =
@@ -6839,17 +6865,46 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::BuildHiddenMutationResult(
 
 wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
         const AI_EXECUTION_SESSION& aSession,
-        const AI_SUGGESTION_RECORD& aCandidate ) const
+        const AI_SUGGESTION_RECORD& aCandidate,
+        const wxString& aRequestedRenderArgsJson ) const
 {
     nlohmann::json surfacePatchPreviews =
             surfacePatchPreviewFactsJson( aSession );
+    nlohmann::json requestedArgs = nlohmann::json::parse(
+            toUtf8String( aRequestedRenderArgsJson ), nullptr, false );
+    nlohmann::json renderArgs =
+            { { "scope", "session" }, { "mode", "hidden_attempt" } };
+
+    if( requestedArgs.is_object() )
+    {
+        const std::string scope =
+                requestedArgs.value( "scope", std::string() );
+
+        if( scope == "session" || scope == "affected_area"
+            || scope == "selection" || scope == "region" )
+        {
+            renderArgs["scope"] = scope;
+        }
+
+        const std::string mode =
+                requestedArgs.value( "mode", std::string() );
+
+        if( !mode.empty() )
+            renderArgs["mode"] = mode;
+
+        for( const char* key : { "region", "layer_mask", "view_mode" } )
+        {
+            if( requestedArgs.contains( key ) )
+                renderArgs[key] = requestedArgs[key];
+        }
+    }
+
+    const wxString renderArgsJson = fromUtf8String( renderArgs.dump() );
 
     if( m_PreviewService )
     {
-        const wxString renderArgs =
-                wxS( "{\"scope\":\"session\",\"mode\":\"hidden_attempt\"}" );
         AI_SESSION_PREVIEW_RESULT result =
-                m_PreviewService->RenderPreview( aSession, renderArgs );
+                m_PreviewService->RenderPreview( aSession, renderArgsJson );
         nlohmann::json serviceResult =
                 nlohmann::json::parse( toUtf8String( result.m_ResultJson ), nullptr,
                                        false );
@@ -6867,8 +6922,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::RenderAttempt(
                   { "render_valid", result.m_Ok },
                   { "preview_id", result.m_PreviewId },
                   { "rendered_item_count", result.m_RenderedItemCount },
-                  { "render_args",
-                    nlohmann::json::parse( toUtf8String( renderArgs ) ) },
+                  { "render_args", renderArgs },
                   { "service_result", serviceResult },
                   { "publish_allowed", false } };
 
@@ -8043,7 +8097,8 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         }
 
         aAttempt->m_RenderOutputsJson =
-                RenderAttempt( *session, aAttempt->m_Candidate );
+                RenderAttempt( *session, aAttempt->m_Candidate,
+                               aToolCall.m_ArgumentsJson );
         ++aAttempt->m_BudgetCounters.m_RenderCount;
         syncAttemptBudgetCountersToProvenance( *aAttempt );
 

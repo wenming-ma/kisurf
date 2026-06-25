@@ -243,7 +243,9 @@ public:
             const AI_OBSERVATION_PACKET& aObservation ) const;
     wxString BuildHiddenMutationResult( const AI_SUGGESTION_RECORD& aCandidate ) const;
     wxString RenderAttempt( const AI_EXECUTION_SESSION& aSession,
-                            const AI_SUGGESTION_RECORD& aCandidate ) const;
+                            const AI_SUGGESTION_RECORD& aCandidate,
+                            const wxString& aRequestedRenderArgsJson =
+                                    wxEmptyString ) const;
     wxString ValidateAttempt( const AI_EXECUTION_SESSION& aSession,
                               const AI_SUGGESTION_RECORD& aCandidate,
                               const wxString& aRequestedValidationArgsJson =
