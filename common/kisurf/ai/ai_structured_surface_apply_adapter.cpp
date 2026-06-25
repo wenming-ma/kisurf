@@ -12,6 +12,12 @@
 
 #include <algorithm>
 #include <nlohmann/json.hpp>
+#include <wx/grid.h>
+
+#include <charconv>
+#include <memory>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 namespace
@@ -206,6 +212,145 @@ const nlohmann::json* overlapSetField( const nlohmann::json& aSurface,
 
     return nullptr;
 }
+
+
+bool parseNonNegativeIndex( std::string_view aText, int& aIndex )
+{
+    if( aText.empty() )
+        return false;
+
+    int parsed = 0;
+    const std::from_chars_result result =
+            std::from_chars( aText.data(), aText.data() + aText.size(), parsed );
+
+    if( result.ec != std::errc() || result.ptr != aText.data() + aText.size()
+        || parsed < 0 )
+    {
+        return false;
+    }
+
+    aIndex = parsed;
+    return true;
+}
+
+
+bool indexFromStructuredId( const std::string& aId, char aPrefix, int& aIndex )
+{
+    if( aId.size() > 1 && aId[0] == aPrefix )
+        return parseNonNegativeIndex( std::string_view( aId ).substr( 1 ), aIndex );
+
+    return parseNonNegativeIndex( aId, aIndex );
+}
+
+
+bool indexFromStructuredObject( const std::string& aId,
+                                const nlohmann::json& aObject,
+                                char aPrefix,
+                                int aUpperBound,
+                                int& aIndex )
+{
+    if( aObject.is_object() && aObject.contains( "index" )
+        && aObject["index"].is_number_integer() )
+    {
+        const int index = aObject["index"].get<int>();
+
+        if( index >= 0 && index < aUpperBound )
+        {
+            aIndex = index;
+            return true;
+        }
+
+        return false;
+    }
+
+    if( !indexFromStructuredId( aId, aPrefix, aIndex ) )
+        return false;
+
+    return aIndex >= 0 && aIndex < aUpperBound;
+}
+
+
+nlohmann::json jsonStringFromWx( const wxString& aText )
+{
+    return toUtf8String( aText );
+}
+
+
+wxString jsonCellValueToWx( const nlohmann::json& aValue )
+{
+    if( aValue.is_string() )
+        return wxString::FromUTF8( aValue.get<std::string>().c_str() );
+
+    if( aValue.is_null() )
+        return wxEmptyString;
+
+    if( aValue.is_boolean() )
+        return aValue.get<bool>() ? wxS( "1" ) : wxS( "0" );
+
+    const std::string dumped = aValue.dump();
+    return wxString::FromUTF8( dumped.c_str() );
+}
+
+
+class WX_GRID_STRUCTURED_SURFACE_IO : public AI_STRUCTURED_SURFACE_GRID_IO
+{
+public:
+    explicit WX_GRID_STRUCTURED_SURFACE_IO( wxGrid& aGrid ) :
+            m_Grid( aGrid )
+    {
+    }
+
+    int RowCount() const override
+    {
+        return m_Grid.GetNumberRows();
+    }
+
+    int ColumnCount() const override
+    {
+        return m_Grid.GetNumberCols();
+    }
+
+    wxString RowLabel( int aRow ) const override
+    {
+        return m_Grid.GetRowLabelValue( aRow );
+    }
+
+    wxString ColumnLabel( int aColumn ) const override
+    {
+        return m_Grid.GetColLabelValue( aColumn );
+    }
+
+    wxString CellValue( int aRow, int aColumn ) const override
+    {
+        return m_Grid.GetCellValue( aRow, aColumn );
+    }
+
+    void SetCellValue( int aRow, int aColumn,
+                       const wxString& aValue ) override
+    {
+        m_Grid.SetCellValue( aRow, aColumn, aValue );
+    }
+
+    bool IsCellEditControlShown() const override
+    {
+        return m_Grid.IsCellEditControlShown();
+    }
+
+    void SaveEditControlValue() override
+    {
+        m_Grid.SaveEditControlValue();
+    }
+
+private:
+    wxGrid& m_Grid;
+};
+
+
+std::unique_ptr<AI_STRUCTURED_SURFACE_GRID_IO> makeWxGridSurfaceIo(
+        wxGrid& aGrid )
+{
+    return std::make_unique<WX_GRID_STRUCTURED_SURFACE_IO>( aGrid );
+}
 }
 
 
@@ -234,6 +379,265 @@ bool AI_STRUCTURED_SURFACE_STRING_STATE_BACKEND::CommitSurfaceTransaction(
     m_SurfaceStateJson = aSurfaceStateJson;
     aError.clear();
     return true;
+}
+
+
+AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND(
+        std::unique_ptr<AI_STRUCTURED_SURFACE_GRID_IO> aGridIo,
+        const wxString& aSurfaceId, const wxString& aTableId ) :
+        m_GridIo( std::move( aGridIo ) ),
+        m_SurfaceId( aSurfaceId ),
+        m_TableId( aTableId )
+{
+}
+
+
+void AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::SetSurfaceRevision(
+        uint64_t aRevision )
+{
+    m_SurfaceRevision = aRevision;
+}
+
+
+uint64_t AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::SurfaceRevision() const
+{
+    return m_SurfaceRevision;
+}
+
+
+void AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::SetSchemaVersion(
+        const wxString& aSchemaVersion )
+{
+    m_SchemaVersion = aSchemaVersion;
+}
+
+
+void AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::SetSelectionFingerprint(
+        const wxString& aSelectionFingerprint )
+{
+    m_SelectionFingerprint = aSelectionFingerprint;
+}
+
+
+void AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::SetOverlapSet(
+        const std::vector<wxString>& aOverlapSet )
+{
+    m_OverlapSet = aOverlapSet;
+}
+
+
+bool AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::BeginSurfaceTransaction(
+        const AI_EXECUTION_SESSION& aSession, wxString& aSurfaceStateJson,
+        wxString& aError )
+{
+    wxUnusedVar( aSession );
+
+    if( !m_GridIo || m_SurfaceId.empty() || m_TableId.empty() )
+    {
+        aError = wxS( "Grid structured surface backend requires grid_io, surface_id, and table_id." );
+        return false;
+    }
+
+    if( m_GridIo->IsCellEditControlShown() )
+        m_GridIo->SaveEditControlValue();
+
+    nlohmann::json state = nlohmann::json::object();
+    nlohmann::json& surface = state["surfaces"][toUtf8String( m_SurfaceId )];
+    surface["kind"] = "grid";
+    surface["revision"] = m_SurfaceRevision;
+
+    if( !m_SchemaVersion.empty() )
+        surface["schema_version"] = toUtf8String( m_SchemaVersion );
+
+    if( !m_SelectionFingerprint.empty() )
+        surface["selection_fingerprint"] =
+                toUtf8String( m_SelectionFingerprint );
+
+    if( !m_OverlapSet.empty() )
+    {
+        nlohmann::json overlap = nlohmann::json::array();
+
+        for( const wxString& item : m_OverlapSet )
+            overlap.push_back( toUtf8String( item ) );
+
+        surface["overlap_set"] = overlap;
+    }
+
+    nlohmann::json& table = surface["tables"][toUtf8String( m_TableId )];
+    table["kind"] = "grid";
+
+    for( int col = 0; col < m_GridIo->ColumnCount(); ++col )
+    {
+        const std::string colId = "c" + std::to_string( col );
+        table["column_order"].push_back( colId );
+        table["columns"][colId]["index"] = col;
+        table["columns"][colId]["label"] =
+                jsonStringFromWx( m_GridIo->ColumnLabel( col ) );
+    }
+
+    for( int row = 0; row < m_GridIo->RowCount(); ++row )
+    {
+        const std::string rowId = "r" + std::to_string( row );
+        table["row_order"].push_back( rowId );
+        nlohmann::json& rowJson = table["rows"][rowId];
+        rowJson["index"] = row;
+        rowJson["label"] = jsonStringFromWx( m_GridIo->RowLabel( row ) );
+
+        for( int col = 0; col < m_GridIo->ColumnCount(); ++col )
+        {
+            const std::string colId = "c" + std::to_string( col );
+            rowJson["cells"][colId] =
+                    jsonStringFromWx( m_GridIo->CellValue( row, col ) );
+        }
+    }
+
+    const std::string dumpedState = state.dump();
+    aSurfaceStateJson = wxString::FromUTF8( dumpedState.c_str() );
+    aError.clear();
+    m_InTransaction = true;
+    return true;
+}
+
+
+bool AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::CommitSurfaceTransaction(
+        const wxString& aSurfaceStateJson, bool aChanged, wxString& aError )
+{
+    if( !m_InTransaction )
+    {
+        aError = wxS( "Grid structured surface transaction has not started." );
+        return false;
+    }
+
+    if( !aChanged )
+    {
+        m_InTransaction = false;
+        aError.clear();
+        return true;
+    }
+
+    nlohmann::json state = objectFromJsonText( aSurfaceStateJson );
+    const std::string surfaceId = toUtf8String( m_SurfaceId );
+    const std::string tableId = toUtf8String( m_TableId );
+
+    if( !state.contains( "surfaces" ) || !state["surfaces"].is_object()
+        || !state["surfaces"].contains( surfaceId )
+        || !state["surfaces"][surfaceId].is_object() )
+    {
+        aError = wxS( "Grid structured surface commit missing surface state." );
+        return false;
+    }
+
+    nlohmann::json& surface = state["surfaces"][surfaceId];
+
+    if( !surface.contains( "tables" ) || !surface["tables"].is_object()
+        || !surface["tables"].contains( tableId )
+        || !surface["tables"][tableId].is_object() )
+    {
+        aError = wxS( "Grid structured surface commit missing table state." );
+        return false;
+    }
+
+    const nlohmann::json& table = surface["tables"][tableId];
+
+    if( !table.contains( "rows" ) || !table["rows"].is_object() )
+    {
+        aError = wxS( "Grid structured surface commit missing rows." );
+        return false;
+    }
+
+    struct CELL_CHANGE
+    {
+        int      m_Row = 0;
+        int      m_Col = 0;
+        wxString m_Value;
+    };
+
+    std::vector<CELL_CHANGE> changes;
+
+    for( auto rowIt = table["rows"].begin(); rowIt != table["rows"].end();
+         ++rowIt )
+    {
+        int row = -1;
+
+        if( !indexFromStructuredObject( rowIt.key(), rowIt.value(), 'r',
+                                        m_GridIo->RowCount(), row ) )
+        {
+            aError = wxS( "Grid structured surface commit has an invalid row." );
+            return false;
+        }
+
+        if( !rowIt.value().is_object()
+            || !rowIt.value().contains( "cells" )
+            || !rowIt.value()["cells"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& cells = rowIt.value()["cells"];
+
+        for( auto cellIt = cells.begin(); cellIt != cells.end(); ++cellIt )
+        {
+            int col = -1;
+
+            const nlohmann::json* colMetadata = nullptr;
+
+            if( table.contains( "columns" ) && table["columns"].is_object()
+                && table["columns"].contains( cellIt.key() )
+                && table["columns"][cellIt.key()].is_object() )
+            {
+                colMetadata = &table["columns"][cellIt.key()];
+            }
+
+            const nlohmann::json emptyObject = nlohmann::json::object();
+            const nlohmann::json& colObject =
+                    colMetadata ? *colMetadata : emptyObject;
+
+            if( !indexFromStructuredObject( cellIt.key(), colObject, 'c',
+                                            m_GridIo->ColumnCount(), col ) )
+            {
+                aError = wxS( "Grid structured surface commit has an invalid column." );
+                return false;
+            }
+
+            changes.push_back( { row, col, jsonCellValueToWx( cellIt.value() ) } );
+        }
+    }
+
+    for( const CELL_CHANGE& change : changes )
+    {
+        if( m_GridIo->CellValue( change.m_Row, change.m_Col )
+            != change.m_Value )
+        {
+            m_GridIo->SetCellValue( change.m_Row, change.m_Col,
+                                    change.m_Value );
+        }
+    }
+
+    if( const nlohmann::json* revision = surfaceRevisionField( surface ) )
+    {
+        if( revision->is_number_unsigned() )
+            m_SurfaceRevision = revision->get<uint64_t>();
+        else if( revision->is_number_integer() && revision->get<int64_t>() >= 0 )
+            m_SurfaceRevision = static_cast<uint64_t>( revision->get<int64_t>() );
+    }
+
+    m_InTransaction = false;
+    aError.clear();
+    return true;
+}
+
+
+void AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND::AbortSurfaceTransaction()
+{
+    m_InTransaction = false;
+}
+
+
+AI_STRUCTURED_SURFACE_WX_GRID_BACKEND::AI_STRUCTURED_SURFACE_WX_GRID_BACKEND(
+        wxGrid& aGrid, const wxString& aSurfaceId, const wxString& aTableId ) :
+        AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND(
+                makeWxGridSurfaceIo( aGrid ), aSurfaceId, aTableId )
+{
 }
 
 

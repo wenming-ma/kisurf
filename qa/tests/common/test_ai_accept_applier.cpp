@@ -5,7 +5,10 @@
 #include <kisurf/ai/ai_execution_session.h>
 #include <kisurf/ai/ai_structured_surface_apply_adapter.h>
 
+#include <memory>
+#include <type_traits>
 #include <utility>
+#include <wx/arrstr.h> // for MSVC to see std::vector<wxString> is exported from wx
 
 namespace
 {
@@ -105,6 +108,67 @@ public:
     bool     m_LastChanged = false;
     bool     m_BeginOk = true;
     bool     m_CommitOk = true;
+};
+
+
+class RECORDING_GRID_IO : public AI_STRUCTURED_SURFACE_GRID_IO
+{
+public:
+    explicit RECORDING_GRID_IO( std::vector<std::vector<wxString>> aCells ) :
+            m_Cells( std::move( aCells ) )
+    {
+        m_RowLabels.resize( m_Cells.size() );
+
+        const size_t columnCount = m_Cells.empty() ? 0 : m_Cells.front().size();
+        m_ColumnLabels.resize( columnCount );
+    }
+
+    int RowCount() const override
+    {
+        return static_cast<int>( m_Cells.size() );
+    }
+
+    int ColumnCount() const override
+    {
+        return m_Cells.empty() ? 0 : static_cast<int>( m_Cells.front().size() );
+    }
+
+    wxString RowLabel( int aRow ) const override
+    {
+        return m_RowLabels.at( aRow );
+    }
+
+    wxString ColumnLabel( int aColumn ) const override
+    {
+        return m_ColumnLabels.at( aColumn );
+    }
+
+    wxString CellValue( int aRow, int aColumn ) const override
+    {
+        return m_Cells.at( aRow ).at( aColumn );
+    }
+
+    void SetCellValue( int aRow, int aColumn,
+                       const wxString& aValue ) override
+    {
+        m_Cells.at( aRow ).at( aColumn ) = aValue;
+        ++m_SetCellValueCount;
+    }
+
+    void SetRowLabel( int aRow, const wxString& aLabel )
+    {
+        m_RowLabels.at( aRow ) = aLabel;
+    }
+
+    void SetColumnLabel( int aColumn, const wxString& aLabel )
+    {
+        m_ColumnLabels.at( aColumn ) = aLabel;
+    }
+
+    std::vector<std::vector<wxString>> m_Cells;
+    std::vector<wxString>              m_RowLabels;
+    std::vector<wxString>              m_ColumnLabels;
+    int                                m_SetCellValueCount = 0;
 };
 
 
@@ -470,6 +534,66 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughStructuredSurfaceBackend )
     BOOST_CHECK( backend.m_LastChanged );
     BOOST_CHECK( backend.m_StateJson.Contains(
             wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsIntoGridStateBackend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "wx grid surface accept" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.netclasses\","
+                 "\"table_id\":\"netclass.assignments\","
+                 "\"expected_surface_revision\":4,"
+                 "\"expected_schema_version\":\"netclasses-grid-v1\","
+                 "\"expected_selection_fingerprint\":\"cell:r1:c1\","
+                 "\"expected_overlap_set\":[\"r1\"],"
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_cell\","
+                 "\"row_id\":\"r1\","
+                 "\"column_id\":\"c1\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    auto gridIo = std::make_unique<RECORDING_GRID_IO>(
+            std::vector<std::vector<wxString>>{
+                    { wxS( "GND" ), wxS( "Signal" ) },
+                    { wxS( "VCC" ), wxS( "Signal" ) } } );
+    RECORDING_GRID_IO* grid = gridIo.get();
+    grid->SetRowLabel( 0, wxS( "Signal" ) );
+    grid->SetRowLabel( 1, wxS( "Power" ) );
+    grid->SetColumnLabel( 0, wxS( "Net" ) );
+    grid->SetColumnLabel( 1, wxS( "Class" ) );
+
+    AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND backend(
+            std::move( gridIo ), wxS( "board_setup.netclasses" ),
+            wxS( "netclass.assignments" ) );
+    backend.SetSurfaceRevision( 4 );
+    backend.SetSchemaVersion( wxS( "netclasses-grid-v1" ) );
+    backend.SetSelectionFingerprint( wxS( "cell:r1:c1" ) );
+    backend.SetOverlapSet( { wxS( "r1" ) } );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( backend );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK_EQUAL( grid->m_Cells[1][1], wxString( wxS( "Power" ) ) );
+    BOOST_CHECK_EQUAL( grid->m_SetCellValueCount, 1 );
+    BOOST_CHECK_EQUAL( backend.SurfaceRevision(), 5 );
+}
+
+
+BOOST_AUTO_TEST_CASE( WxGridBackendImplementsStructuredSurfaceBackendContract )
+{
+    BOOST_CHECK( ( std::is_base_of_v<AI_STRUCTURED_SURFACE_STATE_BACKEND,
+                                     AI_STRUCTURED_SURFACE_WX_GRID_BACKEND> ) );
 }
 
 

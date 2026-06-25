@@ -13,7 +13,12 @@
 #include <kicommon.h>
 #include <kisurf/ai/ai_accept_applier.h>
 
+#include <wx/arrstr.h>
+
 #include <memory>
+#include <vector>
+
+class wxGrid;
 
 class KICOMMON_API AI_STRUCTURED_SURFACE_STATE_BACKEND
 {
@@ -46,6 +51,69 @@ public:
 
 private:
     wxString& m_SurfaceStateJson;
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_GRID_IO
+{
+public:
+    virtual ~AI_STRUCTURED_SURFACE_GRID_IO() = default;
+
+    virtual int RowCount() const = 0;
+    virtual int ColumnCount() const = 0;
+    virtual wxString RowLabel( int aRow ) const = 0;
+    virtual wxString ColumnLabel( int aColumn ) const = 0;
+    virtual wxString CellValue( int aRow, int aColumn ) const = 0;
+    virtual void SetCellValue( int aRow, int aColumn,
+                               const wxString& aValue ) = 0;
+    virtual bool IsCellEditControlShown() const { return false; }
+    virtual void SaveEditControlValue() {}
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND(
+            std::unique_ptr<AI_STRUCTURED_SURFACE_GRID_IO> aGridIo,
+            const wxString& aSurfaceId,
+            const wxString& aTableId );
+
+    void SetSurfaceRevision( uint64_t aRevision );
+    uint64_t SurfaceRevision() const;
+
+    void SetSchemaVersion( const wxString& aSchemaVersion );
+    void SetSelectionFingerprint( const wxString& aSelectionFingerprint );
+    void SetOverlapSet( const std::vector<wxString>& aOverlapSet );
+
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override;
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override;
+    void AbortSurfaceTransaction() override;
+
+private:
+    std::unique_ptr<AI_STRUCTURED_SURFACE_GRID_IO> m_GridIo;
+    wxString                                      m_SurfaceId;
+    wxString                                      m_TableId;
+    uint64_t                                      m_SurfaceRevision = 0;
+    wxString                                      m_SchemaVersion;
+    wxString                                      m_SelectionFingerprint;
+    std::vector<wxString>                         m_OverlapSet;
+    bool                                          m_InTransaction = false;
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_WX_GRID_BACKEND :
+        public AI_STRUCTURED_SURFACE_GRID_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_WX_GRID_BACKEND( wxGrid& aGrid,
+                                           const wxString& aSurfaceId,
+                                           const wxString& aTableId );
 };
 
 
