@@ -184,6 +184,99 @@ bool isActive( const AI_SUGGESTION_RECORD& aSuggestion )
 }
 
 
+std::string editorKindJsonName( AI_EDITOR_KIND aKind )
+{
+    switch( aKind )
+    {
+    case AI_EDITOR_KIND::Pcb:
+        return "pcb";
+
+    case AI_EDITOR_KIND::Schematic:
+        return "schematic";
+
+    case AI_EDITOR_KIND::Unknown:
+    default:
+        return "unknown";
+    }
+}
+
+
+std::string nextActionStepStatusJsonName( AI_NEXT_ACTION_STEP_STATUS aStatus )
+{
+    switch( aStatus )
+    {
+    case AI_NEXT_ACTION_STEP_STATUS::Observed:
+        return "observed";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Reasoning:
+        return "reasoning";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Attempting:
+        return "attempting";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Reviewing:
+        return "reviewing";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Retrying:
+        return "retrying";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Published:
+        return "published";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Accepted:
+        return "accepted";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Rejected:
+        return "rejected";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Expired:
+        return "expired";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Superseded:
+        return "superseded";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Abandoned:
+        return "abandoned";
+
+    case AI_NEXT_ACTION_STEP_STATUS::Cancelled:
+        return "cancelled";
+    }
+
+    return "unknown";
+}
+
+
+std::string suggestionStatusJsonName( AI_SUGGESTION_STATUS aStatus )
+{
+    switch( aStatus )
+    {
+    case AI_SUGGESTION_STATUS::Pending:
+    case AI_SUGGESTION_STATUS::Previewing:
+        return "published";
+
+    case AI_SUGGESTION_STATUS::Accepted:
+        return "accepted";
+
+    case AI_SUGGESTION_STATUS::Rejected:
+        return "rejected";
+
+    case AI_SUGGESTION_STATUS::Expired:
+        return "expired";
+
+    case AI_SUGGESTION_STATUS::Superseded:
+        return "superseded";
+
+    case AI_SUGGESTION_STATUS::Abandoned:
+        return "abandoned";
+
+    case AI_SUGGESTION_STATUS::Cancelled:
+        return "cancelled";
+    }
+
+    return "unknown";
+}
+
+
 bool hasPreviewableOperation( const AI_SUGGESTION_RECORD& aSuggestion )
 {
     return aSuggestion.m_Kind == AI_SUGGESTION_KIND::Preview
@@ -1715,6 +1808,71 @@ nlohmann::json parseObjectBody( const wxString& aBody )
     nlohmann::json parsed = nlohmann::json::parse( body.substr( first, last - first + 1 ),
                                                    nullptr, false );
     return parsed.is_object() ? parsed : nlohmann::json::object();
+}
+
+
+nlohmann::json parseJsonText( const wxString& aBody, nlohmann::json aFallback )
+{
+    if( aBody.IsEmpty() )
+        return aFallback;
+
+    nlohmann::json parsed =
+            nlohmann::json::parse( toUtf8String( aBody ), nullptr, false );
+
+    if( parsed.is_discarded() )
+        return aFallback;
+
+    return parsed;
+}
+
+
+nlohmann::json semanticEventJson( const AI_SEMANTIC_EVENT& aEvent )
+{
+    return {
+        { "semantic_event_id", aEvent.m_Id },
+        { "slot_id", toUtf8String( aEvent.m_SlotId ) },
+        { "kind", toUtf8String( aEvent.m_Kind ) },
+        { "reason", toUtf8String( aEvent.m_Reason ) },
+        { "editor", editorKindJsonName( aEvent.m_EditorKind ) },
+        { "context_version", parseObjectBody( aEvent.m_ContextVersion.AsJsonText() ) },
+        { "activity",
+          { { "sequence", aEvent.m_Activity.m_Sequence },
+            { "action", toUtf8String( aEvent.m_Activity.m_ActionName ) },
+            { "message", toUtf8String( aEvent.m_Activity.m_Message ) } } }
+    };
+}
+
+
+nlohmann::json candidateReplayJson( const AI_SUGGESTION_RECORD& aCandidate )
+{
+    nlohmann::json candidate =
+            { { "title", toUtf8String( aCandidate.m_Title ) },
+              { "body", toUtf8String( aCandidate.m_Body ) },
+              { "context_kind", toUtf8String( aCandidate.m_ContextKind ) },
+              { "arguments", parseObjectBody( aCandidate.m_ArgumentsJson ) },
+              { "context_details", parseObjectBody( aCandidate.m_ContextDetailsJson ) } };
+
+    return candidate;
+}
+
+
+nlohmann::json attemptReplayJson( const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
+{
+    return {
+        { "attempt_id", aAttempt.m_Id },
+        { "runtime_step_id", aAttempt.m_RuntimeStepId },
+        { "candidate_index", aAttempt.m_CandidateIndex },
+        { "hidden_session_id", aAttempt.m_HiddenSessionId },
+        { "hidden_step_id", aAttempt.m_HiddenStepId },
+        { "base_checkpoint_id", aAttempt.m_BaseCheckpointId },
+        { "candidate", candidateReplayJson( aAttempt.m_Candidate ) },
+        { "hidden_attempt_journal", parseObjectBody( aAttempt.m_JournalJson ) },
+        { "render_outputs", parseObjectBody( aAttempt.m_RenderOutputsJson ) },
+        { "validation_facts", parseObjectBody( aAttempt.m_ValidationFactsJson ) },
+        { "rollback", parseObjectBody( aAttempt.m_RollbackJson ) },
+        { "budget_counters", parseObjectBody( aAttempt.m_BudgetCounters.AsJsonText() ) },
+        { "provenance", parseObjectBody( aAttempt.m_ProvenanceJson ) }
+    };
 }
 
 
@@ -9249,12 +9407,15 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     step.m_SuggestionStreamId = event->m_SlotId;
     step.m_ContextVersion = event->m_ContextVersion;
     step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Reasoning;
+    step.m_SemanticEventJson = fromUtf8String( semanticEventJson( *event ).dump() );
 
     AI_OBSERVATION_PACKET observation = buildObservationPacket( *event );
     step.m_ObservationPacketId = observation.m_Id;
+    step.m_ObservationPacketJson = observation.AsJsonText();
 
     AI_NEXT_ACTION_LLM_DECISION decision = runDecisionTurn( step, observation );
     step.m_LlmDecisionJson = decision.m_RawJson;
+    step.m_LlmDecisionToolResultsJson = decision.m_ToolResultsJson;
 
     if( !decision.WantsAttempt() )
     {
@@ -9322,6 +9483,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
                     runReviewTurn( step, observation, attempt,
                                    reviewInitialToolResults );
             step.m_ReviewDecisionJson = review.m_RawJson;
+            step.m_ReviewToolResultsJson = review.m_ToolResultsJson;
             attachReviewProviderToolResultsToAttempt( attempt, review.m_RawJson );
 
             for( AI_NEXT_ACTION_ATTEMPT_RECORD& storedAttempt : m_Attempts )
@@ -9412,6 +9574,105 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::AddPublishedSuggesti
 std::vector<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Suggestions() const
 {
     return m_Suggestions;
+}
+
+
+std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> AI_NEXT_ACTION_RUNTIME::ReplayTraceRecords() const
+{
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> records;
+
+    for( const AI_NEXT_ACTION_RUNTIME_STEP& step : m_Steps )
+    {
+        const AI_SUGGESTION_RECORD* publishedSuggestion = nullptr;
+
+        if( step.m_PublishedSuggestionId != 0 )
+        {
+            for( const AI_SUGGESTION_RECORD& suggestion : m_Suggestions )
+            {
+                if( suggestion.m_Id == step.m_PublishedSuggestionId )
+                {
+                    publishedSuggestion = &suggestion;
+                    break;
+                }
+            }
+        }
+
+        const std::string terminalState =
+                publishedSuggestion
+                        ? suggestionStatusJsonName( publishedSuggestion->m_Status )
+                        : nextActionStepStatusJsonName( step.m_Status );
+
+        nlohmann::json attempts = nlohmann::json::array();
+
+        for( uint64_t attemptId : step.m_AttemptIds )
+        {
+            auto attemptIt =
+                    std::find_if( m_Attempts.begin(), m_Attempts.end(),
+                                  [attemptId]( const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
+                                  {
+                                      return aAttempt.m_Id == attemptId;
+                                  } );
+
+            if( attemptIt != m_Attempts.end() )
+                attempts.push_back( attemptReplayJson( *attemptIt ) );
+        }
+
+        nlohmann::json llmDecision = parseObjectBody( step.m_LlmDecisionJson );
+        nlohmann::json llmReview = parseObjectBody( step.m_ReviewDecisionJson );
+        nlohmann::json publishDecision = llmReview;
+
+        if( publishedSuggestion )
+        {
+            nlohmann::json provenance =
+                    parseObjectBody( publishedSuggestion->m_RuntimeProvenanceJson );
+
+            if( provenance.contains( "preview_lease" ) )
+                publishDecision["preview_lease"] = provenance["preview_lease"];
+
+            if( provenance.contains( "accept_token" ) )
+                publishDecision["accept_token"] = provenance["accept_token"];
+
+            if( provenance.contains( "preview_gate_result" ) )
+                publishDecision["preview_gate_result"] = provenance["preview_gate_result"];
+        }
+
+        nlohmann::json trace =
+                { { "runtime", "next_action" },
+                  { "runtime_step_id", step.m_Id },
+                  { "suggestion_stream_id", toUtf8String( step.m_SuggestionStreamId ) },
+                  { "status", nextActionStepStatusJsonName( step.m_Status ) },
+                  { "terminal_state", terminalState },
+                  { "context_version",
+                    parseObjectBody( step.m_ContextVersion.AsJsonText() ) },
+                  { "semantic_event", parseObjectBody( step.m_SemanticEventJson ) },
+                  { "observation_packet", parseObjectBody( step.m_ObservationPacketJson ) },
+                  { "llm_decision", llmDecision },
+                  { "tool_results",
+                    { { "decision",
+                        parseJsonText( step.m_LlmDecisionToolResultsJson,
+                                       nlohmann::json::array() ) },
+                      { "review",
+                        parseJsonText( step.m_ReviewToolResultsJson,
+                                       nlohmann::json::array() ) } } },
+                  { "attempt_ids", step.m_AttemptIds },
+                  { "attempts", attempts },
+                  { "llm_review_decision", llmReview } };
+
+        if( step.m_PublishedSuggestionId != 0 )
+        {
+            trace["published_suggestion_id"] = step.m_PublishedSuggestionId;
+            trace["publish_decision"] = publishDecision;
+        }
+
+        AI_NEXT_ACTION_REPLAY_TRACE_RECORD record;
+        record.m_Sequence = step.m_Id;
+        record.m_RuntimeStepId = step.m_Id;
+        record.m_Status = fromUtf8String( terminalState );
+        record.m_ReplayJson = fromUtf8String( trace.dump() );
+        records.push_back( std::move( record ) );
+    }
+
+    return records;
 }
 
 
@@ -9940,6 +10201,8 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
             optionalSizeField( parsed, "selected_candidate_index" );
     decision.m_RawJson = parsed.empty() ? response.m_Body
                                         : fromUtf8String( parsed.dump() );
+    decision.m_ToolResultsJson =
+            fromUtf8String( toolCallRecordsJson( response.m_ToolCalls ).dump() );
     return decision;
 }
 
@@ -10078,6 +10341,8 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
     review.m_ReasonCode = optionalString( parsed, "reason_code" );
     review.m_AttemptId = aAttempt.m_Id;
     review.m_RawJson = parsed.empty() ? response.m_Body : fromUtf8String( parsed.dump() );
+    review.m_ToolResultsJson =
+            fromUtf8String( toolCallRecordsJson( response.m_ToolCalls ).dump() );
     return review;
 }
 

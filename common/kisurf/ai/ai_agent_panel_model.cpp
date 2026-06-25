@@ -266,7 +266,13 @@ std::vector<AI_AGENT_OBSERVABILITY_ENTRY> AI_AGENT_PANEL_MODEL::ObservabilityEnt
         size_t aLimit ) const
 {
     AI_AGENT_OBSERVABILITY_LOG formatter;
-    return formatter.Build( m_Runtime.TraceRecords(), ActivityRecords(), Suggestions(), aLimit );
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> nextActionReplayTraces;
+
+    if( m_NextActionRuntime )
+        nextActionReplayTraces = m_NextActionRuntime->ReplayTraceRecords();
+
+    return formatter.Build( m_Runtime.TraceRecords(), ActivityRecords(), Suggestions(),
+                            nextActionReplayTraces, aLimit );
 }
 
 

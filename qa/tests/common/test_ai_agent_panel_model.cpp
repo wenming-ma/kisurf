@@ -965,6 +965,56 @@ BOOST_AUTO_TEST_CASE( ObservabilityEntriesExposeRuntimeTraceAndActivity )
 }
 
 
+BOOST_AUTO_TEST_CASE( ObservabilityEntriesExposeNextActionReplayTrace )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled(
+                    makeViaNextActionContext(), makeSuggestionActivity(), wxS( "idle" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::vector<AI_AGENT_OBSERVABILITY_ENTRY> entries =
+            model.ObservabilityEntries( 32 );
+
+    bool sawReplayTrace = false;
+
+    for( const AI_AGENT_OBSERVABILITY_ENTRY& entry : entries )
+    {
+        if( entry.m_Kind != AI_AGENT_OBSERVABILITY_KIND::NextActionReplay )
+            continue;
+
+        sawReplayTrace = true;
+        BOOST_CHECK_EQUAL( entry.m_Title, wxString( wxS( "Next Action replay" ) ) );
+        BOOST_CHECK( entry.m_DetailsJson.Contains( wxS( "\"semantic_event\"" ) ) );
+        BOOST_CHECK( entry.m_DetailsJson.Contains( wxS( "\"observation_packet\"" ) ) );
+        BOOST_CHECK( entry.m_DetailsJson.Contains( wxS( "\"hidden_attempt_journal\"" ) ) );
+        BOOST_CHECK( entry.m_DetailsJson.Contains( wxS( "\"llm_review_decision\"" ) ) );
+        BOOST_CHECK( entry.m_DetailsJson.Contains( wxS( "\"published_suggestion_id\"" ) ) );
+    }
+
+    BOOST_CHECK( sawReplayTrace );
+}
+
+
 BOOST_AUTO_TEST_CASE( SendUserTextIncludesPriorRuntimeActivity )
 {
     auto* provider = new RUNTIME_ACTIVITY_CAPTURE_PROVIDER();

@@ -108,6 +108,7 @@ struct KICOMMON_API AI_NEXT_ACTION_LLM_DECISION
     wxString                     m_ReasonCode;
     std::optional<size_t>        m_SelectedCandidateIndex;
     wxString                     m_RawJson;
+    wxString                     m_ToolResultsJson;
 
     bool WantsAttempt() const;
 };
@@ -118,6 +119,7 @@ struct KICOMMON_API AI_NEXT_ACTION_REVIEW_DECISION
     wxString                     m_ReasonCode;
     uint64_t                     m_AttemptId = 0;
     wxString                     m_RawJson;
+    wxString                     m_ToolResultsJson;
 
     bool WantsPublish() const;
 };
@@ -207,10 +209,22 @@ struct KICOMMON_API AI_NEXT_ACTION_RUNTIME_STEP
     AI_NEXT_ACTION_STEP_STATUS     m_Status = AI_NEXT_ACTION_STEP_STATUS::Observed;
     AI_NEXT_ACTION_CONTEXT_VERSION m_ContextVersion;
     uint64_t                       m_ObservationPacketId = 0;
+    wxString                       m_SemanticEventJson;
+    wxString                       m_ObservationPacketJson;
     wxString                       m_LlmDecisionJson;
+    wxString                       m_LlmDecisionToolResultsJson;
     std::vector<uint64_t>          m_AttemptIds;
     uint64_t                       m_PublishedSuggestionId = 0;
     wxString                       m_ReviewDecisionJson;
+    wxString                       m_ReviewToolResultsJson;
+};
+
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_RECORD
+{
+    uint64_t m_Sequence = 0;
+    uint64_t m_RuntimeStepId = 0;
+    wxString m_Status;
+    wxString m_ReplayJson;
 };
 
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
@@ -301,6 +315,7 @@ public:
     {
         return m_Attempts;
     }
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> ReplayTraceRecords() const;
 
 private:
     AI_OBSERVATION_PACKET buildObservationPacket( const AI_SEMANTIC_EVENT& aEvent );

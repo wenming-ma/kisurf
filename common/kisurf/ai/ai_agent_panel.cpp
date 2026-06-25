@@ -79,6 +79,9 @@ wxString observabilityKindText( AI_AGENT_OBSERVABILITY_KIND aKind )
     case AI_AGENT_OBSERVABILITY_KIND::Suggestion:
         return wxS( "Suggestion" );
 
+    case AI_AGENT_OBSERVABILITY_KIND::NextActionReplay:
+        return wxS( "Replay" );
+
     case AI_AGENT_OBSERVABILITY_KIND::System:
         return wxS( "System" );
     }
@@ -460,6 +463,9 @@ wxString observabilityDetailLine( const AI_AGENT_OBSERVABILITY_ENTRY& aEntry )
 
     case AI_AGENT_OBSERVABILITY_KIND::Suggestion:
         return wxString();
+
+    case AI_AGENT_OBSERVABILITY_KIND::NextActionReplay:
+        return aEntry.m_DetailsJson;
     }
 
     return wxString();
