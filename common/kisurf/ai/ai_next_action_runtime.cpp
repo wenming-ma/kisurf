@@ -3809,6 +3809,67 @@ void annotateSurfacePatchValueDiff( nlohmann::json& aEntry,
 }
 
 
+nlohmann::json surfacePatchDiffSummaryJson( const nlohmann::json& aEntries )
+{
+    size_t diffEntryCount = 0;
+    size_t tableCellCount = 0;
+    size_t fieldCount = 0;
+    size_t changedValueCount = 0;
+    size_t unchangedValueCount = 0;
+    size_t unknownPreviousValueCount = 0;
+    size_t visualTargetCount = 0;
+
+    if( aEntries.is_array() )
+    {
+        for( const nlohmann::json& entry : aEntries )
+        {
+            if( !entry.is_object() )
+                continue;
+
+            ++diffEntryCount;
+
+            const std::string kind = jsonStringOrEmpty( entry, "kind" );
+
+            if( kind == "set_cell" )
+                ++tableCellCount;
+            else if( kind == "set_field" )
+                ++fieldCount;
+
+            if( entry.contains( "visual_target" )
+                && entry["visual_target"].is_object() )
+            {
+                ++visualTargetCount;
+            }
+
+            if( entry.contains( "previous_value_known" )
+                && entry["previous_value_known"].is_boolean()
+                && !entry["previous_value_known"].get<bool>() )
+            {
+                ++unknownPreviousValueCount;
+                continue;
+            }
+
+            if( entry.contains( "value_changed" )
+                && entry["value_changed"].is_boolean() )
+            {
+                if( entry["value_changed"].get<bool>() )
+                    ++changedValueCount;
+                else
+                    ++unchangedValueCount;
+            }
+        }
+    }
+
+    return { { "diff_entry_count", diffEntryCount },
+             { "table_cell_count", tableCellCount },
+             { "field_count", fieldCount },
+             { "changed_value_count", changedValueCount },
+             { "unchanged_value_count", unchangedValueCount },
+             { "unknown_previous_value_count", unknownPreviousValueCount },
+             { "visual_target_count", visualTargetCount } };
+}
+
+
 nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
                                             nlohmann::json* aSurfaceState )
 {
@@ -3856,7 +3917,13 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
                       { "value", op["value"] },
                       { "target_path",
                         "surfaces." + surfaceId + ".tables." + opTableId
-                                + ".rows." + rowId + ".cells." + columnId } };
+                                + ".rows." + rowId + ".cells." + columnId },
+                      { "visual_target",
+                        { { "kind", "table_cell" },
+                          { "surface_id", surfaceId },
+                          { "table_id", opTableId },
+                          { "row_id", rowId },
+                          { "column_id", columnId } } } };
 
             const nlohmann::json* previousValue =
                     aSurfaceState ? surfacePatchCellValue( *aSurfaceState,
@@ -3889,7 +3956,11 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
                       { "field_id", fieldId },
                       { "value", op["value"] },
                       { "target_path",
-                        "surfaces." + surfaceId + ".fields." + fieldId } };
+                        "surfaces." + surfaceId + ".fields." + fieldId },
+                      { "visual_target",
+                        { { "kind", "field" },
+                          { "surface_id", surfaceId },
+                          { "field_id", fieldId } } } };
 
             const nlohmann::json* previousValue =
                     aSurfaceState ? surfacePatchFieldValue( *aSurfaceState,
@@ -3987,6 +4058,8 @@ nlohmann::json surfacePatchPreviewFactsJson(
             if( !diffEntries.empty() )
             {
                 preview["surface_patch_diff_entry_count"] = diffEntries.size();
+                preview["surface_patch_diff_summary"] =
+                        surfacePatchDiffSummaryJson( diffEntries );
                 preview["surface_patch_diff_entries"] = std::move( diffEntries );
             }
         }
