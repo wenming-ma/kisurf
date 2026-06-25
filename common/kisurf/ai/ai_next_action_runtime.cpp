@@ -125,14 +125,27 @@ bool issueArrayHasBlockingSeverity( const nlohmann::json& aIssues )
 
     for( const nlohmann::json& issue : aIssues )
     {
-        if( !issue.is_object() || !issue.contains( "severity" )
-            || !issue["severity"].is_string() )
-        {
+        if( !issue.is_object() )
             continue;
+
+        if( issue.contains( "blocking" ) && issue["blocking"].is_boolean()
+            && issue["blocking"].get<bool>() )
+        {
+            return true;
         }
 
-        if( textContainsBlockingStatus( issue["severity"].get<std::string>() ) )
+        if( issue.contains( "blocks_publish" )
+            && issue["blocks_publish"].is_boolean()
+            && issue["blocks_publish"].get<bool>() )
+        {
             return true;
+        }
+
+        if( issue.contains( "severity" ) && issue["severity"].is_string()
+            && textContainsBlockingStatus( issue["severity"].get<std::string>() ) )
+        {
+            return true;
+        }
     }
 
     return false;
