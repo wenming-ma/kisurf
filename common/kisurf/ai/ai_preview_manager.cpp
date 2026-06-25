@@ -19,6 +19,50 @@ void AI_PREVIEW_ADAPTER::ShowOverlay( uint64_t aPreviewId,
 }
 
 
+void AI_COMPOSITE_PREVIEW_ADAPTER::AddAdapter( AI_PREVIEW_ADAPTER& aAdapter )
+{
+    m_Adapters.push_back( &aAdapter );
+}
+
+
+void AI_COMPOSITE_PREVIEW_ADAPTER::BeginPreview( uint64_t aPreviewId )
+{
+    for( AI_PREVIEW_ADAPTER* adapter : m_Adapters )
+        adapter->BeginPreview( aPreviewId );
+}
+
+
+void AI_COMPOSITE_PREVIEW_ADAPTER::ShowObject(
+        uint64_t aPreviewId, const AI_OBJECT_REF& aObject )
+{
+    for( AI_PREVIEW_ADAPTER* adapter : m_Adapters )
+        adapter->ShowObject( aPreviewId, aObject );
+}
+
+
+void AI_COMPOSITE_PREVIEW_ADAPTER::ShowOperation(
+        uint64_t aPreviewId, const AI_SUGGESTION_OPERATION& aOperation )
+{
+    for( AI_PREVIEW_ADAPTER* adapter : m_Adapters )
+        adapter->ShowOperation( aPreviewId, aOperation );
+}
+
+
+void AI_COMPOSITE_PREVIEW_ADAPTER::ShowOverlay(
+        uint64_t aPreviewId, const AI_PREVIEW_ITEM_OVERLAY& aOverlay )
+{
+    for( AI_PREVIEW_ADAPTER* adapter : m_Adapters )
+        adapter->ShowOverlay( aPreviewId, aOverlay );
+}
+
+
+void AI_COMPOSITE_PREVIEW_ADAPTER::ClearPreview( uint64_t aPreviewId )
+{
+    for( AI_PREVIEW_ADAPTER* adapter : m_Adapters )
+        adapter->ClearPreview( aPreviewId );
+}
+
+
 AI_PREVIEW_MANAGER::AI_PREVIEW_MANAGER( AI_PREVIEW_ADAPTER& aAdapter ) :
         m_Adapter( aAdapter )
 {

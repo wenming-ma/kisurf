@@ -218,4 +218,44 @@ BOOST_AUTO_TEST_CASE( ClearWithoutPreviewIsNoOp )
     BOOST_CHECK( adapter.m_Events.empty() );
 }
 
+
+BOOST_AUTO_TEST_CASE( CompositePreviewAdapterFansOutPreviewLifecycle )
+{
+    FAKE_PREVIEW_ADAPTER first;
+    FAKE_PREVIEW_ADAPTER second;
+    AI_COMPOSITE_PREVIEW_ADAPTER composite;
+    composite.AddAdapter( first );
+    composite.AddAdapter( second );
+    AI_PREVIEW_MANAGER session( composite );
+
+    AI_OBJECT_REF pad( KIID(), PCB_PAD_T, wxS( "preview-pad" ) );
+    AI_SUGGESTION_OPERATION operation;
+    operation.m_Kind = AI_SUGGESTION_OPERATION_KIND::AnchorFocusPreview;
+    operation.m_AnchorId = wxS( "tool.routing.anchor.1" );
+
+    session.BeginPreview();
+    session.ShowObject( pad );
+    session.ShowOperation( operation );
+    session.ShowItemOverlay( wxS( "preview-pad" ), wxS( "validation" ),
+                             wxS( "warning" ), wxS( "clearance below preferred" ) );
+    session.ClearPreview();
+
+    BOOST_REQUIRE_EQUAL( composite.AdapterCount(), 2 );
+    BOOST_REQUIRE_EQUAL( first.m_Events.size(), 5 );
+    BOOST_REQUIRE_EQUAL( second.m_Events.size(), first.m_Events.size() );
+
+    for( size_t i = 0; i < first.m_Events.size(); ++i )
+        BOOST_CHECK_EQUAL( second.m_Events.at( i ), first.m_Events.at( i ) );
+
+    BOOST_CHECK_EQUAL( first.m_Events.at( 0 ), wxString( wxS( "begin:1" ) ) );
+    BOOST_CHECK_EQUAL( first.m_Events.at( 1 ),
+                       wxString( wxS( "show:1:preview-pad" ) ) );
+    BOOST_CHECK_EQUAL( first.m_Events.at( 2 ),
+                       wxString( wxS( "operation:1:tool.routing.anchor.1" ) ) );
+    BOOST_CHECK_EQUAL(
+            first.m_Events.at( 3 ),
+            wxString( wxS( "overlay:1:preview-pad:warning:clearance below preferred" ) ) );
+    BOOST_CHECK_EQUAL( first.m_Events.at( 4 ), wxString( wxS( "clear:1" ) ) );
+}
+
 BOOST_AUTO_TEST_SUITE_END()
