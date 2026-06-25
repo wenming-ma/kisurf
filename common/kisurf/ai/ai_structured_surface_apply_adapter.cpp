@@ -10,7 +10,9 @@
 
 #include <kisurf/ai/ai_structured_surface_apply_adapter.h>
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
+#include <vector>
 
 namespace
 {
@@ -67,6 +69,31 @@ bool scalarValuesEqual( const nlohmann::json& aExpected,
 }
 
 
+std::vector<std::string> sortedArrayValueKeys( const nlohmann::json& aArray )
+{
+    std::vector<std::string> keys;
+
+    for( const nlohmann::json& value : aArray )
+        keys.push_back( value.dump() );
+
+    std::sort( keys.begin(), keys.end() );
+    return keys;
+}
+
+
+bool jsonValuesEqual( const nlohmann::json& aExpected,
+                      const nlohmann::json& aActual )
+{
+    if( scalarValuesEqual( aExpected, aActual ) )
+        return true;
+
+    if( aExpected.is_array() && aActual.is_array() )
+        return sortedArrayValueKeys( aExpected ) == sortedArrayValueKeys( aActual );
+
+    return aExpected == aActual;
+}
+
+
 const nlohmann::json* surfaceRevisionField( const nlohmann::json& aSurface )
 {
     for( const char* key : { "revision", "surface_revision" } )
@@ -77,6 +104,16 @@ const nlohmann::json* surfaceRevisionField( const nlohmann::json& aSurface )
             return &aSurface[key];
         }
     }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* jsonMetadataField( const nlohmann::json& aObject,
+                                         const char* aKey )
+{
+    if( aObject.contains( aKey ) )
+        return &aObject[aKey];
 
     return nullptr;
 }
@@ -107,6 +144,44 @@ const nlohmann::json* schemaVersionField( const nlohmann::json& aSurface,
     for( const char* key : { "schema_version", "schemaVersion" } )
     {
         if( const nlohmann::json* value = scalarMetadataField( aRoot, key ) )
+            return value;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* selectionFingerprintField( const nlohmann::json& aSurface,
+                                                 const nlohmann::json& aRoot )
+{
+    for( const char* key : { "selection_fingerprint", "selectionFingerprint" } )
+    {
+        if( const nlohmann::json* value = scalarMetadataField( aSurface, key ) )
+            return value;
+    }
+
+    for( const char* key : { "selection_fingerprint", "selectionFingerprint" } )
+    {
+        if( const nlohmann::json* value = scalarMetadataField( aRoot, key ) )
+            return value;
+    }
+
+    return nullptr;
+}
+
+
+const nlohmann::json* overlapSetField( const nlohmann::json& aSurface,
+                                       const nlohmann::json& aRoot )
+{
+    for( const char* key : { "overlap_set", "overlapSet" } )
+    {
+        if( const nlohmann::json* value = jsonMetadataField( aSurface, key ) )
+            return value;
+    }
+
+    for( const char* key : { "overlap_set", "overlapSet" } )
+    {
+        if( const nlohmann::json* value = jsonMetadataField( aRoot, key ) )
             return value;
     }
 
@@ -258,6 +333,50 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
                                    *currentSchemaVersion ) )
         {
             aError = wxS( "SurfacePatch stale schema version." );
+            return false;
+        }
+    }
+
+    if( args.contains( "expected_selection_fingerprint" ) )
+    {
+        const nlohmann::json* currentSelectionFingerprint = nullptr;
+
+        if( workingState.contains( "surfaces" )
+            && workingState["surfaces"].is_object()
+            && workingState["surfaces"].contains( surfaceId )
+            && workingState["surfaces"][surfaceId].is_object() )
+        {
+            currentSelectionFingerprint = selectionFingerprintField(
+                    workingState["surfaces"][surfaceId], workingState );
+        }
+
+        if( !currentSelectionFingerprint
+            || !scalarValuesEqual( args["expected_selection_fingerprint"],
+                                   *currentSelectionFingerprint ) )
+        {
+            aError = wxS( "SurfacePatch stale selection fingerprint." );
+            return false;
+        }
+    }
+
+    if( args.contains( "expected_overlap_set" ) )
+    {
+        const nlohmann::json* currentOverlapSet = nullptr;
+
+        if( workingState.contains( "surfaces" )
+            && workingState["surfaces"].is_object()
+            && workingState["surfaces"].contains( surfaceId )
+            && workingState["surfaces"][surfaceId].is_object() )
+        {
+            currentOverlapSet = overlapSetField(
+                    workingState["surfaces"][surfaceId], workingState );
+        }
+
+        if( !currentOverlapSet
+            || !jsonValuesEqual( args["expected_overlap_set"],
+                                 *currentOverlapSet ) )
+        {
+            aError = wxS( "SurfacePatch stale overlap set." );
             return false;
         }
     }
