@@ -239,6 +239,33 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
 KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
 AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson );
 
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
+{
+    bool     m_Valid = false;
+    wxString m_ErrorCode;
+    wxString m_Message;
+    unsigned m_SchemaVersion = 0;
+    uint64_t m_RuntimeStepId = 0;
+    wxString m_TerminalState;
+    bool     m_Published = false;
+    bool     m_Accepted = false;
+    bool     m_Rejected = false;
+    bool     m_Expired = false;
+    bool     m_Superseded = false;
+    bool     m_Abandoned = false;
+    size_t   m_AttemptCount = 0;
+    size_t   m_HiddenOperationCount = 0;
+    size_t   m_RenderResultCount = 0;
+    size_t   m_ValidationResultCount = 0;
+    size_t   m_ToolResultCount = 0;
+    bool     m_PreviewGateAllowed = false;
+    bool     m_HasBlockingValidationIssue = false;
+    wxString m_QualityMetricJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
+AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:

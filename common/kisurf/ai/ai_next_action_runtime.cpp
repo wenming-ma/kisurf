@@ -7038,6 +7038,126 @@ AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 }
 
 
+AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
+AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
+{
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT result;
+
+    AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT validation =
+            AiValidateNextActionReplayTraceJson( aReplayTraceJson );
+
+    if( !validation.m_Valid )
+    {
+        result.m_Valid = false;
+        result.m_ErrorCode = validation.m_ErrorCode;
+        result.m_Message = validation.m_Message;
+        return result;
+    }
+
+    nlohmann::json trace =
+            nlohmann::json::parse( toUtf8String( aReplayTraceJson ), nullptr, false );
+
+    result.m_Valid = true;
+    result.m_SchemaVersion = trace["schema"]["version"].get<unsigned>();
+    result.m_RuntimeStepId = trace["runtime_step_id"].get<uint64_t>();
+    result.m_TerminalState =
+            fromUtf8String( trace["terminal_state"].get<std::string>() );
+
+    const std::string terminalState =
+            trace["terminal_state"].get<std::string>();
+
+    result.m_Published = trace.contains( "published_suggestion_id" )
+                         && trace["published_suggestion_id"].is_number_unsigned();
+    result.m_Accepted = terminalState == "accepted";
+    result.m_Rejected = terminalState == "rejected";
+    result.m_Expired = terminalState == "expired";
+    result.m_Superseded = terminalState == "superseded";
+    result.m_Abandoned = terminalState == "abandoned";
+
+    if( trace.contains( "tool_results" ) && trace["tool_results"].is_object() )
+    {
+        for( const char* phase : { "decision", "review" } )
+        {
+            if( trace["tool_results"].contains( phase )
+                && trace["tool_results"][phase].is_array() )
+            {
+                result.m_ToolResultCount += trace["tool_results"][phase].size();
+            }
+        }
+    }
+
+    if( trace.contains( "publish_decision" ) && trace["publish_decision"].is_object()
+        && trace["publish_decision"].contains( "preview_gate_result" )
+        && trace["publish_decision"]["preview_gate_result"].is_object()
+        && trace["publish_decision"]["preview_gate_result"].contains( "allowed" )
+        && trace["publish_decision"]["preview_gate_result"]["allowed"].is_boolean() )
+    {
+        result.m_PreviewGateAllowed =
+                trace["publish_decision"]["preview_gate_result"]["allowed"].get<bool>();
+    }
+
+    const nlohmann::json& attempts = trace["attempts"];
+    result.m_AttemptCount = attempts.size();
+
+    for( const nlohmann::json& attempt : attempts )
+    {
+        if( !attempt.is_object() )
+            continue;
+
+        if( attempt.contains( "hidden_attempt_journal" )
+            && attempt["hidden_attempt_journal"].is_object()
+            && attempt["hidden_attempt_journal"].contains( "operations" )
+            && attempt["hidden_attempt_journal"]["operations"].is_array() )
+        {
+            result.m_HiddenOperationCount +=
+                    attempt["hidden_attempt_journal"]["operations"].size();
+        }
+
+        if( attempt.contains( "render_outputs" )
+            && attempt["render_outputs"].is_object()
+            && !attempt["render_outputs"].empty() )
+        {
+            ++result.m_RenderResultCount;
+        }
+
+        if( attempt.contains( "validation_facts" )
+            && attempt["validation_facts"].is_object()
+            && !attempt["validation_facts"].empty() )
+        {
+            ++result.m_ValidationResultCount;
+
+            if( validationFactsBlockPreviewPublish(
+                        fromUtf8String( attempt["validation_facts"].dump() ) ) )
+            {
+                result.m_HasBlockingValidationIssue = true;
+            }
+        }
+    }
+
+    nlohmann::json metrics =
+            { { "schema_version", result.m_SchemaVersion },
+              { "runtime_step_id", result.m_RuntimeStepId },
+              { "terminal_state", terminalState },
+              { "published", result.m_Published },
+              { "accepted", result.m_Accepted },
+              { "rejected", result.m_Rejected },
+              { "expired", result.m_Expired },
+              { "superseded", result.m_Superseded },
+              { "abandoned", result.m_Abandoned },
+              { "attempt_count", result.m_AttemptCount },
+              { "hidden_operation_count", result.m_HiddenOperationCount },
+              { "render_result_count", result.m_RenderResultCount },
+              { "validation_result_count", result.m_ValidationResultCount },
+              { "tool_result_count", result.m_ToolResultCount },
+              { "preview_gate_allowed", result.m_PreviewGateAllowed },
+              { "has_blocking_validation_issue",
+                result.m_HasBlockingValidationIssue } };
+
+    result.m_QualityMetricJson = fromUtf8String( metrics.dump() );
+    return result;
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
