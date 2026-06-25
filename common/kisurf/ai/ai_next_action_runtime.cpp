@@ -287,6 +287,29 @@ bool reviewBasisAllowsPreviewPublish( const wxString& aReviewJson )
 }
 
 
+void appendGateReason( AI_NEXT_ACTION_GATE_RESULT& aGate, const wxString& aReason )
+{
+    aGate.m_Reasons.push_back( aReason );
+    aGate.m_Allowed = false;
+}
+
+
+wxString reviewJsonWithPreviewGateResult(
+        const wxString& aReviewJson,
+        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    nlohmann::json review =
+            nlohmann::json::parse( toUtf8String( aReviewJson ), nullptr, false );
+
+    if( review.is_discarded() || !review.is_object() )
+        review = nlohmann::json::object();
+
+    review["preview_gate_result"] =
+            nlohmann::json::parse( toUtf8String( aGate.AsJsonText() ) );
+    return fromUtf8String( review.dump() );
+}
+
+
 std::string candidateSourceToolName( const AI_SUGGESTION_RECORD& aSuggestion );
 
 
@@ -3962,6 +3985,22 @@ wxString AI_ACCEPT_OWNERSHIP_TOKEN::AsJsonText() const
 }
 
 
+wxString AI_NEXT_ACTION_GATE_RESULT::AsJsonText() const
+{
+    nlohmann::json reasons = nlohmann::json::array();
+
+    for( const wxString& reason : m_Reasons )
+        reasons.push_back( toUtf8String( reason ) );
+
+    nlohmann::json payload =
+            { { "gate", toUtf8String( m_Gate ) },
+              { "allowed", m_Allowed },
+              { "reasons", reasons } };
+
+    return fromUtf8String( payload.dump() );
+}
+
+
 bool AI_NEXT_ACTION_PUBLISH_DECISION::IsValid() const
 {
     return m_Publish && m_AttemptId != 0 && m_PreviewLease.IsValid()
@@ -5639,6 +5678,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
         {
             AI_NEXT_ACTION_PUBLISH_DECISION publish =
                     buildPublishDecision( step, attempt, review );
+            step.m_ReviewDecisionJson = publish.m_RawJson;
 
             if( !publish.IsValid() )
             {
@@ -6279,18 +6319,30 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
     publish.m_Publish = aReview.WantsPublish();
     publish.m_AttemptId = aAttempt.m_Id;
     publish.m_PreviewMode = wxS( "overlay" );
-    publish.m_RawJson = aReview.m_RawJson;
+    publish.m_GateResult.m_Gate = wxS( "preview" );
+    publish.m_GateResult.m_Allowed = publish.m_Publish;
+
+    if( !publish.m_Publish )
+        appendGateReason( publish.m_GateResult, wxS( "review_not_publish" ) );
 
     if( !decisionOpportunityMatchesCandidate( aStep.m_LlmDecisionJson,
-                                              aAttempt.m_Candidate )
-        || !reviewBasisAllowsPreviewPublish( aReview.m_RawJson )
-        || !attemptBudgetWithinPolicy( aAttempt )
-        || renderFactsBlockPreviewPublish( aAttempt.m_RenderOutputsJson )
-        || validationFactsBlockPreviewPublish( aAttempt.m_ValidationFactsJson ) )
+                                              aAttempt.m_Candidate ) )
     {
-        publish.m_Publish = false;
-        return publish;
+        appendGateReason( publish.m_GateResult,
+                          wxS( "semantic_relevance_failed" ) );
     }
+
+    if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "review_basis_failed" ) );
+
+    if( !attemptBudgetWithinPolicy( aAttempt ) )
+        appendGateReason( publish.m_GateResult, wxS( "budget_policy_failed" ) );
+
+    if( renderFactsBlockPreviewPublish( aAttempt.m_RenderOutputsJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "render_gate_failed" ) );
+
+    if( validationFactsBlockPreviewPublish( aAttempt.m_ValidationFactsJson ) )
+        appendGateReason( publish.m_GateResult, wxS( "validation_gate_failed" ) );
 
     if( m_CurrentContextSampler )
     {
@@ -6299,10 +6351,16 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
         if( dependencyFingerprint( current )
             != dependencyFingerprint( aStep.m_ContextVersion ) )
         {
-            publish.m_Publish = false;
-            return publish;
+            appendGateReason( publish.m_GateResult, wxS( "context_drift" ) );
         }
     }
+
+    publish.m_Publish = publish.m_GateResult.m_Allowed;
+    publish.m_RawJson = reviewJsonWithPreviewGateResult( aReview.m_RawJson,
+                                                         publish.m_GateResult );
+
+    if( !publish.m_Publish )
+        return publish;
 
     publish.m_PreviewLease.m_Id = m_NextLeaseId++;
     publish.m_PreviewLease.m_OwnerNamespace = wxS( "nextaction" );
@@ -6360,6 +6418,9 @@ AI_SUGGESTION_RECORD AI_NEXT_ACTION_RUNTIME::publishAttempt(
               { "accept_token",
                 nlohmann::json::parse( toUtf8String(
                         aPublish.m_AcceptToken.AsJsonText() ) ) },
+              { "preview_gate_result",
+                nlohmann::json::parse( toUtf8String(
+                        aPublish.m_GateResult.AsJsonText() ) ) },
               { "attempt", attemptProvenance } };
     suggestion.m_RuntimeProvenanceJson = fromUtf8String( provenance.dump() );
     return suggestion;

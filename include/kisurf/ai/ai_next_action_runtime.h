@@ -147,6 +147,15 @@ struct KICOMMON_API AI_ACCEPT_OWNERSHIP_TOKEN
     wxString AsJsonText() const;
 };
 
+struct KICOMMON_API AI_NEXT_ACTION_GATE_RESULT
+{
+    wxString              m_Gate;
+    bool                  m_Allowed = false;
+    std::vector<wxString> m_Reasons;
+
+    wxString AsJsonText() const;
+};
+
 struct KICOMMON_API AI_NEXT_ACTION_PUBLISH_DECISION
 {
     bool                      m_Publish = false;
@@ -154,6 +163,7 @@ struct KICOMMON_API AI_NEXT_ACTION_PUBLISH_DECISION
     wxString                  m_PreviewMode;
     AI_PREVIEW_LEASE          m_PreviewLease;
     AI_ACCEPT_OWNERSHIP_TOKEN m_AcceptToken;
+    AI_NEXT_ACTION_GATE_RESULT m_GateResult;
     wxString                  m_RawJson;
 
     bool IsValid() const;

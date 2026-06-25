@@ -2385,6 +2385,10 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "fnv1a64:" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "tool_results" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "session_journal" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains( wxS( "pcb.create_via" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
             wxS( "placement.generate_via_pattern_candidates" ) ) );
@@ -3161,6 +3165,12 @@ BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWhenNativeBudgetCountersExceedPolicy 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "budget_policy_failed" ) ) );
 }
 
 
@@ -3591,6 +3601,12 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenReviewOmitsGateBasis )
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"preview_gate_result\"" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "review_basis_failed" ) ) );
 }
 
 

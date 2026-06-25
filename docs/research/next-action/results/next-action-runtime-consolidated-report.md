@@ -237,7 +237,7 @@ PendingAttempt
 - hidden attempt 已开始通过 `AI_ATOMIC_OPERATION_EXECUTOR::Execute()` 执行 mutation candidate，并在 attempt journal 中记录 created/resolved handles、warnings 和 result payload。
 - `validate.hidden_attempt` 已支持注入 `AI_SESSION_VALIDATION_SERVICE`，能把 session validation facts 暴露给 LLM review turn。
 - `render.hidden_attempt` 已支持注入 `AI_SESSION_PREVIEW_SERVICE`，Next Action runtime 可以调用 native preview renderer，把 render status、preview id、rendered item count、error code 和 service result 写入 attempt render facts。
-- Preview Gate 已开始由 runtime 拥有：即使 LLM review 返回 `publish`，只要 hidden attempt 的 validation facts 明确为 failed / blocked / error / fatal，或带有阻断级 `error_code` / error severity issue，runtime 就不会发布用户可见 preview。
+- Preview Gate 已开始由 runtime 拥有并产生结构化 `preview_gate_result`：即使 LLM review 返回 `publish`，只要 hidden attempt 的 validation facts 明确为 failed / blocked / error / fatal，或带有阻断级 `error_code` / error severity issue，runtime 就不会发布用户可见 preview，并会把 gate allowed/reasons 写回 review JSON 或 published provenance。
 - Preview Gate 已开始检查 render validity：hidden render facts 明确 failed / invalid / error，或 `render_valid=false` 时，即使 LLM review 返回 `publish` 也不能发布 preview。
 - Preview Gate 已开始要求 render / validation facts 来自已连接的 native service：无注入 `AI_SESSION_PREVIEW_SERVICE` / `AI_SESSION_VALIDATION_SERVICE` 时产生的 placeholder render / validation fallback 只能作为内部 attempt trace，不能满足用户可见 preview 的 publish gate。
 - Preview Gate 已开始要求 LLM review 显式给出客观依据：`publish` 必须带 `review_basis.render_valid`、`review_basis.validation_passed`、`review_basis.budget_within_limits`、`review_basis.self_review_passed` 且全部为 true；裸 `publish` 不能发布 preview。
