@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -3275,6 +3276,123 @@ nlohmann::json routingActiveSegmentJson(
 }
 
 
+bool jsonPointToInts( const nlohmann::json& aPoint, int& aX, int& aY )
+{
+    return aPoint.is_object()
+           && jsonNumberAsInt( aPoint, "x", aX )
+           && jsonNumberAsInt( aPoint, "y", aY );
+}
+
+
+nlohmann::json pointRecordJson( int aX, int aY )
+{
+    return { { "x", aX }, { "y", aY } };
+}
+
+
+wxString routingSegmentStyle( int aDx, int aDy )
+{
+    const int absDx = std::abs( aDx );
+    const int absDy = std::abs( aDy );
+
+    if( aDx == 0 && aDy == 0 )
+        return wxS( "zero_length" );
+
+    if( aDy == 0 )
+        return wxS( "horizontal" );
+
+    if( aDx == 0 )
+        return wxS( "vertical" );
+
+    if( absDx == absDy )
+        return wxS( "forty_five" );
+
+    return wxS( "free_angle" );
+}
+
+
+nlohmann::json routingCorridorFactJson(
+        const AI_CONTEXT_ANCHOR& aAnchor,
+        const nlohmann::json& aModeContext,
+        int aStartX,
+        int aStartY )
+{
+    const int dx = aAnchor.m_Position.x - aStartX;
+    const int dy = aAnchor.m_Position.y - aStartY;
+    const int absDx = std::abs( dx );
+    const int absDy = std::abs( dy );
+    nlohmann::json fact =
+            { { "source", "route_head_to_anchor" },
+              { "anchor_id", toUtf8String( aAnchor.m_Id ) },
+              { "anchor_kind", toUtf8String( aAnchor.KindAsString() ) },
+              { "anchor_label", toUtf8String( aAnchor.m_Label ) },
+              { "start", pointRecordJson( aStartX, aStartY ) },
+              { "end", pointRecordJson( aAnchor.m_Position.x, aAnchor.m_Position.y ) },
+              { "dx", dx },
+              { "dy", dy },
+              { "abs_dx", absDx },
+              { "abs_dy", absDy },
+              { "manhattan_length", absDx + absDy },
+              { "segment_style", toUtf8String( routingSegmentStyle( dx, dy ) ) },
+              { "confidence", aAnchor.m_Confidence },
+              { "manual_click_to_materialize", true } };
+
+    if( aModeContext.contains( "net" ) && aModeContext["net"].is_string() )
+        fact["net"] = aModeContext["net"];
+
+    if( aModeContext.contains( "layer" ) && aModeContext["layer"].is_string() )
+        fact["layer"] = aModeContext["layer"];
+
+    if( aModeContext.contains( "width" ) && aModeContext["width"].is_number() )
+        fact["width"] = aModeContext["width"];
+
+    nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
+
+    if( details.is_object() )
+    {
+        copyJsonFieldIfPresent( fact, details, "role" );
+        copyJsonFieldIfPresent( fact, details, "target" );
+    }
+
+    return fact;
+}
+
+
+nlohmann::json routingCorridorFactsJson(
+        const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    nlohmann::json modeContext = objectFromJsonText( aToolState.m_ModeContextJson );
+    int            startX = 0;
+    int            startY = 0;
+
+    if( !modeContext.contains( "start" )
+        || !jsonPointToInts( modeContext["start"], startX, startY ) )
+    {
+        return nlohmann::json::array();
+    }
+
+    nlohmann::json facts = nlohmann::json::array();
+
+    for( const AI_CONTEXT_ANCHOR& anchor : aAnchors )
+    {
+        if( facts.size() >= 16 )
+            break;
+
+        if( !anchor.m_HasPosition || !isRoutingPacketAnchor( anchor.m_Kind )
+            || anchor.m_Kind == AI_CONTEXT_ANCHOR_KIND::RouteStart )
+        {
+            continue;
+        }
+
+        facts.push_back(
+                routingCorridorFactJson( anchor, modeContext, startX, startY ) );
+    }
+
+    return facts;
+}
+
+
 nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
 {
     const AI_CONTEXT_SNAPSHOT& context = aEvent.m_ContextSnapshot;
@@ -3317,6 +3435,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["route_anchor_ids"] = anchorIdArrayJson( context.m_Anchors );
         packet["route_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isRoutingPacketAnchor );
+        packet["routing_corridor_facts"] =
+                routingCorridorFactsJson( context.m_Anchors, context.m_ToolState );
 
         if( !context.m_ToolState.m_ModeContextJson.IsEmpty() )
             packet["mode_context_json"] =
