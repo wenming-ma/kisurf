@@ -2319,6 +2319,21 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     AI_NEXT_ACTION_RUNTIME placementRuntime{
             std::unique_ptr<AI_PROVIDER>( placementProvider ) };
     AI_SUGGESTION_TRIGGER placementTrigger = makeViaTrigger();
+    placementTrigger.m_ContextSnapshot.m_Summary =
+            wxS( "{\"kind\":\"pcb_board_summary\","
+                 "\"constraint_facts\":{\"source\":\"board\","
+                 "\"minimums\":{\"min_clearance\":125000,"
+                 "\"min_track_width\":100000,\"min_via_size\":450000},"
+                 "\"rule_area_count\":2,\"keepout_count\":1,"
+                 "\"effective_constraints\":{"
+                 "\"drc_engine_present\":true,\"rules_valid\":true,"
+                 "\"geometry_dependent_rules_present\":true,"
+                 "\"worst_constraints\":[{\"type\":\"clearance\","
+                 "\"value\":{\"min\":175000,\"has_min\":true}}],"
+                 "\"pair_effective_constraints\":[{\"type\":\"clearance\","
+                 "\"layer\":\"F.Cu\","
+                 "\"value\":{\"min\":220000,\"has_min\":true},"
+                 "\"evaluation_source\":\"DRC_ENGINE::EvalRules\"}]}}}" );
     placementTrigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
     placementTrigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
             VECTOR2I( 180, 80 );
@@ -2358,6 +2373,33 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             "via" );
     BOOST_CHECK( placementPacket["planning_target"]["click_required_to_materialize"]
                          .get<bool>() );
+    BOOST_REQUIRE( placementPacket.contains( "constraint_summary" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["constraint_summary"]["source"].get<std::string>(),
+            "context_summary.constraint_facts" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["constraint_summary"]["minimums"]["min_clearance"].get<int>(),
+            125000 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["constraint_summary"]["rule_area_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["constraint_summary"]["keepout_count"].get<int>(),
+            1 );
+    BOOST_CHECK(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["drc_engine_present"].get<bool>() );
+    BOOST_CHECK(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["geometry_dependent_rules_present"].get<bool>() );
+    BOOST_REQUIRE_EQUAL(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["worst_constraints"].size(),
+            1 );
+    BOOST_REQUIRE_EQUAL(
+            placementPacket["constraint_summary"]["effective_constraints"]
+                    ["pair_effective_constraints"].size(),
+            1 );
     BOOST_REQUIRE( placementPacket.contains( "placement_anchors" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_anchors"].size(), 1 );
     BOOST_CHECK_EQUAL(
@@ -2465,6 +2507,16 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"cursor\":{\"x\":260,\"y\":200},"
                  "\"cursor_region\":{\"x\":250,\"y\":210,"
                  "\"width\":180,\"height\":120}}" );
+    routingTrigger.m_ContextSnapshot.m_Summary =
+            wxS( "{\"kind\":\"pcb_board_summary\","
+                 "\"constraint_facts\":{\"source\":\"board\","
+                 "\"minimums\":{\"min_clearance\":90000,"
+                 "\"min_track_width\":75000},"
+                 "\"rule_area_count\":0,\"keepout_count\":0,"
+                 "\"effective_constraints\":{"
+                 "\"drc_engine_present\":true,\"rules_valid\":true,"
+                 "\"worst_constraints\":[{\"type\":\"track_width\","
+                 "\"value\":{\"min\":75000,\"has_min\":true}}]}}}" );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back(
             viaRef( 400, 220, wxS( "GND" ) ) );
     routingTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
@@ -2493,6 +2545,17 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             "GND" );
     BOOST_CHECK( routingPacket["planning_target"]["cursor_is_sorting_hint"]
                          .get<bool>() );
+    BOOST_REQUIRE( routingPacket.contains( "constraint_summary" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["constraint_summary"]["source"].get<std::string>(),
+            "context_summary.constraint_facts" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["constraint_summary"]["minimums"]["min_track_width"].get<int>(),
+            75000 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["constraint_summary"]["effective_constraints"]
+                    ["worst_constraints"].size(),
+            1 );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
             routingPacket["active_route_segment"]["start"]["x"].get<int>(),
