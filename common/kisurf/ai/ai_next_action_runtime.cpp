@@ -3725,7 +3725,92 @@ const nlohmann::json* surfacePatchOperationArray( const nlohmann::json& aPatch )
 }
 
 
-nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs )
+const nlohmann::json* surfacePatchCellValue(
+        const nlohmann::json& aSurfaceState, const std::string& aSurfaceId,
+        const std::string& aTableId, const std::string& aRowId,
+        const std::string& aColumnId )
+{
+    if( !aSurfaceState.contains( "surfaces" )
+        || !aSurfaceState["surfaces"].is_object()
+        || !aSurfaceState["surfaces"].contains( aSurfaceId ) )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& surface = aSurfaceState["surfaces"][aSurfaceId];
+
+    if( !surface.is_object() || !surface.contains( "tables" )
+        || !surface["tables"].is_object()
+        || !surface["tables"].contains( aTableId ) )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& table = surface["tables"][aTableId];
+
+    if( !table.is_object() || !table.contains( "rows" )
+        || !table["rows"].is_object() || !table["rows"].contains( aRowId ) )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& row = table["rows"][aRowId];
+
+    if( !row.is_object() || !row.contains( "cells" )
+        || !row["cells"].is_object() || !row["cells"].contains( aColumnId ) )
+    {
+        return nullptr;
+    }
+
+    return &row["cells"][aColumnId];
+}
+
+
+const nlohmann::json* surfacePatchFieldValue(
+        const nlohmann::json& aSurfaceState, const std::string& aSurfaceId,
+        const std::string& aFieldId )
+{
+    if( !aSurfaceState.contains( "surfaces" )
+        || !aSurfaceState["surfaces"].is_object()
+        || !aSurfaceState["surfaces"].contains( aSurfaceId ) )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& surface = aSurfaceState["surfaces"][aSurfaceId];
+
+    if( !surface.is_object() || !surface.contains( "fields" )
+        || !surface["fields"].is_object()
+        || !surface["fields"].contains( aFieldId ) )
+    {
+        return nullptr;
+    }
+
+    return &surface["fields"][aFieldId];
+}
+
+
+void annotateSurfacePatchValueDiff( nlohmann::json& aEntry,
+                                    const nlohmann::json& aProposedValue,
+                                    const nlohmann::json* aPreviousValue )
+{
+    aEntry["proposed_value"] = aProposedValue;
+
+    if( aPreviousValue )
+    {
+        aEntry["previous_value_known"] = true;
+        aEntry["previous_value"] = *aPreviousValue;
+        aEntry["value_changed"] = *aPreviousValue != aProposedValue;
+    }
+    else
+    {
+        aEntry["previous_value_known"] = false;
+    }
+}
+
+
+nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
+                                            nlohmann::json* aSurfaceState )
 {
     nlohmann::json entries = nlohmann::json::array();
 
@@ -3762,7 +3847,7 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs )
                 continue;
             }
 
-            entries.push_back(
+            nlohmann::json entry =
                     { { "kind", "set_cell" },
                       { "surface_id", surfaceId },
                       { "table_id", opTableId },
@@ -3771,7 +3856,23 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs )
                       { "value", op["value"] },
                       { "target_path",
                         "surfaces." + surfaceId + ".tables." + opTableId
-                                + ".rows." + rowId + ".cells." + columnId } } );
+                                + ".rows." + rowId + ".cells." + columnId } };
+
+            const nlohmann::json* previousValue =
+                    aSurfaceState ? surfacePatchCellValue( *aSurfaceState,
+                                                           surfaceId, opTableId,
+                                                           rowId, columnId )
+                                  : nullptr;
+            annotateSurfacePatchValueDiff( entry, op["value"], previousValue );
+            entries.push_back( std::move( entry ) );
+
+            if( aSurfaceState )
+            {
+                ( *aSurfaceState )["surfaces"][surfaceId]["tables"][opTableId]
+                                  ["rows"][rowId]["cells"][columnId] =
+                        op["value"];
+            }
+
             continue;
         }
 
@@ -3782,13 +3883,24 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs )
             if( surfaceId.empty() || fieldId.empty() || !op.contains( "value" ) )
                 continue;
 
-            entries.push_back(
+            nlohmann::json entry =
                     { { "kind", "set_field" },
                       { "surface_id", surfaceId },
                       { "field_id", fieldId },
                       { "value", op["value"] },
                       { "target_path",
-                        "surfaces." + surfaceId + ".fields." + fieldId } } );
+                        "surfaces." + surfaceId + ".fields." + fieldId } };
+
+            const nlohmann::json* previousValue =
+                    aSurfaceState ? surfacePatchFieldValue( *aSurfaceState,
+                                                            surfaceId, fieldId )
+                                  : nullptr;
+            annotateSurfacePatchValueDiff( entry, op["value"], previousValue );
+            entries.push_back( std::move( entry ) );
+
+            if( aSurfaceState )
+                ( *aSurfaceState )["surfaces"][surfaceId]["fields"][fieldId] =
+                        op["value"];
         }
     }
 
@@ -3800,6 +3912,7 @@ nlohmann::json surfacePatchPreviewFactsJson(
         const AI_EXECUTION_SESSION& aSession )
 {
     nlohmann::json previews = nlohmann::json::array();
+    nlohmann::json surfaceState = nlohmann::json::object();
 
     for( const AI_SESSION_OPERATION_RECORD& operation : aSession.Journal().Operations() )
     {
@@ -3868,7 +3981,8 @@ nlohmann::json surfacePatchPreviewFactsJson(
             if( patchOperationCount != 0 )
                 preview["patch_operation_count"] = patchOperationCount;
 
-            nlohmann::json diffEntries = surfacePatchDiffEntriesJson( args );
+            nlohmann::json diffEntries =
+                    surfacePatchDiffEntriesJson( args, &surfaceState );
 
             if( !diffEntries.empty() )
             {
