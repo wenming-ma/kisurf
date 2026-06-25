@@ -358,6 +358,12 @@ bool isPlacementRepairMoveItemsTool( const std::string& aToolName )
 }
 
 
+bool isPlacementRepairFootprintOrientationTool( const std::string& aToolName )
+{
+    return aToolName == "placement.repair_footprint_orientation";
+}
+
+
 bool isRoutingRepairSegmentTool( const std::string& aToolName )
 {
     return aToolName == "routing.repair_segment";
@@ -367,6 +373,12 @@ bool isRoutingRepairSegmentTool( const std::string& aToolName )
 bool isRoutingRepairPolylineTool( const std::string& aToolName )
 {
     return aToolName == "routing.repair_polyline";
+}
+
+
+bool isRoutingRepairBusSegmentsTool( const std::string& aToolName )
+{
+    return aToolName == "routing.repair_bus_segments";
 }
 
 
@@ -400,11 +412,18 @@ bool isPlacementFootprintTransformCandidateTool( const std::string& aToolName )
 }
 
 
+bool isPlacementFootprintOrientationCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "placement.generate_footprint_orientation_candidates";
+}
+
+
 bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
            || isPlacementRepairViaTool( aToolName )
            || isPlacementRepairMoveItemsTool( aToolName )
+           || isPlacementRepairFootprintOrientationTool( aToolName )
            || isRoutingRepairSegmentTool( aToolName )
            || isRoutingRepairPolylineTool( aToolName );
 }
@@ -413,7 +432,8 @@ bool isRepairWrapperTool( const std::string& aToolName )
 bool isHiddenMutationBatchTool( const std::string& aToolName )
 {
     return isBoundedPlanMutationTool( aToolName )
-           || isRepairWrapperTool( aToolName );
+           || isRepairWrapperTool( aToolName )
+           || isRoutingRepairBusSegmentsTool( aToolName );
 }
 
 
@@ -4466,6 +4486,118 @@ nlohmann::json placementFootprintTransformCandidatePayloadJson(
 }
 
 
+nlohmann::json placementFootprintOrientationCandidatePayloadJson(
+        const nlohmann::json& aArgs )
+{
+    if( !aArgs.contains( "handles" ) || !aArgs["handles"].is_array()
+        || aArgs["handles"].empty()
+        || !aArgs.contains( "current_orientation_degrees" )
+        || !aArgs["current_orientation_degrees"].is_number()
+        || !aArgs.contains( "target_orientation_degrees" )
+        || !aArgs["target_orientation_degrees"].is_number() )
+    {
+        return { { "tool",
+                   "placement.generate_footprint_orientation_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "placement.generate_footprint_orientation_candidates "
+                   "requires handles, current_orientation_degrees, and "
+                   "target_orientation_degrees." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    const int currentOrientation =
+            aArgs["current_orientation_degrees"].get<int>();
+    const int targetOrientation = aArgs["target_orientation_degrees"].get<int>();
+    const int orientationDelta = targetOrientation - currentOrientation;
+    const std::string footprintRef =
+            stringField( aArgs, "footprint_ref" ).value_or( "selected_footprint" );
+    const std::optional<std::string> targetSide =
+            stringField( aArgs, "target_side" );
+
+    nlohmann::json typedProps =
+            { { "orientation_degrees", targetOrientation },
+              { "current_orientation_degrees", currentOrientation },
+              { "orientation_delta_degrees", orientationDelta } };
+
+    if( targetSide )
+        typedProps["side"] = *targetSide;
+
+    nlohmann::json orientationFacts =
+            { { "footprint_ref", footprintRef },
+              { "current_orientation_degrees", currentOrientation },
+              { "target_orientation_degrees", targetOrientation },
+              { "orientation_delta_degrees", orientationDelta },
+              { "transform_kind", "orientation" },
+              { "generation_strategy", "orient_selected_to_target" },
+              { "requires_hidden_render", true },
+              { "validation_hint",
+                "run_validate_hidden_attempt_before_publish" } };
+
+    if( targetSide )
+        orientationFacts["target_side"] = *targetSide;
+
+    nlohmann::json operationArguments =
+            { { "handles", aArgs["handles"] },
+              { "typed_props", typedProps },
+              { "metadata",
+                { { "source_tool",
+                    "placement.generate_footprint_orientation_candidates" },
+                  { "candidate_strategy", "orient_selected_to_target" },
+                  { "footprint_ref", footprintRef } } } };
+
+    nlohmann::json operation =
+            { { "operation", "orient_selected_footprint" },
+              { "source_tool",
+                "placement.generate_footprint_orientation_candidates" },
+              { "candidate_strategy", "orient_selected_to_target" },
+              { "handles", aArgs["handles"] },
+              { "current_orientation_degrees", currentOrientation },
+              { "target_orientation_degrees", targetOrientation },
+              { "orientation_delta_degrees", orientationDelta },
+              { "footprint_orientation_facts", orientationFacts } };
+
+    if( targetSide )
+        operation["target_side"] = *targetSide;
+
+    nlohmann::json candidate =
+            { { "index", 0 },
+              { "title", "Footprint orientation transform" },
+              { "body",
+                "Candidate selected-footprint orientation and side transform." },
+              { "source_tool",
+                "placement.generate_footprint_orientation_candidates" },
+              { "context_kind", "placement" },
+              { "preview_object_count", 1 },
+              { "edit_object_count", 1 },
+              { "arguments", operation },
+              { "operation", "orient_selected_footprint" },
+              { "footprint_orientation_facts", orientationFacts },
+              { "landing_facts",
+                { { "kind", "placement_landing" },
+                  { "source", "footprint_orientation.target_orientation" },
+                  { "orientation_degrees", targetOrientation },
+                  { "orientation_delta_degrees", orientationDelta },
+                  { "transform_kind", "orientation" } } },
+              { "plan",
+                { { "operations",
+                    nlohmann::json::array(
+                            { { { "kind", "pcb.set_item_properties" },
+                                { "arguments", operationArguments } } } ) } } },
+              { "publish_allowed", false } };
+
+    if( targetSide )
+        candidate["landing_facts"]["target_side"] = *targetSide;
+
+    return { { "tool", "placement.generate_footprint_orientation_candidates" },
+             { "status", "candidates_generated" },
+             { "candidate_count", 1 },
+             { "candidates", nlohmann::json::array( { candidate } ) } };
+}
+
+
 nlohmann::json routingParallelCandidatePayloadJson(
         const nlohmann::json& aArgs,
         const AI_OBSERVATION_PACKET& aObservation )
@@ -5836,6 +5968,13 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_footprint_transform_library" },
                 { "can_publish", false } },
+              { { "name", "placement.generate_footprint_orientation_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "placement" },
+                { "side_effect", "read_only" },
+                { "candidate_source", "internal_footprint_orientation_library" },
+                { "can_publish", false } },
               { { "name", "routing.generate_segment_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -5924,6 +6063,18 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_journal", true },
                 { "lowers_to", "pcb.move_items" },
                 { "max_steps", 1 } },
+              { { "name", "placement.repair_footprint_orientation" },
+                { "layer", "integrated" },
+                { "role", "placement_repair" },
+                { "work_state", "placement" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.set_item_properties" },
+                { "max_steps", 1 } },
               { { "name", "routing.repair_segment" },
                 { "layer", "integrated" },
                 { "role", "routing_repair" },
@@ -5948,6 +6099,18 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_journal", true },
                 { "lowers_to", "pcb.create_track_polyline" },
                 { "max_steps", 1 } },
+              { { "name", "routing.repair_bus_segments" },
+                { "layer", "integrated" },
+                { "role", "routing_repair" },
+                { "work_state", "routing" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "pcb.create_track_segment[]" },
+                { "max_steps", 16 } },
               { { "name", "surface.repair_patch" },
                 { "layer", "integrated" },
                 { "role", "surface_repair" },
@@ -6070,6 +6233,36 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Target x/y position for the placement candidate." } };
                     parameters["required"] = nlohmann::json::array(
                             { "current_position", "target_position" } );
+                }
+                else if( isPlacementFootprintOrientationCandidateTool( aName ) )
+                {
+                    parameters["properties"]["handles"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Session handles for the footprint or selected "
+                                "placement items to orient." },
+                              { "items", { { "type", "object" } } },
+                              { "minItems", 1 } };
+                    parameters["properties"]["footprint_ref"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional footprint reference designator for facts." } };
+                    parameters["properties"]["current_orientation_degrees"] =
+                            { { "type", "number" },
+                              { "description",
+                                "Current footprint orientation in degrees." } };
+                    parameters["properties"]["target_orientation_degrees"] =
+                            { { "type", "number" },
+                              { "description",
+                                "Target footprint orientation in degrees." } };
+                    parameters["properties"]["target_side"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional target board side or layer family, for "
+                                "example F.Cu or B.Cu." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "handles", "current_orientation_degrees",
+                              "target_orientation_degrees" } );
                 }
                 else if( isRoutingParallelCandidateTool( aName ) )
                 {
@@ -6241,6 +6434,37 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                     parameters["required"] = nlohmann::json::array(
                             { "handles", "delta" } );
                 }
+                else if( isPlacementRepairFootprintOrientationTool( aName ) )
+                {
+                    parameters["properties"]["handles"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Session handles for the footprint or selected "
+                                "placement items to orient in the hidden attempt." },
+                              { "items", { { "type", "object" } } },
+                              { "minItems", 1 } };
+                    parameters["properties"]["target_orientation_degrees"] =
+                            { { "type", "number" },
+                              { "description",
+                                "Target footprint orientation in degrees." } };
+                    parameters["properties"]["current_orientation_degrees"] =
+                            { { "type", "number" },
+                              { "description",
+                                "Optional current orientation fact used for audit." } };
+                    parameters["properties"]["target_side"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional target board side or layer family." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias for this orientation repair." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "handles", "target_orientation_degrees" } );
+                }
                 else if( isRoutingRepairSegmentTool( aName ) )
                 {
                     parameters["properties"]["start"] =
@@ -6300,6 +6524,36 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description", "Optional provenance metadata." } };
                     parameters["required"] = nlohmann::json::array(
                             { "points", "layer", "net", "width" } );
+                }
+                else if( isRoutingRepairBusSegmentsTool( aName ) )
+                {
+                    parameters["properties"]["segments"] =
+                            { { "type", "array" },
+                              { "description",
+                                "Ordered bus lane segment objects. Each segment "
+                                "must provide start, end, and net; layer and "
+                                "width may be supplied per segment or at top level." },
+                              { "items", { { "type", "object" } } },
+                              { "minItems", 1 },
+                              { "maxItems", 16 } };
+                    parameters["properties"]["layer"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Default routing layer for all bus segments." } };
+                    parameters["properties"]["width"] =
+                            { { "type", "integer" },
+                              { "minimum", 1 },
+                              { "description",
+                                "Default routing width for all bus segments." } };
+                    parameters["properties"]["alias"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional model-readable alias prefix for the bus repair." } };
+                    parameters["properties"]["metadata"] =
+                            { { "type", "object" },
+                              { "description", "Optional provenance metadata." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "segments" } );
                 }
                 else if( isSurfaceRepairPatchTool( aName ) )
                 {
@@ -6643,6 +6897,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                             "placement.generate_footprint_transform_candidates" );
                 }
 
+                if( name == "placement_generate_footprint_orientation_candidates"
+                    || name == "placement.generate_footprint_orientation_candidates" )
+                {
+                    return std::string(
+                            "placement.generate_footprint_orientation_candidates" );
+                }
+
                 if( name == "routing_generate_segment_candidates"
                     || name == "routing.generate_segment_candidates" )
                 {
@@ -6728,6 +6989,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "placement.repair_move_items" );
                 }
 
+                if( name == "placement_repair_footprint_orientation"
+                    || name == "placement.repair_footprint_orientation" )
+                {
+                    return std::string(
+                            "placement.repair_footprint_orientation" );
+                }
+
                 if( name == "routing_repair_segment"
                     || name == "routing.repair_segment" )
                 {
@@ -6738,6 +7006,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     || name == "routing.repair_polyline" )
                 {
                     return std::string( "routing.repair_polyline" );
+                }
+
+                if( name == "routing_repair_bus_segments"
+                    || name == "routing.repair_bus_segments" )
+                {
+                    return std::string( "routing.repair_bus_segments" );
                 }
 
                 if( name == "surface_repair_patch"
@@ -6846,6 +7120,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         const wxString message =
                 malformed
                         ? wxString( wxS( "placement.generate_footprint_transform_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
+    }
+
+    if( toolName == "placement.generate_footprint_orientation_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                placementFootprintOrientationCandidatePayloadJson( args );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "placement.generate_footprint_orientation_candidates "
                                          "received malformed arguments." ) )
                         : wxString( wxS( "Candidates generated." ) );
 
@@ -7006,7 +7300,101 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
 
-        if( isRepairWrapperTool( toolName ) )
+        if( isRoutingRepairBusSegmentsTool( toolName ) )
+        {
+            if( !args.contains( "segments" ) || !args["segments"].is_array()
+                || args["segments"].empty() || args["segments"].size() > 16 )
+            {
+                return makeResult(
+                        false, false, wxS( "malformed_arguments" ),
+                        wxS( "routing.repair_bus_segments requires 1-16 segments." ),
+                        { { "tool", boundedPlanToolName },
+                          { "status", "malformed_arguments" } } );
+            }
+
+            auto widthFrom =
+                    []( const nlohmann::json& aObject ) -> std::optional<int>
+                    {
+                        if( aObject.is_object() && aObject.contains( "width" )
+                            && aObject["width"].is_number_integer()
+                            && aObject["width"].get<int>() > 0 )
+                        {
+                            return aObject["width"].get<int>();
+                        }
+
+                        return std::nullopt;
+                    };
+
+            nlohmann::json operations = nlohmann::json::array();
+            const std::optional<std::string> defaultLayer =
+                    stringField( args, "layer" );
+            const std::optional<int> defaultWidth = widthFrom( args );
+            const std::optional<std::string> aliasPrefix =
+                    stringField( args, "alias" );
+
+            size_t laneIndex = 0;
+
+            for( const nlohmann::json& segment : args["segments"] )
+            {
+                std::optional<std::string> layer = stringField( segment, "layer" );
+                std::optional<std::string> net = stringField( segment, "net" );
+                std::optional<int> width = widthFrom( segment );
+
+                if( !layer )
+                    layer = defaultLayer;
+
+                if( !width )
+                    width = defaultWidth;
+
+                if( !segment.is_object()
+                    || !segment.contains( "start" )
+                    || !segment["start"].is_object()
+                    || !segment.contains( "end" )
+                    || !segment["end"].is_object()
+                    || !net || !layer || !width )
+                {
+                    return makeResult(
+                            false, false, wxS( "malformed_arguments" ),
+                            wxS( "routing.repair_bus_segments requires every "
+                                 "segment to resolve start, end, net, layer, and width." ),
+                            { { "tool", boundedPlanToolName },
+                              { "status", "malformed_arguments" },
+                              { "lane_index", laneIndex } } );
+                }
+
+                nlohmann::json operationArgs =
+                        { { "start", segment["start"] },
+                          { "end", segment["end"] },
+                          { "layer", *layer },
+                          { "net", *net },
+                          { "width", *width } };
+
+                if( segment.contains( "metadata" ) && segment["metadata"].is_object() )
+                    operationArgs["metadata"] = segment["metadata"];
+                else if( args.contains( "metadata" ) && args["metadata"].is_object() )
+                    operationArgs["metadata"] = args["metadata"];
+
+                if( aliasPrefix )
+                {
+                    operationArgs["alias"] = *aliasPrefix + ":lane:"
+                                             + std::to_string( laneIndex );
+                }
+                else if( segment.contains( "alias" ) && segment["alias"].is_string() )
+                {
+                    operationArgs["alias"] = segment["alias"];
+                }
+
+                operations.push_back(
+                        { { "kind", "pcb.create_track_segment" },
+                          { "arguments", std::move( operationArgs ) } } );
+                ++laneIndex;
+            }
+
+            args =
+                    { { "plan", { { "operations", std::move( operations ) } } },
+                      { "max_steps", laneIndex } };
+        }
+        else if( isRepairWrapperTool( toolName ) )
         {
             std::string operationKind;
             wxString    malformedMessage;
@@ -7039,6 +7427,40 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                              || !args["delta"].is_object();
                 malformedMessage =
                         wxS( "placement.repair_move_items requires handles and delta." );
+            }
+            else if( isPlacementRepairFootprintOrientationTool( toolName ) )
+            {
+                operationKind = "pcb.set_item_properties";
+                malformed = !args.contains( "handles" )
+                             || !args["handles"].is_array()
+                             || args["handles"].empty()
+                             || !args.contains( "target_orientation_degrees" )
+                             || !args["target_orientation_degrees"].is_number();
+                malformedMessage =
+                        wxS( "placement.repair_footprint_orientation requires "
+                             "handles and target_orientation_degrees." );
+
+                if( !malformed )
+                {
+                    nlohmann::json typedProps =
+                            { { "orientation_degrees",
+                                args["target_orientation_degrees"] } };
+
+                    if( args.contains( "current_orientation_degrees" )
+                        && args["current_orientation_degrees"].is_number() )
+                    {
+                        typedProps["current_orientation_degrees"] =
+                                args["current_orientation_degrees"];
+                    }
+
+                    if( args.contains( "target_side" )
+                        && args["target_side"].is_string() )
+                    {
+                        typedProps["side"] = args["target_side"];
+                    }
+
+                    args["typed_props"] = std::move( typedProps );
+                }
             }
             else if( isRoutingRepairSegmentTool( toolName ) )
             {
