@@ -5115,6 +5115,67 @@ BOOST_AUTO_TEST_CASE( ReplayTraceValidationRejectsMissingSchema )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationSummarizesPublishedAttempt )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceJson( traces.front().m_ReplayJson );
+
+    BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_SchemaVersion,
+                       AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+    BOOST_CHECK_EQUAL( evaluation.m_RuntimeStepId, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_TerminalState,
+                       wxString( wxS( "published" ) ) );
+    BOOST_CHECK( evaluation.m_Published );
+    BOOST_CHECK( !evaluation.m_Accepted );
+    BOOST_CHECK_EQUAL( evaluation.m_AttemptCount, 1 );
+    BOOST_CHECK_GE( evaluation.m_HiddenOperationCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_RenderResultCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidationResultCount, 1 );
+    BOOST_CHECK( evaluation.m_PreviewGateAllowed );
+    BOOST_CHECK( !evaluation.m_HasBlockingValidationIssue );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"hidden_operation_count\"" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"preview_gate_allowed\":true" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationRejectsInvalidTrace )
+{
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceJson(
+                    wxS( "{\"runtime\":\"next_action\","
+                         "\"runtime_step_id\":1,"
+                         "\"terminal_state\":\"published\"}" ) );
+
+    BOOST_CHECK( !evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_ErrorCode, wxString( wxS( "missing_schema" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.IsEmpty() );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 {
     auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
