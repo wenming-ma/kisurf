@@ -3,11 +3,13 @@
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_execution_session.h>
 #include <kisurf/ai/ai_preview_manager.h>
+#include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 #include <kisurf_ai_pcb_context_adapter.h>
 #include <kisurf_ai_pcb_object_resolver.h>
 #include <kisurf_ai_pcb_preview_adapter.h>
 #include <kisurf_ai_pcb_session_preview_service.h>
+#include <kisurf_ai_pcb_session_shadow_seeder.h>
 
 #include <board.h>
 #include <footprint.h>
@@ -489,6 +491,80 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardViaAndClearsBySessi
     previewService.ClearPreview( session.SessionId() );
 
     BOOST_CHECK( previewService.PreviewedItems().empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersSeededFootprintTransform )
+{
+    PCB_PREVIEW_FIXTURE fixture;
+    fixture.m_Footprint->SetPosition( VECTOR2I( 1000, 2000 ) );
+    fixture.m_Footprint->SetLayer( F_Cu );
+    fixture.m_Footprint->SetOrientation( EDA_ANGLE( 0.0, DEGREES_T ) );
+
+    KIGFX::VIEW         view;
+    KISURF_AI_PCB_SESSION_PREVIEW_SERVICE previewService( fixture.m_Board, view );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 21;
+    options.m_BoardId = wxS( "pcb-session-footprint-preview" );
+    options.m_BaseHash = wxS( "hash-a" );
+    options.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    AI_EXECUTION_SESSION session( std::move( options ) );
+
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( fixture.m_Board );
+    seeder.Seed( session );
+
+    std::vector<AI_SHADOW_ITEM> footprints =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":\"footprint\"}" ) );
+    BOOST_REQUIRE_EQUAL( footprints.size(), 1 );
+
+    const uint64_t stepId = session.BeginStep( wxS( "preview footprint transform" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    nlohmann::json handle = {
+        { "session_id", footprints.front().m_Handle.m_SessionId },
+        { "handle_id", footprints.front().m_Handle.m_HandleId },
+        { "generation", footprints.front().m_Handle.m_Generation }
+    };
+
+    nlohmann::json moveArgs = {
+        { "handles", nlohmann::json::array( { handle } ) },
+        { "target_positions", { { "x", 7000 }, { "y", 8000 } } }
+    };
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::MoveItems,
+            wxString::FromUTF8( moveArgs.dump().c_str() ) )
+                           .m_Ok );
+
+    nlohmann::json propsArgs = {
+        { "handle", handle },
+        { "typed_props", { { "orientation_degrees", 90.0 }, { "side", "B.Cu" } } }
+    };
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::SetItemProperties,
+            wxString::FromUTF8( propsArgs.dump().c_str() ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    AI_SESSION_PREVIEW_RESULT result =
+            previewService.RenderPreview( session, wxS( "{\"mode\":\"native\"}" ) );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_RenderedItemCount, 1 );
+    BOOST_REQUIRE_EQUAL( previewService.PreviewedItems().size(), 1 );
+
+    FOOTPRINT* previewFootprint =
+            dynamic_cast<FOOTPRINT*>( previewService.PreviewedItems().front() );
+    BOOST_REQUIRE( previewFootprint != nullptr );
+    BOOST_CHECK( previewFootprint != fixture.m_Footprint );
+    BOOST_CHECK_EQUAL( previewFootprint->GetPosition().x, 7000 );
+    BOOST_CHECK_EQUAL( previewFootprint->GetPosition().y, 8000 );
+    BOOST_CHECK_CLOSE( previewFootprint->GetOrientation().AsDegrees(), 90.0, 1e-6 );
+    BOOST_CHECK_EQUAL( previewFootprint->GetLayer(), B_Cu );
+
+    BOOST_CHECK_EQUAL( fixture.m_Footprint->GetPosition().x, 1000 );
+    BOOST_CHECK_EQUAL( fixture.m_Footprint->GetPosition().y, 2000 );
+    BOOST_CHECK_EQUAL( fixture.m_Footprint->GetLayer(), F_Cu );
 }
 
 
