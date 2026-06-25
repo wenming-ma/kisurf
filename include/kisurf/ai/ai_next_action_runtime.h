@@ -25,6 +25,8 @@
 #include <optional>
 #include <vector>
 
+#include <wx/arrstr.h>
+
 class AI_SESSION_PREVIEW_SERVICE;
 class AI_SESSION_VALIDATION_SERVICE;
 
@@ -265,6 +267,33 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 
 KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson );
+
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
+{
+    bool     m_Valid = true;
+    wxString m_FirstErrorCode;
+    wxString m_FirstErrorMessage;
+    size_t   m_TotalTraceCount = 0;
+    size_t   m_ValidTraceCount = 0;
+    size_t   m_InvalidTraceCount = 0;
+    size_t   m_PublishedCount = 0;
+    size_t   m_AcceptedCount = 0;
+    size_t   m_RejectedCount = 0;
+    size_t   m_ExpiredCount = 0;
+    size_t   m_SupersededCount = 0;
+    size_t   m_AbandonedCount = 0;
+    size_t   m_AttemptCount = 0;
+    size_t   m_HiddenOperationCount = 0;
+    size_t   m_RenderResultCount = 0;
+    size_t   m_ValidationResultCount = 0;
+    size_t   m_ToolResultCount = 0;
+    size_t   m_PreviewGateAllowedCount = 0;
+    size_t   m_BlockingValidationCount = 0;
+    wxString m_SummaryJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
+AiEvaluateNextActionReplayTraceBatch( const wxArrayString& aReplayTraceJsons );
 
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {

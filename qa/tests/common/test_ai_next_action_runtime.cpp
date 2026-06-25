@@ -5176,6 +5176,56 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationRejectsInvalidTrace )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceBatchEvaluationAggregatesValidAndInvalidTraces )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    wxArrayString batchInput;
+    batchInput.Add( traces.front().m_ReplayJson );
+    batchInput.Add( wxS( "{\"runtime\":\"next_action\","
+                         "\"runtime_step_id\":2,"
+                         "\"terminal_state\":\"published\"}" ) );
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT batch =
+            AiEvaluateNextActionReplayTraceBatch( batchInput );
+
+    BOOST_CHECK( !batch.m_Valid );
+    BOOST_CHECK_EQUAL( batch.m_TotalTraceCount, 2 );
+    BOOST_CHECK_EQUAL( batch.m_ValidTraceCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_InvalidTraceCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_FirstErrorCode,
+                       wxString( wxS( "missing_schema" ) ) );
+    BOOST_CHECK_EQUAL( batch.m_PublishedCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_AttemptCount, 1 );
+    BOOST_CHECK_GE( batch.m_HiddenOperationCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_RenderResultCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_ValidationResultCount, 1 );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"invalid_trace_count\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"published_count\":1" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 {
     auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();

@@ -7158,6 +7158,99 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 }
 
 
+AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
+AiEvaluateNextActionReplayTraceBatch(
+        const wxArrayString& aReplayTraceJsons )
+{
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result;
+    result.m_TotalTraceCount = aReplayTraceJsons.size();
+
+    for( size_t i = 0; i < aReplayTraceJsons.size(); ++i )
+    {
+        AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+                AiEvaluateNextActionReplayTraceJson( aReplayTraceJsons[i] );
+
+        if( !evaluation.m_Valid )
+        {
+            ++result.m_InvalidTraceCount;
+
+            if( result.m_FirstErrorCode.IsEmpty() )
+            {
+                result.m_FirstErrorCode = evaluation.m_ErrorCode;
+                result.m_FirstErrorMessage = evaluation.m_Message;
+            }
+
+            continue;
+        }
+
+        ++result.m_ValidTraceCount;
+
+        if( evaluation.m_Published )
+            ++result.m_PublishedCount;
+
+        if( evaluation.m_Accepted )
+            ++result.m_AcceptedCount;
+
+        if( evaluation.m_Rejected )
+            ++result.m_RejectedCount;
+
+        if( evaluation.m_Expired )
+            ++result.m_ExpiredCount;
+
+        if( evaluation.m_Superseded )
+            ++result.m_SupersededCount;
+
+        if( evaluation.m_Abandoned )
+            ++result.m_AbandonedCount;
+
+        if( evaluation.m_PreviewGateAllowed )
+            ++result.m_PreviewGateAllowedCount;
+
+        if( evaluation.m_HasBlockingValidationIssue )
+            ++result.m_BlockingValidationCount;
+
+        result.m_AttemptCount += evaluation.m_AttemptCount;
+        result.m_HiddenOperationCount += evaluation.m_HiddenOperationCount;
+        result.m_RenderResultCount += evaluation.m_RenderResultCount;
+        result.m_ValidationResultCount += evaluation.m_ValidationResultCount;
+        result.m_ToolResultCount += evaluation.m_ToolResultCount;
+    }
+
+    result.m_Valid = result.m_InvalidTraceCount == 0;
+
+    nlohmann::json summary =
+            { { "total_trace_count", result.m_TotalTraceCount },
+              { "valid_trace_count", result.m_ValidTraceCount },
+              { "invalid_trace_count", result.m_InvalidTraceCount },
+              { "published_count", result.m_PublishedCount },
+              { "accepted_count", result.m_AcceptedCount },
+              { "rejected_count", result.m_RejectedCount },
+              { "expired_count", result.m_ExpiredCount },
+              { "superseded_count", result.m_SupersededCount },
+              { "abandoned_count", result.m_AbandonedCount },
+              { "attempt_count", result.m_AttemptCount },
+              { "hidden_operation_count", result.m_HiddenOperationCount },
+              { "render_result_count", result.m_RenderResultCount },
+              { "validation_result_count", result.m_ValidationResultCount },
+              { "tool_result_count", result.m_ToolResultCount },
+              { "preview_gate_allowed_count",
+                result.m_PreviewGateAllowedCount },
+              { "blocking_validation_count",
+                result.m_BlockingValidationCount },
+              { "valid", result.m_Valid } };
+
+    if( !result.m_FirstErrorCode.IsEmpty() )
+    {
+        summary["first_error_code"] = toUtf8String( result.m_FirstErrorCode );
+        summary["first_error_message"] =
+                toUtf8String( result.m_FirstErrorMessage );
+    }
+
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
