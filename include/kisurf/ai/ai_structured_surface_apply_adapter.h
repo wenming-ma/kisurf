@@ -205,6 +205,50 @@ private:
 };
 
 
+class KICOMMON_API AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK
+{
+public:
+    virtual ~AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK() = default;
+
+    virtual bool BeginUiTransaction( const AI_EXECUTION_SESSION& aSession,
+                                     wxString& aError );
+    virtual bool BeforeUiCommit( const wxString& aSurfaceStateJson,
+                                 bool aChanged,
+                                 wxString& aError );
+    virtual bool AfterUiCommit( const wxString& aSurfaceStateJson,
+                                bool aChanged,
+                                wxString& aError );
+    virtual void AbortUiTransaction();
+};
+
+
+class KICOMMON_API AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND :
+        public AI_STRUCTURED_SURFACE_STATE_BACKEND
+{
+public:
+    AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND(
+            std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND> aBackend,
+            std::unique_ptr<AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK> aHook );
+    AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND(
+            const AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND& ) = delete;
+    AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND& operator=(
+            const AI_STRUCTURED_SURFACE_UI_TRANSACTION_BACKEND& ) = delete;
+
+    bool BeginSurfaceTransaction( const AI_EXECUTION_SESSION& aSession,
+                                  wxString& aSurfaceStateJson,
+                                  wxString& aError ) override;
+    bool CommitSurfaceTransaction( const wxString& aSurfaceStateJson,
+                                   bool aChanged,
+                                   wxString& aError ) override;
+    void AbortSurfaceTransaction() override;
+
+private:
+    std::unique_ptr<AI_STRUCTURED_SURFACE_STATE_BACKEND>    m_Backend;
+    std::unique_ptr<AI_STRUCTURED_SURFACE_UI_TRANSACTION_HOOK> m_Hook;
+    bool                                                   m_InTransaction = false;
+};
+
+
 class AI_STRUCTURED_SURFACE_APPLY_ADAPTER :
         public AI_ACCEPT_APPLY_ADAPTER
 {
