@@ -2966,6 +2966,18 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
     BOOST_CHECK_EQUAL(
             cellDiff["target_path"].get<std::string>(),
             "surfaces.board_setup.clearance.tables.clearance.rules.rows.row.power.cells.class" );
+    BOOST_REQUIRE( cellDiff.contains( "visual_target" ) );
+    const nlohmann::json& cellVisualTarget = cellDiff["visual_target"];
+    BOOST_CHECK_EQUAL( cellVisualTarget["kind"].get<std::string>(),
+                       "table_cell" );
+    BOOST_CHECK_EQUAL( cellVisualTarget["surface_id"].get<std::string>(),
+                       "board_setup.clearance" );
+    BOOST_CHECK_EQUAL( cellVisualTarget["table_id"].get<std::string>(),
+                       "clearance.rules" );
+    BOOST_CHECK_EQUAL( cellVisualTarget["row_id"].get<std::string>(),
+                       "row.power" );
+    BOOST_CHECK_EQUAL( cellVisualTarget["column_id"].get<std::string>(),
+                       "class" );
 
     const nlohmann::json& secondCellDiff =
             preview["surface_patch_diff_entries"].at( 1 );
@@ -2980,6 +2992,16 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
     BOOST_CHECK_EQUAL(
             secondCellDiff["target_path"].get<std::string>(),
             "surfaces.board_setup.clearance.tables.clearance.rules.rows.row.gpio.cells.class" );
+    BOOST_REQUIRE( preview.contains( "surface_patch_diff_summary" ) );
+    const nlohmann::json& diffSummary =
+            preview["surface_patch_diff_summary"];
+    BOOST_CHECK_EQUAL( diffSummary["diff_entry_count"].get<size_t>(), 2 );
+    BOOST_CHECK_EQUAL( diffSummary["table_cell_count"].get<size_t>(), 2 );
+    BOOST_CHECK_EQUAL( diffSummary["field_count"].get<size_t>(), 0 );
+    BOOST_CHECK_EQUAL(
+            diffSummary["unknown_previous_value_count"].get<size_t>(), 2 );
+    BOOST_CHECK_EQUAL( diffSummary["changed_value_count"].get<size_t>(), 0 );
+    BOOST_CHECK_EQUAL( diffSummary["unchanged_value_count"].get<size_t>(), 0 );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"surface_patch_fill_class\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
@@ -3040,6 +3062,16 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesValueAwareSurfacePatchDiff )
     BOOST_CHECK_EQUAL( diff["previous_value"].get<std::string>(), "Power" );
     BOOST_CHECK_EQUAL( diff["proposed_value"].get<std::string>(), "HighPower" );
     BOOST_CHECK( diff["value_changed"].get<bool>() );
+    BOOST_REQUIRE( revisedPreview.contains( "surface_patch_diff_summary" ) );
+    const nlohmann::json& summary =
+            revisedPreview["surface_patch_diff_summary"];
+    BOOST_CHECK_EQUAL( summary["diff_entry_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( summary["table_cell_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( summary["field_count"].get<size_t>(), 0 );
+    BOOST_CHECK_EQUAL( summary["changed_value_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( summary["unchanged_value_count"].get<size_t>(), 0 );
+    BOOST_CHECK_EQUAL(
+            summary["unknown_previous_value_count"].get<size_t>(), 0 );
 }
 
 
