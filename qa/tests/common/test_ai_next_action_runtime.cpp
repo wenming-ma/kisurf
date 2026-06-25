@@ -3935,6 +3935,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenCurrentContextDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -3968,6 +3976,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenDependencyFingerprintDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -4003,6 +4019,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenViewportFingerprintDrifted )
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"context_drift\"" ) ) );
 }
 
 
@@ -4037,6 +4061,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotAcceptGrade 
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
 }
 
 
@@ -4071,6 +4103,14 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenAttemptValidationIsNotExactPreview
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Expired );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"active\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_gate_result\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"gate\":\"accept\"" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"allowed\":false" ) ) );
+    BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"accept_validation_failed\"" ) ) );
 }
 
 

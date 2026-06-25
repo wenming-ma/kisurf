@@ -850,6 +850,53 @@ nlohmann::json parseObjectBody( const wxString& aBody )
 }
 
 
+void attachGateResultToSuggestion( AI_SUGGESTION_RECORD& aSuggestion,
+                                   const char* aKey,
+                                   const AI_NEXT_ACTION_GATE_RESULT& aGate )
+{
+    if( aSuggestion.m_RuntimeProvenanceJson.IsEmpty() )
+        return;
+
+    nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
+
+    if( !provenance.is_object() )
+        provenance = nlohmann::json::object();
+
+    nlohmann::json gate =
+            nlohmann::json::parse( toUtf8String( aGate.AsJsonText() ), nullptr,
+                                   false );
+
+    if( gate.is_discarded() || !gate.is_object() )
+        gate = nlohmann::json::object();
+
+    provenance[aKey] = std::move( gate );
+    aSuggestion.m_RuntimeProvenanceJson = fromUtf8String( provenance.dump() );
+}
+
+
+AI_NEXT_ACTION_GATE_RESULT acceptGateResult( bool aAllowed,
+                                             std::initializer_list<wxString> aReasons )
+{
+    AI_NEXT_ACTION_GATE_RESULT gate;
+    gate.m_Gate = wxS( "accept" );
+    gate.m_Allowed = aAllowed;
+
+    for( const wxString& reason : aReasons )
+        gate.m_Reasons.push_back( reason );
+
+    return gate;
+}
+
+
+void attachAcceptGateResult( AI_SUGGESTION_RECORD& aSuggestion,
+                             bool aAllowed,
+                             std::initializer_list<wxString> aReasons )
+{
+    attachGateResultToSuggestion( aSuggestion, "accept_gate_result",
+                                  acceptGateResult( aAllowed, aReasons ) );
+}
+
+
 nlohmann::json toolCallRecordJson( const AI_TOOL_CALL_RECORD& aToolCall )
 {
     nlohmann::json record =
@@ -5835,6 +5882,8 @@ bool AI_NEXT_ACTION_RUNTIME::Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aE
 
     if( !sameVersion( suggestion->m_ContextVersion, aCurrentContextVersion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "context_drift" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
@@ -5842,14 +5891,21 @@ bool AI_NEXT_ACTION_RUNTIME::Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aE
 
     if( !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "accept_validation_failed" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
     }
 
     if( !aEditSession.Apply( suggestion->m_EditObjects, suggestion->m_Validation ) )
+    {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "edit_apply_failed" ) } );
         return false;
+    }
 
+    attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
     return true;
@@ -5873,6 +5929,8 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
              && !runtimeAcceptTokenMatchesDependency( *suggestion,
                                                       aCurrentContextVersion ) ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "context_drift" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
@@ -5880,14 +5938,21 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
 
     if( !runtimeAttemptAcceptValidationSufficient( *suggestion ) )
     {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "accept_validation_failed" ) } );
         suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
         deactivateRuntimePreviewLease( *suggestion );
         return false;
     }
 
     if( !aEditSession.Apply( suggestion->m_EditObjects, suggestion->m_Validation ) )
+    {
+        attachAcceptGateResult( *suggestion, false,
+                                { wxS( "edit_apply_failed" ) } );
         return false;
+    }
 
+    attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
     return true;
