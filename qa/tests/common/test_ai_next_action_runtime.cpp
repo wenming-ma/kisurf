@@ -1373,6 +1373,131 @@ public:
 };
 
 
+class ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "routing candidate plan then script next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"routing\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"declared_net\":\"GND\","
+                                  "\"declared_layer\":\"F.Cu\","
+                                  "\"reason_code\":\"routing_candidate_plan_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Create a route item before asking for a replacement plan." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_create_route_subject" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{"
+                             "\"kind\":\"pcb.create_track_polyline\","
+                             "\"arguments\":{\"points\":["
+                             "{\"x\":1000000,\"y\":1000000},"
+                             "{\"x\":1800000,\"y\":1000000}],"
+                             "\"layer\":\"F.Cu\","
+                             "\"net\":\"GND\","
+                             "\"width\":150000,"
+                             "\"alias\":\"route_subject\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Generate a replacement path candidate for the created route." );
+
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
+                        nullptr, false );
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
+                const std::string handleJson = handle.dump();
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_generate_replace_path_candidate" );
+                call.m_ToolName = wxS( "routing_generate_replace_path_candidates" );
+                call.m_ArgumentsJson = wxString::Format(
+                        wxS( "{\"replace_handles\":[%s],"
+                             "\"replacement_points\":["
+                             "{\"x\":1000000,\"y\":1000000},"
+                             "{\"x\":1400000,\"y\":1250000},"
+                             "{\"x\":1800000,\"y\":1000000}],"
+                             "\"net\":\"GND\","
+                             "\"layer\":\"F.Cu\","
+                             "\"width\":150000}" ),
+                        wxString::FromUTF8( handleJson.c_str() ) );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Run the candidate bounded plan exactly as returned." );
+
+                nlohmann::json candidateResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.back().m_ResultJson.ToStdString(),
+                        nullptr, false );
+                nlohmann::json plan =
+                        candidateResult["candidates"].front()["plan"];
+                const std::string planJson = plan.dump();
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson = wxString::Format(
+                        wxS( "{\"plan\":%s,\"max_steps\":4}" ),
+                        wxString::FromUTF8( planJson.c_str() ) );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 3 )
+            {
+                response.m_Body = wxS( "Render the replacement path result." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_candidate_plan" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SCRIPT_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -5173,6 +5298,82 @@ BOOST_AUTO_TEST_CASE( RuntimeRoutingRepairBusSegmentsToolLowersAndFeedsRender )
             wxS( "\"routing_bus_repair:lane:1\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"kind\":\"pcb.create_track_segment\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesRoutingCandidateBoundedPlanThroughScriptTool )
+{
+    auto* provider =
+            new ROUTING_CANDIDATE_PLAN_THEN_SCRIPT_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 4 );
+
+    const AI_TOOL_CALL_RECORD& candidateResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( candidateResult.m_ToolCallId,
+                       wxString( wxS( "call_generate_replace_path_candidate" ) ) );
+    BOOST_CHECK_EQUAL( candidateResult.m_ToolName,
+                       wxString( wxS( "routing_generate_replace_path_candidates" ) ) );
+    BOOST_CHECK( candidateResult.m_Allowed );
+    BOOST_CHECK( candidateResult.m_Executed );
+    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
+            wxS( "\"plan\"" ) ) );
+    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.delete_items\"" ) ) );
+    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_track_polyline\"" ) ) );
+
+    const AI_TOOL_CALL_RECORD& scriptResult =
+            publishRequest.m_ToolResults.at( 2 );
+    BOOST_CHECK_EQUAL( scriptResult.m_ToolCallId,
+                       wxString( wxS( "call_execute_candidate_plan" ) ) );
+    BOOST_CHECK_EQUAL( scriptResult.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( scriptResult.m_Allowed );
+    BOOST_CHECK( scriptResult.m_Executed );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"status\":\"script_plan_executed\"" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.delete_items\"" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"kind\":\"pcb.create_track_polyline\"" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"replace_path_polyline:segment:0\"" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "\"replace_path_polyline:segment:1\"" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 3 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_candidate_plan" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"attempt_session_journal\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"merged_from_tool\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"call_execute_candidate_plan\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "\"call_execute_candidate_plan\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "\"replace_path_polyline:segment:1\"" ) ) );
 }
 
 
