@@ -1807,6 +1807,35 @@ public:
 };
 
 
+class GEOMETRY_ISSUE_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"grade\":\"preview\","
+                     "\"issue_count\":1,"
+                     "\"issues\":[{\"kind\":\"clearance\","
+                     "\"severity\":\"warning\","
+                     "\"message\":\"candidate is close to an existing track\","
+                     "\"geometry\":{\"bbox\":{\"x\":10,\"y\":20,\"w\":30,\"h\":40},"
+                     "\"layer\":\"F.Cu\","
+                     "\"net\":\"GND\"}}]}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
 class TRACKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -5418,6 +5447,46 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenDerivedValidationStateIsStale )
             wxS( "\"refill\"" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_ValidationFactsJson.Contains(
             wxS( "\"required\"" ) ) );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeIssueGeometryForReview )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    GEOMETRY_ISSUE_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE          previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    nlohmann::json facts = nlohmann::json::parse(
+            runtime.Attempts().front().m_ValidationFactsJson.ToStdString() );
+
+    BOOST_REQUIRE( facts.contains( "issue_geometry_facts" ) );
+    BOOST_REQUIRE( facts["issue_geometry_facts"].is_array() );
+    BOOST_REQUIRE_EQUAL( facts["issue_geometry_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            facts["issue_geometry_facts"].at( 0 )["kind"].get<std::string>(),
+            "clearance" );
+    BOOST_CHECK_EQUAL(
+            facts["issue_geometry_facts"].at( 0 )["severity"].get<std::string>(),
+            "warning" );
+    BOOST_CHECK_EQUAL(
+            facts["issue_geometry_facts"].at( 0 )["geometry"]["bbox"]["w"]
+                    .get<int>(),
+            30 );
+    BOOST_CHECK_EQUAL(
+            facts["issue_geometry_facts"].at( 0 )["geometry"]["layer"]
+                    .get<std::string>(),
+            "F.Cu" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }
 

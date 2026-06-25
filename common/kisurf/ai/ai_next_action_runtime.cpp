@@ -6936,6 +6936,62 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
                     serviceResult["validation"]["issue_count"].get<size_t>();
         }
 
+        if( serviceResult.contains( "validation" )
+            && serviceResult["validation"].is_object()
+            && serviceResult["validation"].contains( "issues" )
+            && serviceResult["validation"]["issues"].is_array() )
+        {
+            nlohmann::json issueGeometryFacts = nlohmann::json::array();
+            bool           truncated = false;
+
+            for( const nlohmann::json& issue : serviceResult["validation"]["issues"] )
+            {
+                if( !issue.is_object() )
+                    continue;
+
+                if( !issue.contains( "geometry" ) && !issue.contains( "bbox" )
+                    && !issue.contains( "region" ) )
+                {
+                    continue;
+                }
+
+                nlohmann::json fact = nlohmann::json::object();
+
+                for( const char* key : { "kind", "severity", "message", "code",
+                                         "rule", "net", "layer" } )
+                {
+                    if( issue.contains( key ) )
+                        fact[key] = issue[key];
+                }
+
+                if( issue.contains( "geometry" ) )
+                    fact["geometry"] = issue["geometry"];
+
+                if( issue.contains( "bbox" ) )
+                    fact["bbox"] = issue["bbox"];
+
+                if( issue.contains( "region" ) )
+                    fact["region"] = issue["region"];
+
+                issueGeometryFacts.push_back( std::move( fact ) );
+
+                if( issueGeometryFacts.size() >= 8 )
+                {
+                    truncated = true;
+                    break;
+                }
+            }
+
+            if( !issueGeometryFacts.empty() )
+            {
+                validation["issue_geometry_fact_count"] = issueGeometryFacts.size();
+                validation["issue_geometry_facts"] = std::move( issueGeometryFacts );
+
+                if( truncated )
+                    validation["issue_geometry_facts_truncated"] = true;
+            }
+        }
+
         if( !result.m_ErrorCode.IsEmpty() )
             validation["error_code"] = toUtf8String( result.m_ErrorCode );
 
