@@ -756,7 +756,7 @@ bool triggerIsActivePanel( const AI_SUGGESTION_TRIGGER& aTrigger )
 } // namespace
 
 
-std::optional<AI_SUGGESTION_RECORD> AI_VIA_PATTERN_NEXT_ACTION_PROVIDER::Suggest(
+std::optional<AI_SUGGESTION_RECORD> AiGenerateViaPatternCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
     if( !triggerIsActiveViaPlacement( aTrigger ) )
@@ -795,7 +795,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_VIA_PATTERN_NEXT_ACTION_PROVIDER::Suggest
 }
 
 
-std::optional<AI_SUGGESTION_RECORD> AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER::Suggest(
+std::optional<AI_SUGGESTION_RECORD> AiGenerateRoutingSegmentCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
     if( !triggerIsActiveRouting( aTrigger ) )
@@ -832,7 +832,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER::Sug
 }
 
 
-std::optional<AI_SUGGESTION_RECORD> AI_PANEL_TABLE_NEXT_ACTION_PROVIDER::Suggest(
+std::optional<AI_SUGGESTION_RECORD> AiGeneratePanelTableFillCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
     if( !triggerIsActivePanel( aTrigger ) )
@@ -874,46 +874,4 @@ std::optional<AI_SUGGESTION_RECORD> AI_PANEL_TABLE_NEXT_ACTION_PROVIDER::Suggest
         suggestion.m_Fingerprint << wxS( "|" ) << rowId;
 
     return suggestion;
-}
-
-
-AI_NEXT_ACTION_CONTROLLER::~AI_NEXT_ACTION_CONTROLLER() = default;
-
-
-void AI_NEXT_ACTION_CONTROLLER::AddProvider(
-        std::unique_ptr<AI_SUGGESTION_PROVIDER> aProvider )
-{
-    if( aProvider )
-        m_Providers.push_back( std::move( aProvider ) );
-}
-
-
-std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_CONTROLLER::Suggest(
-        const AI_SUGGESTION_TRIGGER& aTrigger )
-{
-    const AI_CONTEXT_VERSION version = effectiveVersion( aTrigger );
-    const AI_TOOL_STATE_KIND toolKind = aTrigger.m_ContextSnapshot.m_ToolState.m_Kind;
-
-    for( const std::unique_ptr<AI_SUGGESTION_PROVIDER>& provider : m_Providers )
-    {
-        std::optional<AI_SUGGESTION_RECORD> suggestion = provider->Suggest( aTrigger );
-
-        if( !suggestion )
-            continue;
-
-        if( !suggestion->m_Fingerprint.IsEmpty() && m_LastContextVersion
-            && m_LastFingerprint == suggestion->m_Fingerprint
-            && m_LastToolStateKind == toolKind
-            && sameVersion( *m_LastContextVersion, version ) )
-        {
-            return std::nullopt;
-        }
-
-        m_LastFingerprint = suggestion->m_Fingerprint;
-        m_LastContextVersion = version;
-        m_LastToolStateKind = toolKind;
-        return suggestion;
-    }
-
-    return std::nullopt;
 }

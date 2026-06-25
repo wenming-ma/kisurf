@@ -4067,24 +4067,27 @@ std::vector<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_TOOL_REGISTRY::GenerateCandidat
 
     if( packetKind == "placement" )
     {
-        AI_VIA_PATTERN_NEXT_ACTION_PROVIDER viaProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> via = viaProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> via =
+                    AiGenerateViaPatternCandidate( trigger ) )
+        {
             candidates.push_back( *via );
+        }
     }
     else if( packetKind == "routing" )
     {
-        AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER routingProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> route = routingProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> route =
+                    AiGenerateRoutingSegmentCandidate( trigger ) )
+        {
             candidates.push_back( *route );
+        }
     }
     else if( packetKind == "structured_surface" )
     {
-        AI_PANEL_TABLE_NEXT_ACTION_PROVIDER panelProvider;
-
-        if( std::optional<AI_SUGGESTION_RECORD> panel = panelProvider.Suggest( trigger ) )
+        if( std::optional<AI_SUGGESTION_RECORD> panel =
+                    AiGeneratePanelTableFillCandidate( trigger ) )
+        {
             candidates.push_back( *panel );
+        }
     }
 
     return candidates;

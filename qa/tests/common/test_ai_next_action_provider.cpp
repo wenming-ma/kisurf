@@ -5,46 +5,6 @@
 
 namespace
 {
-class QUEUED_SUGGESTION_PROVIDER : public AI_SUGGESTION_PROVIDER
-{
-public:
-    std::optional<AI_SUGGESTION_RECORD> Suggest(
-            const AI_SUGGESTION_TRIGGER& ) override
-    {
-        ++m_CallCount;
-
-        if( !m_NextSuggestion )
-            return std::nullopt;
-
-        AI_SUGGESTION_RECORD suggestion = *m_NextSuggestion;
-
-        if( m_OneShot )
-            m_NextSuggestion.reset();
-
-        return suggestion;
-    }
-
-    int                                m_CallCount = 0;
-    bool                               m_OneShot = true;
-    std::optional<AI_SUGGESTION_RECORD> m_NextSuggestion;
-};
-
-
-AI_SUGGESTION_RECORD makeQueuedSuggestion( const wxString& aTitle,
-                                           const wxString& aFingerprint )
-{
-    AI_SUGGESTION_RECORD suggestion;
-    suggestion.m_EditorKind = AI_EDITOR_KIND::Pcb;
-    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
-    suggestion.m_Title = aTitle;
-    suggestion.m_Body = wxS( "Preview before applying." );
-    suggestion.m_Fingerprint = aFingerprint;
-    suggestion.m_PreviewObjects.push_back(
-            AI_OBJECT_REF( KIID(), PCB_TRACE_T, wxS( "preview:queued" ) ) );
-    return suggestion;
-}
-
-
 wxString viaDetails( int aX, int aY, const wxString& aNetName,
                      int aDiameter = 600000 )
 {
@@ -186,58 +146,11 @@ AI_SUGGESTION_TRIGGER makePanelTableTrigger(
 BOOST_AUTO_TEST_SUITE( AiNextActionProvider )
 
 
-BOOST_AUTO_TEST_CASE( ControllerReturnsFirstAvailableProviderSuggestion )
-{
-    auto* first = new QUEUED_SUGGESTION_PROVIDER();
-    auto* second = new QUEUED_SUGGESTION_PROVIDER();
-    second->m_NextSuggestion = makeQueuedSuggestion( wxS( "Second provider" ),
-                                                     wxS( "second" ) );
-
-    AI_NEXT_ACTION_CONTROLLER controller;
-    controller.AddProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER>( first ) );
-    controller.AddProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER>( second ) );
-
-    BOOST_CHECK_EQUAL( controller.ProviderCount(), 2 );
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion =
-            controller.Suggest( makeRoutingTrigger() );
-
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_CHECK_EQUAL( suggestion->m_Title, wxString( wxS( "Second provider" ) ) );
-    BOOST_CHECK_EQUAL( first->m_CallCount, 1 );
-    BOOST_CHECK_EQUAL( second->m_CallCount, 1 );
-}
-
-
-BOOST_AUTO_TEST_CASE( ControllerSuppressesDuplicateFingerprintInSameContext )
-{
-    auto* provider = new QUEUED_SUGGESTION_PROVIDER();
-    provider->m_OneShot = false;
-    provider->m_NextSuggestion = makeQueuedSuggestion( wxS( "Repeat" ),
-                                                       wxS( "repeat-fingerprint" ) );
-
-    AI_NEXT_ACTION_CONTROLLER controller;
-    controller.AddProvider( std::unique_ptr<AI_SUGGESTION_PROVIDER>( provider ) );
-
-    AI_SUGGESTION_TRIGGER first = makeRoutingTrigger();
-    AI_SUGGESTION_TRIGGER second = makeRoutingTrigger();
-    AI_SUGGESTION_TRIGGER changed = makeRoutingTrigger();
-    changed.m_ContextVersion.m_DocumentRevision = 32;
-    changed.m_ContextSnapshot.m_Version = changed.m_ContextVersion;
-    changed.m_ContextSnapshot.m_ToolState.m_ContextVersion = changed.m_ContextVersion;
-
-    BOOST_CHECK( controller.Suggest( first ).has_value() );
-    BOOST_CHECK( !controller.Suggest( second ).has_value() );
-    BOOST_CHECK( controller.Suggest( changed ).has_value() );
-}
-
-
 BOOST_AUTO_TEST_CASE( ThreeHorizontalViasSuggestNextViaPreview )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = provider.Suggest(
-            makeViaTrigger( { viaRef( 100, 50 ), viaRef( 200, 50 ), viaRef( 300, 50 ) } ) );
+    std::optional<AI_SUGGESTION_RECORD> suggestion = AiGenerateViaPatternCandidate(
+            makeViaTrigger( { viaRef( 100, 50 ), viaRef( 200, 50 ),
+                              viaRef( 300, 50 ) } ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK_EQUAL( static_cast<int>( suggestion->m_EditorKind ),
@@ -267,9 +180,7 @@ BOOST_AUTO_TEST_CASE( ThreeHorizontalViasSuggestNextViaPreview )
 
 BOOST_AUTO_TEST_CASE( ThreeVerticalViasSuggestNextViaPreview )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = provider.Suggest(
+    std::optional<AI_SUGGESTION_RECORD> suggestion = AiGenerateViaPatternCandidate(
             makeViaTrigger( { viaRef( 20, 100, wxS( "/CLK" ) ),
                               viaRef( 20, 200, wxS( "/CLK" ) ),
                               viaRef( 20, 300, wxS( "/CLK" ) ) } ) );
@@ -289,9 +200,7 @@ BOOST_AUTO_TEST_CASE( ThreeVerticalViasSuggestNextViaPreview )
 
 BOOST_AUTO_TEST_CASE( TwoAlignedViasSuggestLowConfidenceCandidate )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = provider.Suggest(
+    std::optional<AI_SUGGESTION_RECORD> suggestion = AiGenerateViaPatternCandidate(
             makeViaTrigger( { viaRef( 100, 50 ), viaRef( 200, 50 ) } ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
@@ -308,9 +217,7 @@ BOOST_AUTO_TEST_CASE( TwoAlignedViasSuggestLowConfidenceCandidate )
 
 BOOST_AUTO_TEST_CASE( NonAlignedViasDoNotSuggestCandidate )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    BOOST_CHECK( !provider.Suggest(
+    BOOST_CHECK( !AiGenerateViaPatternCandidate(
                            makeViaTrigger( { viaRef( 100, 50 ), viaRef( 220, 70 ),
                                              viaRef( 300, 50 ) } ) )
                           .has_value() );
@@ -319,9 +226,7 @@ BOOST_AUTO_TEST_CASE( NonAlignedViasDoNotSuggestCandidate )
 
 BOOST_AUTO_TEST_CASE( WrongNetViasDoNotSuggestCandidate )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    BOOST_CHECK( !provider.Suggest(
+    BOOST_CHECK( !AiGenerateViaPatternCandidate(
                            makeViaTrigger( { viaRef( 100, 50, wxS( "GND" ) ),
                                              viaRef( 200, 50, wxS( "VCC" ) ) } ) )
                           .has_value() );
@@ -330,9 +235,7 @@ BOOST_AUTO_TEST_CASE( WrongNetViasDoNotSuggestCandidate )
 
 BOOST_AUTO_TEST_CASE( StaleOrInactiveContextDoesNotSuggestCandidate )
 {
-    AI_VIA_PATTERN_NEXT_ACTION_PROVIDER provider;
-
-    BOOST_CHECK( !provider.Suggest(
+    BOOST_CHECK( !AiGenerateViaPatternCandidate(
                            makeViaTrigger( { viaRef( 100, 50 ), viaRef( 200, 50 ) },
                                            AI_TOOL_STATE_KIND::Selecting ) )
                           .has_value() );
@@ -342,15 +245,14 @@ BOOST_AUTO_TEST_CASE( StaleOrInactiveContextDoesNotSuggestCandidate )
     trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Schematic;
     trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Schematic;
 
-    BOOST_CHECK( !provider.Suggest( trigger ).has_value() );
+    BOOST_CHECK( !AiGenerateViaPatternCandidate( trigger ).has_value() );
 }
 
 
 BOOST_AUTO_TEST_CASE( RoutingToolStateSuggestsSegmentPreview )
 {
-    AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER provider;
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion = provider.Suggest( makeRoutingTrigger() );
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            AiGenerateRoutingSegmentCandidate( makeRoutingTrigger() );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK_EQUAL( static_cast<int>( suggestion->m_EditorKind ),
@@ -381,13 +283,10 @@ BOOST_AUTO_TEST_CASE( RoutingToolStateSuggestsSegmentPreview )
 
 BOOST_AUTO_TEST_CASE( RoutingProviderUsesToolStateCursorWhenModeContextOmitsCursor )
 {
-    AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER provider;
-
     std::optional<AI_SUGGESTION_RECORD> suggestion =
-            provider.Suggest( makeRoutingTrigger( routingModeContext( wxS( "GND" ),
-                                                                      wxS( "B.Cu" ),
-                                                                      120000,
-                                                                      false ) ) );
+            AiGenerateRoutingSegmentCandidate( makeRoutingTrigger(
+                    routingModeContext( wxS( "GND" ), wxS( "B.Cu" ), 120000,
+                                        false ) ) );
 
     BOOST_REQUIRE( suggestion.has_value() );
 
@@ -404,14 +303,12 @@ BOOST_AUTO_TEST_CASE( RoutingProviderUsesToolStateCursorWhenModeContextOmitsCurs
 
 BOOST_AUTO_TEST_CASE( RoutingProviderRejectsInactiveOrIncompleteContext )
 {
-    AI_ROUTING_SEGMENT_NEXT_ACTION_PROVIDER provider;
-
-    BOOST_CHECK( !provider.Suggest(
+    BOOST_CHECK( !AiGenerateRoutingSegmentCandidate(
                            makeRoutingTrigger( routingModeContext(),
                                                AI_TOOL_STATE_KIND::Selecting ) )
                           .has_value() );
 
-    BOOST_CHECK( !provider.Suggest(
+    BOOST_CHECK( !AiGenerateRoutingSegmentCandidate(
                            makeRoutingTrigger( wxS( "{\"layer\":\"F.Cu\",\"width\":150000,"
                                                     "\"start\":{\"x\":100,\"y\":200},"
                                                     "\"cursor\":{\"x\":260,\"y\":200}}" ) ) )
@@ -420,16 +317,14 @@ BOOST_AUTO_TEST_CASE( RoutingProviderRejectsInactiveOrIncompleteContext )
     AI_SUGGESTION_TRIGGER stale = makeRoutingTrigger();
     stale.m_ContextSnapshot.m_ToolState.m_ContextVersion.m_DocumentRevision = 30;
 
-    BOOST_CHECK( !provider.Suggest( stale ).has_value() );
+    BOOST_CHECK( !AiGenerateRoutingSegmentCandidate( stale ).has_value() );
 }
 
 
 BOOST_AUTO_TEST_CASE( PanelTableStateSuggestsColumnFillPreview )
 {
-    AI_PANEL_TABLE_NEXT_ACTION_PROVIDER provider;
-
     std::optional<AI_SUGGESTION_RECORD> suggestion =
-            provider.Suggest( makePanelTableTrigger() );
+            AiGeneratePanelTableFillCandidate( makePanelTableTrigger() );
 
     BOOST_REQUIRE( suggestion.has_value() );
     BOOST_CHECK_EQUAL( static_cast<int>( suggestion->m_EditorKind ),
@@ -454,20 +349,20 @@ BOOST_AUTO_TEST_CASE( PanelTableStateSuggestsColumnFillPreview )
 
 BOOST_AUTO_TEST_CASE( PanelTableProviderRejectsMalformedOrLowConfidenceState )
 {
-    AI_PANEL_TABLE_NEXT_ACTION_PROVIDER provider;
-
     AI_SUGGESTION_TRIGGER nonPanel = makePanelTableTrigger();
     nonPanel.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Selecting;
-    BOOST_CHECK( !provider.Suggest( nonPanel ).has_value() );
+    BOOST_CHECK( !AiGeneratePanelTableFillCandidate( nonPanel ).has_value() );
 
-    BOOST_CHECK( !provider.Suggest( makePanelTableTrigger( wxS( "{" ) ) ).has_value() );
-    BOOST_CHECK( !provider.Suggest( makePanelTableTrigger(
+    BOOST_CHECK( !AiGeneratePanelTableFillCandidate(
+                           makePanelTableTrigger( wxS( "{" ) ) )
+                          .has_value() );
+    BOOST_CHECK( !AiGeneratePanelTableFillCandidate( makePanelTableTrigger(
                           panelTableStateJson( wxS( "0.20 mm" ), 2, false ) ) )
                           .has_value() );
-    BOOST_CHECK( !provider.Suggest( makePanelTableTrigger(
+    BOOST_CHECK( !AiGeneratePanelTableFillCandidate( makePanelTableTrigger(
                           panelTableStateJson( wxEmptyString, 2 ) ) )
                           .has_value() );
-    BOOST_CHECK( !provider.Suggest( makePanelTableTrigger(
+    BOOST_CHECK( !AiGeneratePanelTableFillCandidate( makePanelTableTrigger(
                           panelTableStateJson( wxS( "0.20 mm" ), 1 ) ) )
                           .has_value() );
 }
