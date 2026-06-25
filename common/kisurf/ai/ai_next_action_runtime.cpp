@@ -382,6 +382,12 @@ bool isRoutingBusCandidateTool( const std::string& aToolName )
 }
 
 
+bool isPlacementFootprintTransformCandidateTool( const std::string& aToolName )
+{
+    return aToolName == "placement.generate_footprint_transform_candidates";
+}
+
+
 bool isRepairWrapperTool( const std::string& aToolName )
 {
     return isSurfaceRepairPatchTool( aToolName )
@@ -4278,6 +4284,32 @@ nlohmann::json candidateLandingFactsJson(
                  { "width", operation->m_Width } };
     }
 
+    if( operation->IsMove() || operation->IsMoveSelected() )
+    {
+        const nlohmann::json arguments = objectFromJsonText( aCandidate.m_ArgumentsJson );
+
+        if( arguments.value( "source_tool", std::string() )
+                    == "placement.generate_footprint_transform_candidates"
+            && arguments.contains( "footprint_transform_facts" )
+            && arguments["footprint_transform_facts"].is_object() )
+        {
+            const nlohmann::json& facts = arguments["footprint_transform_facts"];
+            int targetX = 0;
+            int targetY = 0;
+
+            if( jsonPointToInts( facts.value( "target_position",
+                                              nlohmann::json::object() ),
+                                 targetX, targetY ) )
+            {
+                return { { "kind", "placement_landing" },
+                         { "source", "footprint_transform.target_position" },
+                         { "position", pointRecordJson( targetX, targetY ) },
+                         { "delta", pointJson( operation->m_MoveDelta ) },
+                         { "transform_kind", "translate" } };
+            }
+        }
+    }
+
     return nlohmann::json::object();
 }
 
@@ -4305,6 +4337,13 @@ nlohmann::json candidateRecordJson( const AI_SUGGESTION_RECORD& aCandidate,
 
     if( arguments.contains( "bus_facts" ) && arguments["bus_facts"].is_object() )
         record["bus_facts"] = arguments["bus_facts"];
+
+    if( arguments.contains( "footprint_transform_facts" )
+        && arguments["footprint_transform_facts"].is_object() )
+    {
+        record["footprint_transform_facts"] =
+                arguments["footprint_transform_facts"];
+    }
 
     nlohmann::json landingFacts = candidateLandingFactsJson( aCandidate );
 
@@ -4339,6 +4378,79 @@ std::optional<int> positiveIntField( const nlohmann::json& aObject,
     }
 
     return aObject[aField].get<int>();
+}
+
+
+nlohmann::json placementFootprintTransformCandidatePayloadJson(
+        const nlohmann::json& aArgs )
+{
+    int currentX = 0;
+    int currentY = 0;
+    int targetX = 0;
+    int targetY = 0;
+
+    if( !jsonPointToInts( aArgs.value( "current_position",
+                                       nlohmann::json::object() ),
+                          currentX, currentY )
+        || !jsonPointToInts( aArgs.value( "target_position",
+                                          nlohmann::json::object() ),
+                             targetX, targetY ) )
+    {
+        return { { "tool", "placement.generate_footprint_transform_candidates" },
+                 { "status", "malformed_arguments" },
+                 { "error_code", "malformed_arguments" },
+                 { "message",
+                   "placement.generate_footprint_transform_candidates requires "
+                   "current_position and target_position points." },
+                 { "candidate_count", 0 },
+                 { "candidates", nlohmann::json::array() } };
+    }
+
+    const int dx = targetX - currentX;
+    const int dy = targetY - currentY;
+    const std::string footprintRef =
+            stringField( aArgs, "footprint_ref" ).value_or( "selected_footprint" );
+    nlohmann::json transformFacts =
+            { { "footprint_ref", footprintRef },
+              { "current_position", pointRecordJson( currentX, currentY ) },
+              { "target_position", pointRecordJson( targetX, targetY ) },
+              { "delta", pointRecordJson( dx, dy ) },
+              { "transform_kind", "translate" },
+              { "rotation_supported", false },
+              { "generation_strategy", "translate_current_to_target" } };
+    nlohmann::json operation =
+            { { "operation", "move_selected" },
+              { "source_tool",
+                "placement.generate_footprint_transform_candidates" },
+              { "candidate_strategy", "translate_current_to_target" },
+              { "dx", dx },
+              { "dy", dy },
+              { "footprint_transform_facts", transformFacts } };
+    nlohmann::json candidate =
+            { { "index", 0 },
+              { "title", "Footprint placement transform" },
+              { "body",
+                "Candidate selected-footprint translation to a target position." },
+              { "source_tool",
+                "placement.generate_footprint_transform_candidates" },
+              { "context_kind", "placement" },
+              { "preview_object_count", 1 },
+              { "edit_object_count", 1 },
+              { "arguments", operation },
+              { "operation", "move_selected" },
+              { "footprint_transform_facts", transformFacts },
+              { "landing_facts",
+                { { "kind", "placement_landing" },
+                  { "source", "footprint_transform.target_position" },
+                  { "position", pointRecordJson( targetX, targetY ) },
+                  { "delta", pointRecordJson( dx, dy ) },
+                  { "transform_kind", "translate" } } },
+              { "publish_allowed", false } };
+
+    return { { "tool", "placement.generate_footprint_transform_candidates" },
+             { "status", "candidates_generated" },
+             { "candidate_count", 1 },
+             { "candidates", nlohmann::json::array( { candidate } ) } };
 }
 
 
@@ -5514,6 +5626,13 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "read_only" },
                 { "candidate_source", "internal_via_pattern_library" },
                 { "can_publish", false } },
+              { { "name", "placement.generate_footprint_transform_candidates" },
+                { "layer", "integrated" },
+                { "role", "candidate_generation" },
+                { "work_state", "placement" },
+                { "side_effect", "read_only" },
+                { "candidate_source", "internal_footprint_transform_library" },
+                { "can_publish", false } },
               { { "name", "routing.generate_segment_candidates" },
                 { "layer", "integrated" },
                 { "role", "candidate_generation" },
@@ -5716,6 +5835,23 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "When omitted, the latest merged script batch is restored." } };
                     parameters["required"] = nlohmann::json::array(
                             { "checkpoint_id" } );
+                }
+                else if( isPlacementFootprintTransformCandidateTool( aName ) )
+                {
+                    parameters["properties"]["footprint_ref"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional footprint reference designator for facts." } };
+                    parameters["properties"]["current_position"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Current x/y position of the footprint being placed." } };
+                    parameters["properties"]["target_position"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Target x/y position for the placement candidate." } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "current_position", "target_position" } );
                 }
                 else if( isRoutingParallelCandidateTool( aName ) )
                 {
@@ -6227,6 +6363,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "placement.generate_via_pattern_candidates" );
                 }
 
+                if( name == "placement_generate_footprint_transform_candidates"
+                    || name == "placement.generate_footprint_transform_candidates" )
+                {
+                    return std::string(
+                            "placement.generate_footprint_transform_candidates" );
+                }
+
                 if( name == "routing_generate_segment_candidates"
                     || name == "routing.generate_segment_candidates" )
                 {
@@ -6402,6 +6545,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                   { "status", "candidates_generated" },
                   { "candidate_count", candidates.size() },
                   { "candidates", candidates } } );
+    }
+
+    if( toolName == "placement.generate_footprint_transform_candidates" )
+    {
+        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json payload =
+                placementFootprintTransformCandidatePayloadJson( args );
+        const bool malformed =
+                payload.value( "status", std::string() ) == "malformed_arguments";
+        const wxString errorCode =
+                malformed ? wxString( wxS( "malformed_arguments" ) ) : wxString();
+        const wxString message =
+                malformed
+                        ? wxString( wxS( "placement.generate_footprint_transform_candidates "
+                                         "received malformed arguments." ) )
+                        : wxString( wxS( "Candidates generated." ) );
+
+        return makeResult(
+                !malformed, !malformed, errorCode, message,
+                std::move( payload ) );
     }
 
     if( toolName == "routing.generate_parallel_segment_candidates" )

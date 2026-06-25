@@ -1965,6 +1965,10 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.generate_via_pattern_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
+            wxS( "\"name\":\"placement.generate_footprint_transform_candidates\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
+            wxS( "\"candidate_source\":\"internal_footprint_transform_library\"" ) ) );
+    BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_parallel_segment_candidates\"" ) ) );
@@ -2021,6 +2025,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     bool sawScriptTool = false;
     bool sawRepairTool = false;
+    bool sawPlacementFootprintTransformTool = false;
+    bool sawPlacementFootprintTransformRequiredPoints = false;
     bool sawPlacementRepairTool = false;
     bool sawPlacementMoveRepairTool = false;
     bool sawRoutingRepairTool = false;
@@ -2088,6 +2094,38 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
         if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
+
+        if( functionName == "placement_generate_footprint_transform_candidates" )
+        {
+            sawPlacementFootprintTransformTool = true;
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool hasCurrentPosition = false;
+            bool hasTargetPosition = false;
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "current_position" )
+                    {
+                        hasCurrentPosition = true;
+                    }
+
+                    if( value.is_string()
+                        && value.get<std::string>() == "target_position" )
+                    {
+                        hasTargetPosition = true;
+                    }
+                }
+            }
+
+            sawPlacementFootprintTransformRequiredPoints =
+                    hasCurrentPosition && hasTargetPosition;
+        }
 
         if( functionName == "placement_repair_via" )
         {
@@ -2332,6 +2370,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawRepairTool );
+    BOOST_CHECK( sawPlacementFootprintTransformTool );
+    BOOST_CHECK( sawPlacementFootprintTransformRequiredPoints );
     BOOST_CHECK( sawPlacementRepairTool );
     BOOST_CHECK( sawPlacementMoveRepairTool );
     BOOST_CHECK( sawRoutingRepairTool );
@@ -3113,6 +3153,59 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
     BOOST_CHECK_EQUAL( placementLanding["position"]["x"].get<int>(), 400 );
     BOOST_CHECK_EQUAL( placementLanding["net"].get<std::string>(), "GND" );
     BOOST_CHECK( !placementLanding["source"].get<std::string>().empty() );
+
+    auto* footprintTransformProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
+            wxS( "placement_generate_footprint_transform_candidates" ),
+            wxS( "placement" ),
+            -1,
+            wxS( "{\"footprint_ref\":\"U1\","
+                 "\"current_position\":{\"x\":100,\"y\":200},"
+                 "\"target_position\":{\"x\":160,\"y\":230}}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES footprintTransformServices;
+    AI_NEXT_ACTION_RUNTIME footprintTransformRuntime{
+            std::unique_ptr<AI_PROVIDER>( footprintTransformProvider ),
+            &footprintTransformServices.m_Validation,
+            &footprintTransformServices.m_Preview };
+
+    BOOST_REQUIRE( footprintTransformRuntime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( footprintTransformProvider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL(
+            footprintTransformProvider->m_Requests.at( 1 ).m_ToolResults.size(),
+            1 );
+
+    nlohmann::json footprintTransformResult = nlohmann::json::parse(
+            footprintTransformProvider->m_Requests.at( 1 ).m_ToolResults.front()
+                    .m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( footprintTransformResult["tool"].get<std::string>(),
+                       "placement.generate_footprint_transform_candidates" );
+    BOOST_CHECK_EQUAL( footprintTransformResult["status"].get<std::string>(),
+                       "candidates_generated" );
+    BOOST_CHECK_EQUAL( footprintTransformResult["candidate_count"].get<int>(), 1 );
+    BOOST_CHECK( !footprintTransformResult["publish_allowed"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( footprintTransformResult["candidates"].size(), 1 );
+
+    const nlohmann::json& footprintCandidate =
+            footprintTransformResult["candidates"].at( 0 );
+    BOOST_CHECK_EQUAL( footprintCandidate["source_tool"].get<std::string>(),
+                       "placement.generate_footprint_transform_candidates" );
+    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["operation"].get<std::string>(),
+                       "move_selected" );
+    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["dx"].get<int>(), 60 );
+    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["dy"].get<int>(), 30 );
+    BOOST_CHECK_EQUAL(
+            footprintCandidate["landing_facts"]["source"].get<std::string>(),
+            "footprint_transform.target_position" );
+    BOOST_CHECK_EQUAL(
+            footprintCandidate["landing_facts"]["position"]["x"].get<int>(),
+            160 );
+    BOOST_CHECK_EQUAL(
+            footprintCandidate["footprint_transform_facts"]["footprint_ref"]
+                    .get<std::string>(),
+            "U1" );
+    BOOST_CHECK_EQUAL(
+            footprintCandidate["footprint_transform_facts"]["delta"]["y"].get<int>(),
+            30 );
 
     auto* routingProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_segment_candidates" ),
