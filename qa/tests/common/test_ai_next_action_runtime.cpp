@@ -6649,11 +6649,14 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationSummarizesPublishedAttempt )
     BOOST_CHECK_EQUAL( evaluation.m_RenderResultCount, 1 );
     BOOST_CHECK_EQUAL( evaluation.m_ValidationResultCount, 1 );
     BOOST_CHECK( evaluation.m_PreviewGateAllowed );
+    BOOST_CHECK( evaluation.m_WorkStateInteractionSemanticsPresent );
     BOOST_CHECK( !evaluation.m_HasBlockingValidationIssue );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"hidden_operation_count\"" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"preview_gate_allowed\":true" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"work_state_interaction_semantics_present\":true" ) ) );
 }
 
 

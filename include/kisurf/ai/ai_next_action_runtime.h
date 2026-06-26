@@ -277,6 +277,7 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
     size_t   m_ValidationResultCount = 0;
     size_t   m_ToolResultCount = 0;
     bool     m_PreviewGateAllowed = false;
+    bool     m_WorkStateInteractionSemanticsPresent = false;
     bool     m_HasBlockingValidationIssue = false;
     wxString m_QualityMetricJson;
 };
