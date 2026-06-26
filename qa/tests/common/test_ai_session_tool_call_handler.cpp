@@ -1108,6 +1108,28 @@ BOOST_AUTO_TEST_CASE( DirectAtomicOperationAppliesToShadowSessionOnly )
 }
 
 
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationRejectsRawBoardAccessBeforeMutation )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"raw-board-via\",\"net\":\"GND\","
+                           "\"position\":{\"x\":25,\"y\":50},"
+                           "\"raw_board_access\":true}}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "forbidden_runtime_capability" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"forbidden_field\":\"arguments.raw_board_access\"" ) ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunCellRejectsChangedSelectionRevisionBeforePythonWorkerRuns )
 {
     AI_PYTHON_CELL_RESULT workerResult;
@@ -1844,6 +1866,48 @@ BOOST_AUTO_TEST_CASE( RunCellRejectsMalformedPythonOperationArguments )
     BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
                        "malformed_operation_arguments" );
     BOOST_CHECK( payload["rolled_back"].get<bool>() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RunCellRejectsForbiddenPythonOperationCapability )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "forbidden python operation capability" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"forbidden-cell-via\",\"net\":\"GND\","
+                   "\"position\":{\"x\":25,\"y\":50},"
+                   "\"direct_publish\":true}" ) } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"session.create_via(...)\","
+                           "\"cell_id\":\"cell-forbidden-capability\"}" ) ) );
+
+    BOOST_REQUIRE( result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Epoch(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 0 );
+    BOOST_CHECK( !handler.ActiveSession()->ResolveAlias(
+            wxS( "forbidden-cell-via" ) ).has_value() );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "cell_failed" );
+    BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
+                       "forbidden_runtime_capability" );
+    BOOST_CHECK( payload["rolled_back"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( payload["operation_results"].size(), 1 );
+    BOOST_CHECK_EQUAL( payload["operation_results"][0]["status"].get<std::string>(),
+                       "forbidden_runtime_capability" );
+    BOOST_CHECK_EQUAL( payload["operation_results"][0]["forbidden_field"].get<std::string>(),
+                       "operation[0].arguments.direct_publish" );
 }
 
 

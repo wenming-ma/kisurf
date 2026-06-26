@@ -777,6 +777,26 @@ AI_TOOL_INVOCATION_RESULT deniedResult( const AI_PROVIDER_REQUEST& aRequest,
 }
 
 
+AI_TOOL_INVOCATION_RESULT deniedResult( const AI_PROVIDER_REQUEST& aRequest,
+                                        const AI_TOOL_CALL_RECORD& aToolCall,
+                                        const wxString& aErrorCode,
+                                        const wxString& aMessage,
+                                        nlohmann::json aPayload )
+{
+    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
+    result.m_Allowed = false;
+    result.m_Executed = false;
+    result.m_ErrorCode = aErrorCode;
+    result.m_Message = aMessage;
+
+    if( !aPayload.contains( "status" ) )
+        aPayload["status"] = "denied";
+
+    result.m_ResultJson = resultJson( result, std::move( aPayload ) );
+    return result;
+}
+
+
 AI_TOOL_INVOCATION_RESULT allowedResult( const AI_PROVIDER_REQUEST& aRequest,
                                          const AI_TOOL_CALL_RECORD& aToolCall,
                                          bool aExecuted, const wxString& aMessage,
@@ -1510,6 +1530,75 @@ bool parsePythonOperationArguments( const wxString& aText, nlohmann::json& aArgu
 
     aArguments = std::move( parsed );
     return true;
+}
+
+
+bool forbiddenSessionRuntimeCapabilityKey( const std::string& aKey )
+{
+    return aKey == "direct_publish"
+           || aKey == "publish"
+           || aKey == "publish_preview"
+           || aKey == "publish.preview"
+           || aKey == "raw_board_access"
+           || aKey == "raw_board"
+           || aKey == "raw_board_pointer"
+           || aKey == "board_pointer";
+}
+
+
+std::string sessionJsonPathChild( const std::string& aParent,
+                                  const std::string& aChild )
+{
+    if( aParent.empty() )
+        return aChild;
+
+    return aParent + "." + aChild;
+}
+
+
+std::string sessionJsonPathIndex( const std::string& aParent, size_t aIndex )
+{
+    return aParent + "[" + std::to_string( aIndex ) + "]";
+}
+
+
+bool findForbiddenSessionRuntimeCapability( const nlohmann::json& aValue,
+                                            std::string aPath,
+                                            std::string& aForbiddenPath )
+{
+    if( aValue.is_object() )
+    {
+        for( const auto& [key, value] : aValue.items() )
+        {
+            const std::string childPath = sessionJsonPathChild( aPath, key );
+
+            if( forbiddenSessionRuntimeCapabilityKey( key ) )
+            {
+                aForbiddenPath = childPath;
+                return true;
+            }
+
+            if( findForbiddenSessionRuntimeCapability( value, childPath,
+                                                       aForbiddenPath ) )
+            {
+                return true;
+            }
+        }
+    }
+    else if( aValue.is_array() )
+    {
+        for( size_t i = 0; i < aValue.size(); ++i )
+        {
+            if( findForbiddenSessionRuntimeCapability(
+                        aValue[i], sessionJsonPathIndex( aPath, i ),
+                        aForbiddenPath ) )
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 
@@ -2880,8 +2969,13 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                           { "board_mutated", false } } );
             }
 
-            for( const AI_PYTHON_OPERATION_REQUEST& operation : workerResult.m_Operations )
+            for( size_t operationIndex = 0;
+                 operationIndex < workerResult.m_Operations.size();
+                 ++operationIndex )
             {
+                const AI_PYTHON_OPERATION_REQUEST& operation =
+                        workerResult.m_Operations[operationIndex];
+
                 if( !operationErrorCode.IsEmpty() )
                     break;
 
@@ -2892,6 +2986,28 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                                     operationMessage ) )
                 {
                     operationErrorCode = wxS( "malformed_operation_arguments" );
+                    break;
+                }
+
+                std::string forbiddenPath;
+                const std::string operationPath =
+                        "operation[" + std::to_string( operationIndex )
+                        + "].arguments";
+
+                if( findForbiddenSessionRuntimeCapability(
+                            operationArguments, operationPath, forbiddenPath ) )
+                {
+                    operationErrorCode = wxS( "forbidden_runtime_capability" );
+                    operationMessage = wxString::Format(
+                            wxS( "Python operation requested forbidden runtime "
+                                 "capability: %s." ),
+                            wxString::FromUTF8( forbiddenPath.c_str() ) );
+                    operationResults.push_back(
+                            { { "kind", toUtf8String( AiSessionOperationKindId(
+                                              operation.m_Kind ) ) },
+                              { "status", "forbidden_runtime_capability" },
+                              { "forbidden_field", forbiddenPath },
+                              { "board_mutated", false } } );
                     break;
                 }
 
@@ -3256,6 +3372,23 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                     aRequest, aToolCall, wxS( "unsupported_operation_kind" ),
                     wxString::Format( wxS( "Unsupported KiSurf atomic operation '%s'." ),
                                       wxString::FromUTF8( kindName.c_str() ) ) );
+        }
+
+        std::string forbiddenPath;
+        if( findForbiddenSessionRuntimeCapability(
+                    arguments["arguments"], std::string( "arguments" ),
+                    forbiddenPath ) )
+        {
+            return deniedResult(
+                    aRequest, aToolCall, wxS( "forbidden_runtime_capability" ),
+                    wxString::Format(
+                            wxS( "Atomic operation requested forbidden runtime "
+                                 "capability: %s." ),
+                            wxString::FromUTF8( forbiddenPath.c_str() ) ),
+                    { { "status", "forbidden_runtime_capability" },
+                      { "kind", kindName },
+                      { "forbidden_field", forbiddenPath },
+                      { "board_mutated", false } } );
         }
 
         if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
