@@ -1281,10 +1281,11 @@ std::vector<wxString> makeNetItemGraphEntries( const BOARD& aBoard, int aNetCode
 
 struct NET_COMPONENT_FACTS
 {
-    std::vector<wxString>                    m_ComponentEntries;
+    std::vector<wxString>                      m_ComponentEntries;
     std::map<const BOARD_CONNECTED_ITEM*, int> m_ItemToComponent;
-    size_t                                  m_ComponentCount = 0;
-    bool                                    m_ComponentSampleTruncated = false;
+    std::map<int, std::vector<BOARD_CONNECTED_ITEM*>> m_ComponentItems;
+    size_t                                    m_ComponentCount = 0;
+    bool                                      m_ComponentSampleTruncated = false;
 };
 
 
@@ -1377,6 +1378,8 @@ NET_COMPONENT_FACTS makeNetComponentFacts(
 
         for( BOARD_CONNECTED_ITEM* componentItem : componentItems )
             facts.m_ItemToComponent[componentItem] = componentIndex;
+
+        facts.m_ComponentItems[componentIndex] = componentItems;
 
         if( facts.m_ComponentEntries.size() >= maxComponentSample )
         {
@@ -1701,6 +1704,158 @@ std::vector<wxString> makeNetComponentSummaryEntries(
 }
 
 
+wxString componentGraphNodeId( int aNetCode, int aComponentIndex )
+{
+    return wxString::Format( wxS( "net:%d:component:%d" ), aNetCode, aComponentIndex );
+}
+
+
+wxString componentGraphNodeJson( const NETINFO_ITEM& aNet, int aComponentIndex,
+                                 const std::vector<BOARD_CONNECTED_ITEM*>& aItems )
+{
+    std::vector<wxString> itemEntries;
+    BOX2I                 bbox;
+    bool                  hasBBox = false;
+
+    for( const BOARD_CONNECTED_ITEM* item : aItems )
+    {
+        if( !item )
+            continue;
+
+        itemEntries.push_back( componentItemJson( *item ) );
+
+        if( hasBBox )
+            bbox.Merge( item->GetBoundingBox() );
+        else
+        {
+            bbox = item->GetBoundingBox();
+            hasBBox = true;
+        }
+    }
+
+    return wxString::Format(
+            wxS( "{\"id\":%s,\"net_code\":%d,\"net_name\":%s,"
+                 "\"component_index\":%d,\"item_count\":%zu,"
+                 "\"bbox\":%s,\"items\":%s}" ),
+            quotedJson( componentGraphNodeId( aNet.GetNetCode(), aComponentIndex ) ),
+            aNet.GetNetCode(), quotedJson( aNet.GetNetname() ), aComponentIndex,
+            aItems.size(), hasBBox ? boxRectDetailsJson( bbox ) : wxString( wxS( "null" ) ),
+            jsonArray( itemEntries ) );
+}
+
+
+std::vector<wxString> makeBoardComponentGraphNodeEntries(
+        const BOARD& aBoard, const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity,
+        bool& aTruncated )
+{
+    constexpr size_t      maxGraphNodeSample = 64;
+    std::vector<wxString> entries;
+
+    if( !aConnectivity )
+        return entries;
+
+    for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
+    {
+        if( !net || net->GetNetCode() == NETINFO_LIST::UNCONNECTED )
+            continue;
+
+        NET_COMPONENT_FACTS componentFacts =
+                makeNetComponentFacts( aConnectivity, net->GetNetCode() );
+
+        for( const auto& [componentIndex, componentItems] : componentFacts.m_ComponentItems )
+        {
+            if( entries.size() >= maxGraphNodeSample )
+            {
+                aTruncated = true;
+                return entries;
+            }
+
+            entries.push_back( componentGraphNodeJson( *net, componentIndex,
+                                                       componentItems ) );
+        }
+    }
+
+    return entries;
+}
+
+
+std::vector<wxString> makeBoardComponentGraphEdgeEntries(
+        const BOARD& aBoard, const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity,
+        bool& aTruncated )
+{
+    constexpr size_t      maxGraphEdgeSample = 64;
+    std::vector<wxString> entries;
+
+    if( !aConnectivity )
+        return entries;
+
+    for( NETINFO_ITEM* net : aBoard.GetNetInfo() )
+    {
+        if( !net || net->GetNetCode() == NETINFO_LIST::UNCONNECTED )
+            continue;
+
+        NET_COMPONENT_FACTS componentFacts =
+                makeNetComponentFacts( aConnectivity, net->GetNetCode() );
+        int edgeIndex = 0;
+
+        aConnectivity->RunOnUnconnectedEdges(
+                [&]( CN_EDGE& aEdge ) -> bool
+                {
+                    if( edgeNetCode( aEdge ) != net->GetNetCode() )
+                        return true;
+
+                    const std::shared_ptr<const CN_ANCHOR> sourceNode =
+                            aEdge.GetSourceNode();
+                    const std::shared_ptr<const CN_ANCHOR> targetNode =
+                            aEdge.GetTargetNode();
+                    const int sourceComponent =
+                            componentIndexForAnchor( sourceNode,
+                                                     componentFacts.m_ItemToComponent );
+                    const int targetComponent =
+                            componentIndexForAnchor( targetNode,
+                                                     componentFacts.m_ItemToComponent );
+
+                    if( sourceComponent < 0 || targetComponent < 0
+                        || sourceComponent == targetComponent )
+                    {
+                        return true;
+                    }
+
+                    if( entries.size() >= maxGraphEdgeSample )
+                    {
+                        aTruncated = true;
+                        return false;
+                    }
+
+                    entries.push_back( wxString::Format(
+                            wxS( "{\"id\":%s,\"net_code\":%d,\"net_name\":%s,"
+                                 "\"kind\":\"ratsnest\",\"from\":%s,\"to\":%s,"
+                                 "\"visible\":%s,"
+                                 "\"source_component\":%d,\"target_component\":%d,"
+                                 "\"source\":%s,\"target\":%s}" ),
+                            quotedJson( wxString::Format( wxS( "net:%d:ratsnest:%d" ),
+                                                          net->GetNetCode(),
+                                                          edgeIndex++ ) ),
+                            net->GetNetCode(), quotedJson( net->GetNetname() ),
+                            quotedJson( componentGraphNodeId( net->GetNetCode(),
+                                                              sourceComponent ) ),
+                            quotedJson( componentGraphNodeId( net->GetNetCode(),
+                                                              targetComponent ) ),
+                            boolJson( aEdge.IsVisible() ), sourceComponent, targetComponent,
+                            connectivityEndpointJson( sourceNode ),
+                            connectivityEndpointJson( targetNode ) ) );
+
+                    return true;
+                } );
+
+        if( aTruncated )
+            return entries;
+    }
+
+    return entries;
+}
+
+
 wxString makeLayerContextJson( const BOARD& aBoard )
 {
     const LSET&           enabledLayers = aBoard.GetEnabledLayers();
@@ -1765,6 +1920,10 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
                     "\"local_ratsnest_line_count\":0,"
                     "\"net_component_summaries\":[],"
                     "\"net_component_summary_sample_truncated\":false,"
+                    "\"component_graph_nodes\":[],"
+                    "\"component_graph_node_sample_truncated\":false,"
+                    "\"component_graph_edges\":[],"
+                    "\"component_graph_edge_sample_truncated\":false,"
                     "\"unconnected_edges\":[],"
                     "\"unconnected_edge_sample_truncated\":false}" );
     }
@@ -1773,8 +1932,16 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
     std::vector<wxString>  edgeEntries;
     bool                   edgeSampleTruncated = false;
     bool                   componentSummaryTruncated = false;
+    bool                   graphNodeSampleTruncated = false;
+    bool                   graphEdgeSampleTruncated = false;
     std::vector<wxString>  componentSummaryEntries =
             makeNetComponentSummaryEntries( aBoard, connectivity, componentSummaryTruncated );
+    std::vector<wxString>  componentGraphNodeEntries =
+            makeBoardComponentGraphNodeEntries( aBoard, connectivity,
+                                                graphNodeSampleTruncated );
+    std::vector<wxString>  componentGraphEdgeEntries =
+            makeBoardComponentGraphEdgeEntries( aBoard, connectivity,
+                                                graphEdgeSampleTruncated );
 
     auto endpointJson =
             []( const std::shared_ptr<const CN_ANCHOR>& aAnchor ) -> wxString
@@ -1837,12 +2004,18 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
                  "\"local_ratsnest_line_count\":%zu,"
                  "\"net_component_summaries\":%s,"
                  "\"net_component_summary_sample_truncated\":%s,"
+                 "\"component_graph_nodes\":%s,"
+                 "\"component_graph_node_sample_truncated\":%s,"
+                 "\"component_graph_edges\":%s,"
+                 "\"component_graph_edge_sample_truncated\":%s,"
                  "\"unconnected_edges\":%s,"
                  "\"unconnected_edge_sample_truncated\":%s}" ),
             connectivity->GetNetCount(), connectivity->GetNodeCount(),
             connectivity->GetPadCount(), connectivity->GetUnconnectedCount( false ),
             connectivity->GetUnconnectedCount( true ), connectivity->GetLocalRatsnest().size(),
             jsonArray( componentSummaryEntries ), boolJson( componentSummaryTruncated ),
+            jsonArray( componentGraphNodeEntries ), boolJson( graphNodeSampleTruncated ),
+            jsonArray( componentGraphEdgeEntries ), boolJson( graphEdgeSampleTruncated ),
             jsonArray( edgeEntries ), boolJson( edgeSampleTruncated ) );
 }
 

@@ -605,6 +605,48 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
 
     BOOST_REQUIRE( summaryRoutedComponent );
     BOOST_CHECK_EQUAL( ( *summaryRoutedComponent )["item_count"].get<int>(), 3 );
+
+    BOOST_REQUIRE( connectivity.contains( "component_graph_nodes" ) );
+    BOOST_REQUIRE( connectivity.contains( "component_graph_edges" ) );
+    BOOST_REQUIRE_EQUAL( connectivity["component_graph_nodes"].size(), 2u );
+    BOOST_REQUIRE_EQUAL( connectivity["component_graph_edges"].size(), 1u );
+    BOOST_CHECK_EQUAL( connectivity["component_graph_node_sample_truncated"].get<bool>(),
+                       false );
+    BOOST_CHECK_EQUAL( connectivity["component_graph_edge_sample_truncated"].get<bool>(),
+                       false );
+
+    std::set<int> graphNodeItemCounts;
+    std::set<std::string> graphNodeLabels;
+
+    for( const nlohmann::json& node : connectivity["component_graph_nodes"] )
+    {
+        BOOST_CHECK_EQUAL( node["net_code"].get<int>(), 1 );
+        BOOST_CHECK_EQUAL( node["net_name"].get<std::string>(), "/SIG" );
+        BOOST_CHECK( node["id"].get<std::string>().find( "net:1:component:" ) == 0 );
+        BOOST_CHECK( node.contains( "bbox" ) );
+
+        graphNodeItemCounts.insert( node["item_count"].get<int>() );
+
+        for( const nlohmann::json& item : node["items"] )
+            graphNodeLabels.insert( item["label"].get<std::string>() );
+    }
+
+    BOOST_CHECK( graphNodeItemCounts == std::set<int>( { 1, 3 } ) );
+    BOOST_CHECK( graphNodeLabels.find( "U1.1" ) != graphNodeLabels.end() );
+    BOOST_CHECK( graphNodeLabels.find( "U2.1" ) != graphNodeLabels.end() );
+    BOOST_CHECK( graphNodeLabels.find( "U3.1" ) != graphNodeLabels.end() );
+
+    const nlohmann::json& graphEdge = connectivity["component_graph_edges"][0];
+    BOOST_CHECK_EQUAL( graphEdge["net_code"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( graphEdge["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL( graphEdge["kind"].get<std::string>(), "ratsnest" );
+    BOOST_CHECK_EQUAL( graphEdge["visible"].get<bool>(), true );
+    BOOST_CHECK_NE( graphEdge["from"].get<std::string>(),
+                    graphEdge["to"].get<std::string>() );
+    BOOST_CHECK( graphEdge["from"].get<std::string>().find( "net:1:component:" ) == 0 );
+    BOOST_CHECK( graphEdge["to"].get<std::string>().find( "net:1:component:" ) == 0 );
+    BOOST_CHECK( graphEdge["source"].contains( "position" ) );
+    BOOST_CHECK( graphEdge["target"].contains( "position" ) );
 }
 
 
