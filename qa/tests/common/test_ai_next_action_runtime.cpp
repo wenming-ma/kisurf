@@ -5598,6 +5598,37 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_candidate_facts"].at( 0 )
                     ["suggested_render_region"]["bbox"]["width"].get<int>(),
             100 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_candidate_summary" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["source"].get<std::string>(),
+            "placement_candidate_facts" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["candidate_count"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["nearest_manhattan_distance"]
+                    .get<int>(),
+            50 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["top_anchor_id"]
+                    .get<std::string>(),
+            "place_candidate_1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["top_placeable_kind"]
+                    .get<std::string>(),
+            "via" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["top_candidate_position"]["x"]
+                    .get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["top_suggested_tool_call"]
+                    ["name"].get<std::string>(),
+            "placement.repair_via" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_summary"]["top_candidate_obstacle_count"]
+                    .get<int>(),
+            3 );
     BOOST_REQUIRE(
             placementPacket["placement_candidate_facts"].at( 0 )
                     .contains( "candidate_obstacle_facts" ) );
