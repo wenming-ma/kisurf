@@ -4977,6 +4977,26 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_candidate_facts"].at( 0 )["placeable_kind"]
                     .get<std::string>(),
             "via" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_render_region"]["source"].get<std::string>(),
+            "placement_candidate_region" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_render_region"]["mode"].get<std::string>(),
+            "placement_candidate_review" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_render_region"]["bbox"]["x"].get<int>(),
+            170 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_render_region"]["bbox"]["y"].get<int>(),
+            40 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_render_region"]["bbox"]["width"].get<int>(),
+            100 );
     BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 5 );
     BOOST_CHECK_EQUAL(
