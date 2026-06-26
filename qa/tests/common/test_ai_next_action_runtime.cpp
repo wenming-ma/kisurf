@@ -660,6 +660,69 @@ public:
 };
 
 
+class MUTATION_BUDGET_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "mutation budget next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"mutation_budget_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.size() < 8 )
+            {
+                const unsigned long long index =
+                        static_cast<unsigned long long>(
+                                aRequest.m_ToolResults.size() + 1 );
+                const unsigned long long x = 1600000 + index * 100000;
+
+                response.m_Body = wxS( "Need another bounded script mutation." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId =
+                        wxString::Format( wxS( "call_script_plan_%llu" ),
+                                          index );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxString::Format(
+                                wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                                     "\"arguments\":{\"position\":{\"x\":%llu,\"y\":2400000},"
+                                     "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                                     "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                                     "\"alias\":\"budget_via_%llu\"}}]},\"max_steps\":1}" ),
+                                x, index );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SURFACE_PATCH_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -7039,6 +7102,54 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenReviewToolResultFailed )
     BOOST_CHECK( review.Contains( wxS( "tool_round_budget_exceeded" ) ) );
     BOOST_CHECK( review.Contains( wxS( "provider_tool_result_failed" ) ) );
     BOOST_CHECK( review.Contains( wxS( "\"allowed\":false" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsMutationToolBeforeExceedingPolicy )
+{
+    auto* provider = new MUTATION_BUDGET_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 8 );
+
+    BOOST_CHECK_EQUAL( toolResults.at( 0 ).m_ToolCallId,
+                       wxString( wxS( "call_script_plan_1" ) ) );
+    BOOST_CHECK( toolResults.at( 0 ).m_Executed );
+    BOOST_CHECK_EQUAL( toolResults.at( 1 ).m_ToolCallId,
+                       wxString( wxS( "call_script_plan_2" ) ) );
+    BOOST_CHECK( toolResults.at( 1 ).m_Executed );
+
+    BOOST_CHECK( toolResults.at( 6 ).m_Executed );
+
+    const AI_TOOL_CALL_RECORD& rejected = toolResults.at( 7 );
+    BOOST_CHECK_EQUAL( rejected.m_ToolCallId,
+                       wxString( wxS( "call_script_plan_8" ) ) );
+    BOOST_CHECK( !rejected.m_Allowed );
+    BOOST_CHECK( !rejected.m_Executed );
+    BOOST_CHECK_EQUAL( rejected.m_ErrorCode,
+                       wxString( wxS( "mutation_budget_exceeded" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"status\":\"mutation_budget_exceeded\"" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"attempt_mutation_count\":8" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL(
+            runtime.Attempts().front().m_BudgetCounters.m_MutationCount, 8 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "budget_via_8" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "provider_tool_result_failed" ) ) );
 }
 
 
