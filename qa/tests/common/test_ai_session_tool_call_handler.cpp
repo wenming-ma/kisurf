@@ -533,6 +533,34 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                          ["expected_surface_revision"].is_object() );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
                          ["expected_schema_version"].is_object() );
+    BOOST_REQUIRE( operationContracts.contains( "pcb.create_shape" ) );
+
+    const nlohmann::json& createShapeContract =
+            operationContracts["pcb.create_shape"];
+    BOOST_REQUIRE( createShapeContract["properties"].contains( "shape_type" ) );
+    BOOST_REQUIRE( createShapeContract["properties"]["shape_type"].contains( "enum" ) );
+    BOOST_CHECK( std::find(
+                         createShapeContract["properties"]["shape_type"]["enum"].begin(),
+                         createShapeContract["properties"]["shape_type"]["enum"].end(),
+                         "polygon" )
+                 != createShapeContract["properties"]["shape_type"]["enum"].end() );
+
+    BOOST_REQUIRE( createShapeContract["properties"].contains( "geometry" ) );
+    const nlohmann::json& geometryContract =
+            createShapeContract["properties"]["geometry"];
+    BOOST_REQUIRE( geometryContract.contains( "properties" ) );
+    BOOST_REQUIRE( geometryContract["properties"].contains( "points" ) );
+    const nlohmann::json& pointsContract =
+            geometryContract["properties"]["points"];
+    BOOST_CHECK_EQUAL( pointsContract.value( "minItems", 0 ), 3 );
+    BOOST_REQUIRE( pointsContract.contains( "items" ) );
+    BOOST_REQUIRE( pointsContract["items"].contains( "required" ) );
+    BOOST_CHECK( std::find( pointsContract["items"]["required"].begin(),
+                            pointsContract["items"]["required"].end(), "x" )
+                 != pointsContract["items"]["required"].end() );
+    BOOST_CHECK( std::find( pointsContract["items"]["required"].begin(),
+                            pointsContract["items"]["required"].end(), "y" )
+                 != pointsContract["items"]["required"].end() );
 
     BOOST_REQUIRE( catalogTool( "kisurf_query_items" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "layer",

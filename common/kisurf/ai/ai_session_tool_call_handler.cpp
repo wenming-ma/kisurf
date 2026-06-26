@@ -174,6 +174,15 @@ nlohmann::json catalogStringArraySchema( const char* aDescription )
 }
 
 
+nlohmann::json catalogPointArraySchema( const char* aDescription, int aMinItems )
+{
+    return { { "type", "array" },
+             { "description", aDescription },
+             { "items", catalogPointSchema( "Internal-coordinate x/y point." ) },
+             { "minItems", aMinItems } };
+}
+
+
 nlohmann::json sessionAtomicOperationContractsJson()
 {
     return {
@@ -214,9 +223,9 @@ nlohmann::json sessionAtomicOperationContractsJson()
             { "additionalProperties", true },
             { "properties",
               { { "points",
-                  { { "type", "array" },
-                    { "items", catalogPointSchema( "Polyline point." ) },
-                    { "minItems", 2 } } },
+                  catalogPointArraySchema(
+                          "Ordered route polyline points using internal coordinates.",
+                          2 ) },
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
                 { "width", { { "type", "integer" }, { "minimum", 1 } } },
@@ -245,9 +254,30 @@ nlohmann::json sessionAtomicOperationContractsJson()
           { { "type", "object" },
             { "additionalProperties", true },
             { "properties",
-              { { "shape_type", { { "type", "string" } } },
+              { { "shape_type",
+                  { { "type", "string" },
+                    { "enum",
+                      nlohmann::json::array( { "segment", "line", "rectangle",
+                                                "circle", "arc", "polygon",
+                                                "poly" } ) },
+                    { "description",
+                      "Shape primitive to create. Polygon/poly use geometry.points." } } },
                 { "geometry",
-                  { { "type", "object" }, { "additionalProperties", true } } },
+                  { { "type", "object" },
+                    { "additionalProperties", true },
+                    { "description",
+                      "Shape geometry. Segment/rectangle use start/end; circle uses "
+                      "center/radius; arc uses start/mid/end; polygon uses points." },
+                    { "properties",
+                      { { "start", catalogPointSchema( "Shape start point." ) },
+                        { "end", catalogPointSchema( "Shape end point." ) },
+                        { "center", catalogPointSchema( "Circle center point." ) },
+                        { "mid", catalogPointSchema( "Arc midpoint." ) },
+                        { "radius", { { "type", "integer" }, { "minimum", 1 } } },
+                        { "points",
+                          catalogPointArraySchema(
+                                  "Polygon outline points using internal coordinates.",
+                                  3 ) } } } } },
                 { "layer", { { "type", "string" } } },
                 { "width", { { "type", "integer" }, { "minimum", 0 } } },
                 { "fill", { { "type", "boolean" } } },

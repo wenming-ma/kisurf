@@ -4428,6 +4428,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingConstraintRerouteRequiredFacts = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
+    bool sawScriptShapePolygonContract = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
@@ -4649,6 +4650,47 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
                     if( functionName == "repair_apply_bounded_plan" )
                         sawRepairSurfacePatchKind = true;
+                }
+            }
+
+            if( functionName == "script_run_bounded_plan"
+                && function["parameters"].contains( "$defs" )
+                && function["parameters"]["$defs"].contains( "operation_contracts" ) )
+            {
+                const nlohmann::json& contracts =
+                        function["parameters"]["$defs"]["operation_contracts"];
+
+                if( contracts.contains( "pcb.create_shape" ) )
+                {
+                    const nlohmann::json& shapeContract =
+                            contracts["pcb.create_shape"];
+
+                    const bool hasPolygonKind =
+                            shapeContract["properties"].contains( "shape_type" )
+                            && shapeContract["properties"]["shape_type"].contains( "enum" )
+                            && std::find(
+                                       shapeContract["properties"]["shape_type"]
+                                                    ["enum"].begin(),
+                                       shapeContract["properties"]["shape_type"]
+                                                    ["enum"].end(),
+                                       "polygon" )
+                                       != shapeContract["properties"]["shape_type"]
+                                                      ["enum"].end();
+                    const bool hasPolygonPoints =
+                            shapeContract["properties"].contains( "geometry" )
+                            && shapeContract["properties"]["geometry"].contains(
+                                       "properties" )
+                            && shapeContract["properties"]["geometry"]["properties"]
+                                       .contains( "points" )
+                            && shapeContract["properties"]["geometry"]["properties"]
+                                            ["points"].value( "minItems", 0 )
+                                       == 3
+                            && pointSchemaRequiresXY(
+                                       shapeContract["properties"]["geometry"]
+                                                    ["properties"]["points"]["items"] );
+
+                    sawScriptShapePolygonContract =
+                            hasPolygonKind && hasPolygonPoints;
                 }
             }
         }
@@ -5187,6 +5229,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     }
                 }
             }
+
         }
     }
 
@@ -5216,6 +5259,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingConstraintRerouteRequiredFacts );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
+    BOOST_CHECK( sawScriptShapePolygonContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );

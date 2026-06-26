@@ -11527,9 +11527,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                     { "additionalProperties", true },
                                     { "properties",
                                       { { "points",
-                                          { { "type", "array" },
-                                            { "items", pointSchema( "Polyline point." ) },
-                                            { "minItems", 2 } } },
+                                          pointArraySchema(
+                                                  "Ordered route polyline points using internal coordinates.",
+                                                  2 ) },
                                         { "layer", { { "type", "string" } } },
                                         { "net", { { "type", "string" } } },
                                         { "width",
@@ -11567,10 +11567,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                   { { "type", "object" },
                                     { "additionalProperties", true },
                                     { "properties",
-                                      { { "shape_type", { { "type", "string" } } },
+                                      { { "shape_type",
+                                          { { "type", "string" },
+                                            { "enum",
+                                              nlohmann::json::array(
+                                                      { "segment", "line",
+                                                        "rectangle", "circle",
+                                                        "arc", "polygon", "poly" } ) },
+                                            { "description",
+                                              "Shape primitive to create. Polygon/poly use geometry.points." } } },
                                         { "geometry",
                                           { { "type", "object" },
-                                            { "additionalProperties", true } } },
+                                            { "additionalProperties", true },
+                                            { "description",
+                                              "Shape geometry. Segment/rectangle use start/end; "
+                                              "circle uses center/radius; arc uses start/mid/end; "
+                                              "polygon uses points." },
+                                            { "properties",
+                                              { { "start", pointSchema( "Shape start point." ) },
+                                                { "end", pointSchema( "Shape end point." ) },
+                                                { "center", pointSchema( "Circle center point." ) },
+                                                { "mid", pointSchema( "Arc midpoint." ) },
+                                                { "radius",
+                                                  { { "type", "integer" },
+                                                    { "minimum", 1 } } },
+                                                { "points",
+                                                  pointArraySchema(
+                                                          "Polygon outline points using internal coordinates.",
+                                                          3 ) } } } } },
                                         { "layer", { { "type", "string" } } },
                                         { "width",
                                           { { "type", "integer" }, { "minimum", 0 } } },
@@ -12271,7 +12295,10 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                                   { "description",
                                                     "Arguments for the selected operation kind. "
                                                     "surface.apply_patch requires surface_id and "
-                                                    "patch.operations / patch.ops / patch.changes." } } } } },
+                                                    "patch.operations / patch.ops / patch.changes. "
+                                                    "Per-kind argument contracts are published in "
+                                                    "$defs.operation_contracts." },
+                                                  { "additionalProperties", true } } } } },
                                           { "required",
                                             nlohmann::json::array(
                                                     { "kind", "arguments" } ) } } } } } } },
@@ -12284,6 +12311,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "minimum", 1 },
                               { "maximum", 32 },
                               { "description", "Optional tighter step cap for this plan." } };
+                    parameters["$defs"] =
+                            { { "operation_contracts", atomicOperationContracts() } };
                     parameters["required"] = nlohmann::json::array( { "plan" } );
                 }
 
