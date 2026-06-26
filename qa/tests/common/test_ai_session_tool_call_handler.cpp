@@ -941,6 +941,23 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             ( *catalogTool( "kisurf_run_cell" ) )["script_budget"]
                     ["default_max_operation_count"].get<int>(),
             256 );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_cell" )->contains(
+            "python_sdk_helpers" ) );
+
+    const nlohmann::json& pythonHelpers =
+            ( *catalogTool( "kisurf_run_cell" ) )["python_sdk_helpers"];
+
+    for( const std::string& helper :
+         { "apply_surface_patch_ops",
+           "surface_fill_row_op",
+           "surface_fill_column_op",
+           "surface_fill_range_op",
+           "surface_set_property_op" } )
+    {
+        BOOST_CHECK( std::find( pythonHelpers.begin(), pythonHelpers.end(),
+                                helper ) != pythonHelpers.end() );
+    }
+
     BOOST_REQUIRE( catalogTool( "kisurf_accept_session" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_accept_session" )->value( "layer",
                                                                      std::string() ),

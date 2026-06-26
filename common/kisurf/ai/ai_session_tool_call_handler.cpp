@@ -790,6 +790,12 @@ nlohmann::json sessionToolCatalogJson()
                 { "default_max_operation_count", DEFAULT_SCRIPT_OPERATION_LIMIT },
                 { "enforcement", "reject_and_rollback_before_apply" }
             };
+            tool["python_sdk_helpers"] = nlohmann::json::array(
+                    { "apply_surface_patch_ops",
+                      "surface_fill_row_op",
+                      "surface_fill_column_op",
+                      "surface_fill_range_op",
+                      "surface_set_property_op" } );
         }
         else if( name == "kisurf_query_items" )
         {

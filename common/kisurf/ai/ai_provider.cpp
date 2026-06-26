@@ -220,7 +220,10 @@ const char* sessionRunCellToolDescription()
            "pcb.delete_items, pcb.update_item_geometry, pcb.set_item_net, "
            "pcb.set_item_layer, pcb.set_item_properties, pcb.set_metadata, "
            "pcb.refill_zones, pcb.rebuild_connectivity, pcb.run_validation, "
-           "surface.apply_patch.";
+           "surface.apply_patch. SurfacePatch Python helpers include "
+           "apply_surface_patch_ops, surface_fill_row_op, "
+           "surface_fill_column_op, surface_fill_range_op, and "
+           "surface_set_property_op.";
 }
 
 

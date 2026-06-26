@@ -769,6 +769,16 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                              != std::string::npos );
                 BOOST_CHECK( runCellDescription.find( "surface.apply_patch" )
                              != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "apply_surface_patch_ops" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "surface_fill_row_op" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "surface_fill_column_op" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "surface_fill_range_op" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "surface_set_property_op" )
+                             != std::string::npos );
                 BOOST_CHECK( runCellDescription.find( "script_run_operation_bundle" )
                              == std::string::npos );
                 BOOST_CHECK( runCellDescription.find( "pcb_fill_via_matrix" )
