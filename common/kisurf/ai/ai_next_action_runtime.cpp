@@ -2915,6 +2915,7 @@ struct ATTEMPT_BUDGET_POLICY
 struct ATTEMPT_POLICY_SIGNALS
 {
     size_t m_RecentRejectHistoryCount = 0;
+    size_t m_ContextChurnHistoryCount = 0;
 };
 
 
@@ -2944,8 +2945,11 @@ ATTEMPT_BUDGET_POLICY adjustedAttemptPolicyForWorkState(
 {
     ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState( aWorkState );
 
-    if( aSignals.m_RecentRejectHistoryCount > 0 )
+    if( aSignals.m_RecentRejectHistoryCount > 0
+        || aSignals.m_ContextChurnHistoryCount > 0 )
+    {
         policy.m_MaxAttempts = std::min<size_t>( policy.m_MaxAttempts, 1 );
+    }
 
     return policy;
 }
@@ -2990,6 +2994,12 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
         adjustments.push_back( "recent_reject_history" );
     }
 
+    if( aSignals.m_ContextChurnHistoryCount > 0
+        && policy.m_MaxAttempts < basePolicy.m_MaxAttempts )
+    {
+        adjustments.push_back( "context_churn_history" );
+    }
+
     return { { "work_state", toUtf8String( aWorkState ) },
              { "max_attempts", policy.m_MaxAttempts },
              { "max_tool_rounds", policy.m_MaxToolRounds },
@@ -3004,6 +3014,7 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
              { "base_max_validation_count", basePolicy.m_MaxValidationCount },
              { "base_max_wall_time_ms", basePolicy.m_MaxWallTimeMs },
              { "reject_history_count", aSignals.m_RecentRejectHistoryCount },
+             { "context_churn_count", aSignals.m_ContextChurnHistoryCount },
              { "adjustments", std::move( adjustments ) },
              { "policy_owner", "native_runtime" } };
 }
@@ -3042,17 +3053,23 @@ ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
 
     for( const AI_SUGGESTION_RECORD& suggestion : aSuggestions )
     {
-        if( suggestion.m_Status != AI_SUGGESTION_STATUS::Rejected
-            || !isNextActionRuntimeSuggestion( suggestion ) )
-        {
+        if( !isNextActionRuntimeSuggestion( suggestion ) )
             continue;
-        }
 
         const wxString suggestionFamily = normalizedAttemptPolicyFamily(
                 budgetPolicyWorkStateForCandidate( suggestion ) );
 
-        if( suggestionFamily == targetFamily )
+        if( suggestionFamily != targetFamily )
+            continue;
+
+        if( suggestion.m_Status == AI_SUGGESTION_STATUS::Rejected )
             ++signals.m_RecentRejectHistoryCount;
+
+        if( suggestion.m_Status == AI_SUGGESTION_STATUS::Expired
+            || suggestion.m_Status == AI_SUGGESTION_STATUS::Superseded )
+        {
+            ++signals.m_ContextChurnHistoryCount;
+        }
     }
 
     return signals;

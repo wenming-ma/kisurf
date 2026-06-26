@@ -4468,6 +4468,54 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectHistoryCapsRollbackRetryAttemptLoop )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationAttemptPolicyUsesContextChurnHistory )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"churn_policy_probe\"}" ) } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE( runtime.Update( makeChangedViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Suggestions().size(), 2 );
+    BOOST_CHECK( runtime.Suggestions().front().m_Status
+                 == AI_SUGGESTION_STATUS::Superseded );
+
+    AI_SUGGESTION_TRIGGER thirdTrigger = makeChangedViaTrigger();
+    thirdTrigger.m_ContextVersion.m_ViewRevision = 7;
+    thirdTrigger.m_ContextSnapshot.m_Version = thirdTrigger.m_ContextVersion;
+    thirdTrigger.m_ContextSnapshot.m_ToolState.m_ContextVersion =
+            thirdTrigger.m_ContextVersion;
+    thirdTrigger.m_Activity.m_Sequence = 46;
+    thirdTrigger.m_Reason = wxS( "context advanced again" );
+
+    BOOST_CHECK( !runtime.Update( thirdTrigger ).has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
+
+    const AI_PROVIDER_REQUEST& thirdDecisionRequest =
+            provider->m_Requests.back();
+    BOOST_CHECK( thirdDecisionRequest.m_UserText.Contains(
+            wxS( "\"attempt_policy\"" ) ) );
+    BOOST_CHECK( thirdDecisionRequest.m_UserText.Contains(
+            wxS( "\"base_max_attempts\":3" ) ) );
+    BOOST_CHECK( thirdDecisionRequest.m_UserText.Contains(
+            wxS( "\"max_attempts\":1" ) ) );
+    BOOST_CHECK( thirdDecisionRequest.m_UserText.Contains(
+            wxS( "\"context_churn_count\":1" ) ) );
+    BOOST_CHECK( thirdDecisionRequest.m_UserText.Contains(
+            wxS( "\"context_churn_history\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 {
     auto* placementProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
