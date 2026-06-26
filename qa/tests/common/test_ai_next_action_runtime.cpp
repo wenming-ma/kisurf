@@ -4135,6 +4135,17 @@ wxString publishReview()
 }
 
 
+wxString repositoryGoldenDatasetPath( const wxString& aFileName )
+{
+    wxFileName datasetPath( KI_TEST::GetTestDataRootDir() );
+    datasetPath.AppendDir( wxS( "ai" ) );
+    datasetPath.AppendDir( wxS( "next_action" ) );
+    datasetPath.AppendDir( wxS( "golden" ) );
+    datasetPath.SetFullName( aFileName );
+    return datasetPath.GetFullPath();
+}
+
+
 nlohmann::json providerRequestJson( const AI_PROVIDER_REQUEST& aRequest )
 {
     return nlohmann::json::parse( aRequest.m_UserText.ToStdString() );
@@ -7251,18 +7262,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFileEvaluationRunsVersionedDataset )
 
 BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFileEvaluationRunsRepositoryFixture )
 {
-    wxFileName datasetPath( KI_TEST::GetTestDataRootDir() );
-    datasetPath.AppendDir( wxS( "ai" ) );
-    datasetPath.AppendDir( wxS( "next_action" ) );
-    datasetPath.AppendDir( wxS( "golden" ) );
-    datasetPath.SetFullName( wxS( "placement_via_inner_loop_smoke.json" ) );
+    wxString datasetPath = repositoryGoldenDatasetPath(
+            wxS( "placement_via_inner_loop_smoke.json" ) );
 
-    BOOST_REQUIRE_MESSAGE( wxFileName::FileExists( datasetPath.GetFullPath() ),
+    BOOST_REQUIRE_MESSAGE( wxFileName::FileExists( datasetPath ),
                            "Missing repository golden dataset fixture: "
-                                   << datasetPath.GetFullPath() );
+                                   << datasetPath );
 
     AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT evaluation =
-            AiEvaluateNextActionReplayGoldenDatasetFile( datasetPath.GetFullPath() );
+            AiEvaluateNextActionReplayGoldenDatasetFile( datasetPath );
 
     BOOST_CHECK( evaluation.m_Valid );
     BOOST_CHECK( evaluation.m_Passed );
@@ -7271,6 +7279,29 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFileEvaluationRunsRepositoryFixture )
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
             wxS( "\"dataset_id\":\"next-action-placement-via-inner-loop-smoke\"" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains( wxS( "\"dataset_path\":" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixtures )
+{
+    wxArrayString datasetPaths;
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "placement_via_inner_loop_smoke.json" ) ) );
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayGoldenDatasetFiles( datasetPaths );
+
+    BOOST_CHECK( evaluation.m_Valid );
+    BOOST_CHECK( evaluation.m_Passed );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 1 );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"total_dataset_count\":1" ) ) );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"total_record_count\":1" ) ) );
 }
 
 
