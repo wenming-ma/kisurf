@@ -872,6 +872,283 @@ wxString optionalString( const nlohmann::json& aArguments, const char* aName )
 }
 
 
+bool objectHasOnlyFields( const nlohmann::json& aArguments,
+                          std::initializer_list<const char*> aAllowedFields,
+                          wxString& aError )
+{
+    if( !aArguments.is_object() )
+    {
+        aError = wxS( "Tool arguments must be a JSON object." );
+        return false;
+    }
+
+    for( const auto& [key, value] : aArguments.items() )
+    {
+        wxUnusedVar( value );
+
+        bool allowed = false;
+
+        for( const char* field : aAllowedFields )
+        {
+            if( key == field )
+            {
+                allowed = true;
+                break;
+            }
+        }
+
+        if( !allowed )
+        {
+            aError = wxString::Format( wxS( "Unsupported argument: %s." ),
+                                       wxString::FromUTF8( key.c_str() ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool validateEnumStringField( const nlohmann::json& aArguments, const char* aName,
+                              std::initializer_list<const char*> aAllowedValues,
+                              wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    if( !aArguments[aName].is_string() )
+    {
+        aError = wxString::Format( wxS( "%s must be a string." ),
+                                   wxString::FromUTF8( aName ) );
+        return false;
+    }
+
+    const std::string value = aArguments[aName].get<std::string>();
+
+    for( const char* allowedValue : aAllowedValues )
+    {
+        if( value == allowedValue )
+            return true;
+    }
+
+    aError = wxString::Format( wxS( "%s is not supported." ),
+                               wxString::FromUTF8( aName ) );
+    return false;
+}
+
+
+bool validateStringField( const nlohmann::json& aArguments, const char* aName,
+                          wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    if( aArguments[aName].is_string() )
+        return true;
+
+    aError = wxString::Format( wxS( "%s must be a string." ),
+                               wxString::FromUTF8( aName ) );
+    return false;
+}
+
+
+bool validateStringArrayField( const nlohmann::json& aArguments, const char* aName,
+                               wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& array = aArguments[aName];
+
+    if( !array.is_array() || array.empty() )
+    {
+        aError = wxString::Format( wxS( "%s must be a non-empty string array." ),
+                                   wxString::FromUTF8( aName ) );
+        return false;
+    }
+
+    for( const nlohmann::json& item : array )
+    {
+        if( !item.is_string() )
+        {
+            aError = wxString::Format( wxS( "%s must contain only strings." ),
+                                       wxString::FromUTF8( aName ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool jsonIntegerField( const nlohmann::json& aObject, const char* aName )
+{
+    return aObject.contains( aName ) && aObject[aName].is_number_integer();
+}
+
+
+bool jsonPositiveIntegerField( const nlohmann::json& aObject, const char* aName )
+{
+    if( !jsonIntegerField( aObject, aName ) )
+        return false;
+
+    return aObject[aName].get<int64_t>() > 0;
+}
+
+
+bool validatePointObject( const nlohmann::json& aValue )
+{
+    wxString ignoredError;
+    return aValue.is_object()
+           && objectHasOnlyFields( aValue, { "x", "y" }, ignoredError )
+           && jsonIntegerField( aValue, "x" )
+           && jsonIntegerField( aValue, "y" );
+}
+
+
+bool validateBoxField( const nlohmann::json& aArguments, const char* aName,
+                       wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& box = aArguments[aName];
+
+    if( !box.is_object() )
+    {
+        aError = wxString::Format( wxS( "%s must be a canonical bbox object." ),
+                                   wxString::FromUTF8( aName ) );
+        return false;
+    }
+
+    wxString ignoredError;
+    const bool originSize =
+            objectHasOnlyFields( box, { "x", "y", "width", "height" }, ignoredError )
+            && jsonIntegerField( box, "x" )
+            && jsonIntegerField( box, "y" )
+            && jsonPositiveIntegerField( box, "width" )
+            && jsonPositiveIntegerField( box, "height" );
+
+    const bool minMax =
+            objectHasOnlyFields( box, { "min", "max" }, ignoredError )
+            && box.contains( "min" ) && validatePointObject( box["min"] )
+            && box.contains( "max" ) && validatePointObject( box["max"] );
+
+    if( originSize || minMax )
+        return true;
+
+    aError = wxString::Format( wxS( "%s must use x/y/width/height or min/max." ),
+                               wxString::FromUTF8( aName ) );
+    return false;
+}
+
+
+bool validateFlexibleHandleRef( const nlohmann::json& aValue )
+{
+    if( aValue.is_string() )
+        return !aValue.get<std::string>().empty();
+
+    uint64_t ignoredHandleId = 0;
+
+    if( jsonIntegerToUint64( aValue, ignoredHandleId ) )
+        return true;
+
+    if( !aValue.is_object() )
+        return false;
+
+    wxString ignoredError;
+
+    if( !objectHasOnlyFields( aValue,
+                              { "session_id", "handle_id", "generation", "alias" },
+                              ignoredError ) )
+    {
+        return false;
+    }
+
+    if( !aValue.contains( "handle_id" )
+        || !jsonIntegerToUint64( aValue["handle_id"], ignoredHandleId ) )
+    {
+        return false;
+    }
+
+    if( aValue.contains( "session_id" )
+        && !jsonIntegerToUint64( aValue["session_id"], ignoredHandleId ) )
+    {
+        return false;
+    }
+
+    if( aValue.contains( "generation" )
+        && !jsonIntegerToUint64( aValue["generation"], ignoredHandleId ) )
+    {
+        return false;
+    }
+
+    return !aValue.contains( "alias" ) || aValue["alias"].is_string();
+}
+
+
+bool validateHandleArrayField( const nlohmann::json& aArguments, const char* aName,
+                               wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& handles = aArguments[aName];
+
+    if( !handles.is_array() || handles.empty() )
+    {
+        aError = wxString::Format( wxS( "%s must be a non-empty handle array." ),
+                                   wxString::FromUTF8( aName ) );
+        return false;
+    }
+
+    for( const nlohmann::json& handle : handles )
+    {
+        if( !validateFlexibleHandleRef( handle ) )
+        {
+            aError = wxString::Format( wxS( "%s contains an invalid handle reference." ),
+                                       wxString::FromUTF8( aName ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool validateRenderPreviewArguments( const nlohmann::json& aArguments,
+                                     wxString& aError )
+{
+    return objectHasOnlyFields( aArguments,
+                                { "region", "layer_mask", "mode", "view_mode" },
+                                aError )
+           && validateBoxField( aArguments, "region", aError )
+           && validateStringArrayField( aArguments, "layer_mask", aError )
+           && validateEnumStringField(
+                      aArguments, "mode",
+                      { "native", "visual", "semantic", "diff" }, aError )
+           && validateStringField( aArguments, "view_mode", aError );
+}
+
+
+bool validateRunValidationArguments( const nlohmann::json& aArguments,
+                                     wxString& aError )
+{
+    return objectHasOnlyFields( aArguments,
+                                { "scope", "level", "region", "handles", "gate" },
+                                aError )
+           && validateEnumStringField(
+                      aArguments, "scope",
+                      { "session", "affected_area", "selection", "region" },
+                      aError )
+           && validateStringField( aArguments, "level", aError )
+           && validateBoxField( aArguments, "region", aError )
+           && validateHandleArrayField( aArguments, "handles", aError )
+           && validateEnumStringField( aArguments, "gate",
+                                       { "preview", "accept" }, aError );
+}
+
+
 std::optional<wxString> findNestedStringByName( const nlohmann::json& aRoot,
                                                 const char* aName )
 {
@@ -3172,6 +3449,14 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
     if( aToolCall.m_ToolName == wxS( "kisurf_render_preview" ) )
     {
+        wxString argumentError;
+
+        if( !validateRenderPreviewArguments( arguments, argumentError ) )
+        {
+            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+                                 argumentError );
+        }
+
         SESSION_OPERATION_QUERY_RESULT previewResult =
                 renderSessionPreviewOperation( *m_Session, m_PreviewService,
                                                fromJson( arguments ) );
@@ -3201,6 +3486,14 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
     if( aToolCall.m_ToolName == wxS( "kisurf_run_validation" ) )
     {
+        wxString argumentError;
+
+        if( !validateRunValidationArguments( arguments, argumentError ) )
+        {
+            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+                                 argumentError );
+        }
+
         const bool hadOpenStep = m_Session->HasOpenStep();
         uint64_t stepId = 0;
 

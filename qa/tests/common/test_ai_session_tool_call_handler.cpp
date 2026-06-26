@@ -2552,6 +2552,31 @@ BOOST_AUTO_TEST_CASE( RunValidationToolRejectsUnsupportedLevelWithoutJournalMuta
 }
 
 
+BOOST_AUTO_TEST_CASE( RunValidationToolRejectsMalformedGateWithoutJournalMutation )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_CHECK( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) )
+                         .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT validationResult = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_validation" ),
+                      wxS( "{\"scope\":\"session\",\"level\":\"geometry\","
+                           "\"gate\":\"publish\"}" ) ) );
+
+    BOOST_CHECK( !validationResult.m_Allowed );
+    BOOST_CHECK( !validationResult.m_Executed );
+    BOOST_CHECK_EQUAL( validationResult.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Epoch(), 0 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunCellObservationOpsExposeCurrentEditorContext )
 {
     AI_PYTHON_CELL_RESULT workerResult;
@@ -2603,6 +2628,29 @@ BOOST_AUTO_TEST_CASE( RunCellObservationOpsExposeCurrentEditorContext )
     BOOST_CHECK( payload["operation_results"][0]["journaled"].get<bool>() );
     BOOST_CHECK_EQUAL( payload["operation_results"][0]["operation_ids"][0].get<int>(),
                        1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RenderPreviewRejectsUnknownArgumentBeforePreviewService )
+{
+    RECORDING_SESSION_PREVIEW_SERVICE previewService;
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, nullptr, &previewService );
+
+    BOOST_CHECK( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) )
+                         .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT previewResult = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_render_preview" ),
+                      wxS( "{\"unexpected\":true}" ) ) );
+
+    BOOST_CHECK( !previewResult.m_Allowed );
+    BOOST_CHECK( !previewResult.m_Executed );
+    BOOST_CHECK_EQUAL( previewResult.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK_EQUAL( previewService.m_RenderCount, 0 );
 }
 
 
