@@ -4898,6 +4898,24 @@ nlohmann::json routingCorridorFactJson(
     if( aModeContext.contains( "width" ) && aModeContext["width"].is_number() )
         fact["width"] = aModeContext["width"];
 
+    int cursorX = 0;
+    int cursorY = 0;
+
+    if( aModeContext.contains( "cursor" )
+        && jsonPointToInts( aModeContext["cursor"], cursorX, cursorY ) )
+    {
+        const int cursorDx = aAnchor.m_Position.x - cursorX;
+        const int cursorDy = aAnchor.m_Position.y - cursorY;
+
+        fact["cursor"] = pointRecordJson( cursorX, cursorY );
+        fact["cursor_dx"] = cursorDx;
+        fact["cursor_dy"] = cursorDy;
+        fact["cursor_abs_dx"] = std::abs( cursorDx );
+        fact["cursor_abs_dy"] = std::abs( cursorDy );
+        fact["cursor_manhattan_distance"] = std::abs( cursorDx ) + std::abs( cursorDy );
+        fact["cursor_is_sorting_hint"] = true;
+    }
+
     nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
 
     if( details.is_object() )
