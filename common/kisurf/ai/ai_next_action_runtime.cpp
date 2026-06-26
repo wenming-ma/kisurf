@@ -4176,6 +4176,21 @@ nlohmann::json routingObstacleFactsJson(
 }
 
 
+nlohmann::json obstacleCandidateFactsJson(
+        const std::vector<AI_OBJECT_REF>& aObjects )
+{
+    nlohmann::json candidates = placementObstacleFactsJson( aObjects );
+
+    for( nlohmann::json keepout : placementKeepoutFactsJson( aObjects ) )
+        candidates.push_back( std::move( keepout ) );
+
+    for( nlohmann::json routingObstacle : routingObstacleFactsJson( aObjects ) )
+        candidates.push_back( std::move( routingObstacle ) );
+
+    return candidates;
+}
+
+
 std::optional<LOCALITY_REGION> localityRegionFromObject( const char* aSource,
                                                          const nlohmann::json& aObject )
 {
@@ -4219,6 +4234,35 @@ std::optional<LOCALITY_REGION> localityRegionFromObject( const char* aSource,
                         { "bbox", bboxRecordJson( region.m_Left, region.m_Top,
                                                    region.m_Width, region.m_Height ) },
                         { "raw", aObject } };
+    return region;
+}
+
+
+std::optional<LOCALITY_REGION> localityRegionFromBBox( const char* aSource,
+                                                       const nlohmann::json& aBbox )
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aBbox, "x", x )
+        || !jsonNumberAsInt( aBbox, "y", y )
+        || !jsonNumberAsInt( aBbox, "width", width )
+        || !jsonNumberAsInt( aBbox, "height", height )
+        || width < 0 || height < 0 )
+    {
+        return std::nullopt;
+    }
+
+    LOCALITY_REGION region;
+    region.m_Left = x;
+    region.m_Top = y;
+    region.m_Width = width;
+    region.m_Height = height;
+    region.m_Record = { { "source", aSource },
+                        { "bbox", aBbox },
+                        { "raw", aBbox } };
     return region;
 }
 
@@ -4313,13 +4357,7 @@ nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObject
                                        const LOCALITY_REGION& aRegion )
 {
     nlohmann::json facts = nlohmann::json::array();
-    nlohmann::json candidates = placementObstacleFactsJson( aObjects );
-
-    for( nlohmann::json keepout : placementKeepoutFactsJson( aObjects ) )
-        candidates.push_back( std::move( keepout ) );
-
-    for( nlohmann::json routingObstacle : routingObstacleFactsJson( aObjects ) )
-        candidates.push_back( std::move( routingObstacle ) );
+    nlohmann::json candidates = obstacleCandidateFactsJson( aObjects );
 
     for( nlohmann::json fact : candidates )
     {
@@ -4328,6 +4366,33 @@ nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObject
 
         fact["locality_source"] = aRegion.m_Record["source"];
         facts.push_back( std::move( fact ) );
+    }
+
+    return facts;
+}
+
+
+nlohmann::json obstacleFactsInBBoxJson( const std::vector<AI_OBJECT_REF>& aObjects,
+                                        const nlohmann::json& aBbox,
+                                        const char* aSource )
+{
+    std::optional<LOCALITY_REGION> region = localityRegionFromBBox( aSource, aBbox );
+
+    if( !region )
+        return nlohmann::json::array();
+
+    nlohmann::json facts = nlohmann::json::array();
+
+    for( nlohmann::json fact : obstacleCandidateFactsJson( aObjects ) )
+    {
+        if( !factIntersectsRegion( fact, *region ) )
+            continue;
+
+        fact["locality_source"] = (*region).m_Record["source"];
+        facts.push_back( std::move( fact ) );
+
+        if( facts.size() >= 16 )
+            break;
     }
 
     return facts;
@@ -4882,9 +4947,29 @@ wxString routingSegmentStyle( int aDx, int aDy )
 }
 
 
+nlohmann::json routingSweptBBoxJson( int aStartX, int aStartY,
+                                     int aEndX, int aEndY,
+                                     const nlohmann::json& aModeContext )
+{
+    int width = 0;
+    int padding = 0;
+
+    if( jsonNumberAsInt( aModeContext, "width", width ) && width > 0 )
+        padding = std::max( 1, width / 2 );
+
+    const int left = std::min( aStartX, aEndX ) - padding;
+    const int top = std::min( aStartY, aEndY ) - padding;
+    const int right = std::max( aStartX, aEndX ) + padding;
+    const int bottom = std::max( aStartY, aEndY ) + padding;
+
+    return bboxRecordJson( left, top, right - left, bottom - top );
+}
+
+
 nlohmann::json routingCorridorFactJson(
         const AI_CONTEXT_ANCHOR& aAnchor,
         const nlohmann::json& aModeContext,
+        const std::vector<AI_OBJECT_REF>& aVisibleObjects,
         int aStartX,
         int aStartY )
 {
@@ -4892,6 +4977,9 @@ nlohmann::json routingCorridorFactJson(
     const int dy = aAnchor.m_Position.y - aStartY;
     const int absDx = std::abs( dx );
     const int absDy = std::abs( dy );
+    const nlohmann::json sweptBBox =
+            routingSweptBBoxJson( aStartX, aStartY, aAnchor.m_Position.x,
+                                  aAnchor.m_Position.y, aModeContext );
     nlohmann::json fact =
             { { "source", "route_head_to_anchor" },
               { "anchor_id", toUtf8String( aAnchor.m_Id ) },
@@ -4902,6 +4990,10 @@ nlohmann::json routingCorridorFactJson(
               { "corridor_bbox",
                 pointPairBoundingBoxJson( aStartX, aStartY, aAnchor.m_Position.x,
                                           aAnchor.m_Position.y ) },
+              { "swept_bbox", sweptBBox },
+              { "corridor_obstacle_facts",
+                obstacleFactsInBBoxJson( aVisibleObjects, sweptBBox,
+                                         "routing_corridor_swept_bbox" ) },
               { "dx", dx },
               { "dy", dy },
               { "abs_dx", absDx },
@@ -4952,7 +5044,8 @@ nlohmann::json routingCorridorFactJson(
 
 nlohmann::json routingCorridorFactsJson(
         const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
-        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+        const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        const std::vector<AI_OBJECT_REF>& aVisibleObjects )
 {
     nlohmann::json modeContext = objectFromJsonText( aToolState.m_ModeContextJson );
     int            startX = 0;
@@ -4978,7 +5071,8 @@ nlohmann::json routingCorridorFactsJson(
         }
 
         facts.push_back(
-                routingCorridorFactJson( anchor, modeContext, startX, startY ) );
+                routingCorridorFactJson( anchor, modeContext, aVisibleObjects,
+                                         startX, startY ) );
     }
 
     return facts;
@@ -5043,7 +5137,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["route_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isRoutingPacketAnchor );
         packet["routing_corridor_facts"] =
-                routingCorridorFactsJson( context.m_Anchors, context.m_ToolState );
+                routingCorridorFactsJson( context.m_Anchors, context.m_ToolState,
+                                          context.m_VisibleObjects );
 
         if( !context.m_ToolState.m_ModeContextJson.IsEmpty() )
             packet["mode_context_json"] =
