@@ -3485,6 +3485,7 @@ nlohmann::json anchorRecordJson( const AI_CONTEXT_ANCHOR& aAnchor )
               { "confidence", aAnchor.m_Confidence },
               { "provenance",
                 { { "source", "context_anchor" },
+                  { "source_id", toUtf8String( aAnchor.m_Id ) },
                   { "editor_kind", editorKindJsonName( aAnchor.m_EditorKind ) },
                   { "has_position", aAnchor.m_HasPosition },
                   { "details_present", !aAnchor.m_DetailsJson.IsEmpty() } } } };

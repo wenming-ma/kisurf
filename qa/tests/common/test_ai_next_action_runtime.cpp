@@ -5475,6 +5475,10 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                     .get<std::string>(),
             "context_anchor" );
     BOOST_CHECK_EQUAL(
+            placementPacket["placement_anchors"].at( 0 )["provenance"]["source_id"]
+                    .get<std::string>(),
+            "place_candidate_1" );
+    BOOST_CHECK_EQUAL(
             placementPacket["placement_anchors"].at( 0 )["provenance"]["editor_kind"]
                     .get<std::string>(),
             "pcb" );
@@ -6148,6 +6152,10 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["route_anchors"].at( 1 )["provenance"]["source"]
                     .get<std::string>(),
             "context_anchor" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["route_anchors"].at( 1 )["provenance"]["source_id"]
+                    .get<std::string>(),
+            "route_candidate_1" );
     BOOST_CHECK_EQUAL(
             routingPacket["route_anchors"].at( 1 )["provenance"]["editor_kind"]
                     .get<std::string>(),
