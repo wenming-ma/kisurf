@@ -10816,6 +10816,25 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "status", "missing_attempt_context" } } );
         }
 
+        const ATTEMPT_BUDGET_POLICY renderPolicy =
+                attemptPolicyForWorkState( budgetPolicyWorkStateForCandidate(
+                        aAttempt->m_Candidate ) );
+
+        if( aAttempt->m_BudgetCounters.m_RenderCount
+            >= renderPolicy.m_MaxRenderCount )
+        {
+            return makeResult(
+                    false, false, wxS( "render_budget_exceeded" ),
+                    wxS( "render.hidden_attempt would exceed the attempt "
+                         "render budget." ),
+                    { { "tool", "render.hidden_attempt" },
+                      { "status", "render_budget_exceeded" },
+                      { "attempt_render_count",
+                        aAttempt->m_BudgetCounters.m_RenderCount },
+                      { "remaining_render_budget", 0 },
+                      { "max_render_count", renderPolicy.m_MaxRenderCount } } );
+        }
+
         std::unique_ptr<AI_EXECUTION_SESSION> fallbackSession;
         AI_EXECUTION_SESSION* session = aAttemptSession;
 
@@ -10856,6 +10875,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     wxS( "validate.hidden_attempt requires an active attempt." ),
                     { { "tool", "validate.hidden_attempt" },
                       { "status", "missing_attempt_context" } } );
+        }
+
+        const ATTEMPT_BUDGET_POLICY validationPolicy =
+                attemptPolicyForWorkState( budgetPolicyWorkStateForCandidate(
+                        aAttempt->m_Candidate ) );
+
+        if( aAttempt->m_BudgetCounters.m_ValidationCount
+            >= validationPolicy.m_MaxValidationCount )
+        {
+            return makeResult(
+                    false, false, wxS( "validation_budget_exceeded" ),
+                    wxS( "validate.hidden_attempt would exceed the attempt "
+                         "validation budget." ),
+                    { { "tool", "validate.hidden_attempt" },
+                      { "status", "validation_budget_exceeded" },
+                      { "attempt_validation_count",
+                        aAttempt->m_BudgetCounters.m_ValidationCount },
+                      { "remaining_validation_budget", 0 },
+                      { "max_validation_count",
+                        validationPolicy.m_MaxValidationCount } } );
         }
 
         std::unique_ptr<AI_EXECUTION_SESSION> fallbackSession;

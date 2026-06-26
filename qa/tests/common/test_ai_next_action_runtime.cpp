@@ -723,6 +723,73 @@ public:
 };
 
 
+class FACT_TOOL_BUDGET_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    FACT_TOOL_BUDGET_NEXT_ACTION_PROVIDER( wxString aToolName,
+                                           wxString aToolCallPrefix,
+                                           wxString aArgumentsJson ) :
+            m_ToolName( std::move( aToolName ) ),
+            m_ToolCallPrefix( std::move( aToolCallPrefix ) ),
+            m_ArgumentsJson( std::move( aArgumentsJson ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "fact tool budget next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"fact_tool_budget_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.size() < 4 )
+            {
+                const unsigned long long index =
+                        static_cast<unsigned long long>(
+                                aRequest.m_ToolResults.size() + 1 );
+
+                response.m_Body = wxS( "Need another hidden fact tool call." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId =
+                        m_ToolCallPrefix
+                        + wxString::Format( wxS( "_%llu" ), index );
+                call.m_ToolName = m_ToolName;
+                call.m_ArgumentsJson = m_ArgumentsJson;
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    wxString                         m_ToolName;
+    wxString                         m_ToolCallPrefix;
+    wxString                         m_ArgumentsJson;
+};
+
+
 class SURFACE_PATCH_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -7147,6 +7214,84 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsMutationToolBeforeExceedingPolicy )
             runtime.Attempts().front().m_BudgetCounters.m_MutationCount, 8 );
     BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
             wxS( "budget_via_8" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "provider_tool_result_failed" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsRenderToolBeforeExceedingPolicy )
+{
+    auto* provider = new FACT_TOOL_BUDGET_NEXT_ACTION_PROVIDER(
+            wxS( "render_hidden_attempt" ), wxS( "call_render_budget" ),
+            wxS( "{\"mode\":\"native_preview_candidate\"}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
+    BOOST_CHECK( toolResults.at( 2 ).m_Executed );
+
+    const AI_TOOL_CALL_RECORD& rejected = toolResults.at( 3 );
+    BOOST_CHECK_EQUAL( rejected.m_ToolCallId,
+                       wxString( wxS( "call_render_budget_4" ) ) );
+    BOOST_CHECK( !rejected.m_Allowed );
+    BOOST_CHECK( !rejected.m_Executed );
+    BOOST_CHECK_EQUAL( rejected.m_ErrorCode,
+                       wxString( wxS( "render_budget_exceeded" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"status\":\"render_budget_exceeded\"" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"attempt_render_count\":4" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL(
+            runtime.Attempts().front().m_BudgetCounters.m_RenderCount, 4 );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "provider_tool_result_failed" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsValidationToolBeforeExceedingPolicy )
+{
+    auto* provider = new FACT_TOOL_BUDGET_NEXT_ACTION_PROVIDER(
+            wxS( "validate_hidden_attempt" ), wxS( "call_validate_budget" ),
+            wxS( "{\"level\":\"drc_lite\"}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
+    BOOST_CHECK( toolResults.at( 2 ).m_Executed );
+
+    const AI_TOOL_CALL_RECORD& rejected = toolResults.at( 3 );
+    BOOST_CHECK_EQUAL( rejected.m_ToolCallId,
+                       wxString( wxS( "call_validate_budget_4" ) ) );
+    BOOST_CHECK( !rejected.m_Allowed );
+    BOOST_CHECK( !rejected.m_Executed );
+    BOOST_CHECK_EQUAL( rejected.m_ErrorCode,
+                       wxString( wxS( "validation_budget_exceeded" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"status\":\"validation_budget_exceeded\"" ) ) );
+    BOOST_CHECK( rejected.m_ResultJson.Contains(
+            wxS( "\"attempt_validation_count\":4" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL(
+            runtime.Attempts().front().m_BudgetCounters.m_ValidationCount, 4 );
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "provider_tool_result_failed" ) ) );
