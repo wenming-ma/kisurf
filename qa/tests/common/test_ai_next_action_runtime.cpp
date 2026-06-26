@@ -5071,7 +5071,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                            AI_CONTEXT_ANCHOR_KIND::RouteCandidate,
                            wxS( "Route candidate 1" ), 320, 200 ) );
     routingTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
-            wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000,"
+            wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":30,"
                  "\"start\":{\"x\":100,\"y\":200},"
                  "\"cursor\":{\"x\":260,\"y\":200},"
                  "\"cursor_region\":{\"x\":250,\"y\":210,"
@@ -5259,6 +5259,43 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["center"]
                     ["x"].get<int>(),
             210 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["width"].get<int>(),
+            30 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["swept_bbox"]["x"].get<int>(),
+            85 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["swept_bbox"]["y"].get<int>(),
+            185 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["swept_bbox"]["width"]
+                    .get<int>(),
+            250 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["swept_bbox"]["height"]
+                    .get<int>(),
+            30 );
+    BOOST_REQUIRE(
+            routingPacket["routing_corridor_facts"].at( 0 )
+                    .contains( "corridor_obstacle_facts" ) );
+
+    std::set<std::string> corridorObstacleLabels;
+
+    for( const nlohmann::json& fact : routingPacket["routing_corridor_facts"]
+                                              .at( 0 )["corridor_obstacle_facts"] )
+    {
+        corridorObstacleLabels.insert( fact["label"].get<std::string>() );
+    }
+
+    BOOST_CHECK( corridorObstacleLabels.find( "track:180,210->300,210" )
+                 != corridorObstacleLabels.end() );
+    BOOST_CHECK( corridorObstacleLabels.find( "pad:U4.1" )
+                 != corridorObstacleLabels.end() );
+    BOOST_CHECK( corridorObstacleLabels.find( "via:400,220" )
+                 == corridorObstacleLabels.end() );
+    BOOST_CHECK( corridorObstacleLabels.find( "track:1000,1000->1200,1000" )
+                 == corridorObstacleLabels.end() );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_corridor_facts"].at( 0 )["segment_style"]
                     .get<std::string>(),
