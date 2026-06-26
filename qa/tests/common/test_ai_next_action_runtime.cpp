@@ -5750,6 +5750,7 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
                  == AI_PROVIDER_REQUEST_KIND::NextActionDecision );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK_GE( provider->m_Requests.at( 0 ).m_MaxToolRounds, 3 );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_DisableDefaultTools );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
             wxS( "placement.generate_via_pattern_candidates" ) ) );
