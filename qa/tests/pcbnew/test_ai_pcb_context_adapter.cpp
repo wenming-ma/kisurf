@@ -160,13 +160,21 @@ const nlohmann::json* findPairConstraintByLabels( const nlohmann::json& aConstra
 
 const nlohmann::json* findGeometryRuleCoverage( const nlohmann::json& aCoverage,
                                                 const std::string& aRule,
-                                                const std::string& aGeometry )
+                                                const std::string& aGeometry,
+                                                const std::string& aConstraintType =
+                                                        std::string() )
 {
     for( const nlohmann::json& coverage : aCoverage )
     {
         if( coverage["rule"].get<std::string>().find( aRule ) != std::string::npos
             && coverage["geometry"].get<std::string>() == aGeometry )
         {
+            if( !aConstraintType.empty()
+                && coverage["constraint_type"].get<std::string>() != aConstraintType )
+            {
+                continue;
+            }
+
             return &coverage;
         }
     }
@@ -1404,6 +1412,10 @@ BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
     constraint.Value().SetMin( 777000 );
     rule->AddConstraint( constraint );
 
+    DRC_CONSTRAINT physicalConstraint( PHYSICAL_CLEARANCE_CONSTRAINT );
+    physicalConstraint.Value().SetMin( 888000 );
+    rule->AddConstraint( physicalConstraint );
+
     auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
     engine->InitEngine( rule );
     settings.m_DRCEngine = engine;
@@ -1412,6 +1424,11 @@ BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
             engine->EvalRules( CLEARANCE_CONSTRAINT, insideTrack, outsideTrack, F_Cu );
     BOOST_REQUIRE( direct.GetValue().HasMin() );
     BOOST_CHECK_EQUAL( direct.GetValue().Min(), 777000 );
+
+    DRC_CONSTRAINT directPhysical =
+            engine->EvalRules( PHYSICAL_CLEARANCE_CONSTRAINT, insideTrack, outsideTrack, F_Cu );
+    BOOST_REQUIRE( directPhysical.GetValue().HasMin() );
+    BOOST_CHECK_EQUAL( directPhysical.GetValue().Min(), 888000 );
 
     KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
     AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
@@ -1456,6 +1473,18 @@ BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
     BOOST_CHECK_EQUAL( ( *coverage )["value"]["min"].get<int>(), 777000 );
     BOOST_CHECK( ( *coverage )["source_item"].contains( "bbox" ) );
     BOOST_CHECK( ( *coverage )["target_item"].contains( "bbox" ) );
+
+    const nlohmann::json* physicalCoverage =
+            findGeometryRuleCoverage( effective["geometry_specific_rule_coverage"],
+                                      "AI Area Clearance", "track_to_track",
+                                      "physical_clearance" );
+
+    BOOST_REQUIRE( physicalCoverage );
+    BOOST_CHECK_EQUAL( ( *physicalCoverage )["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *physicalCoverage )["covered"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *physicalCoverage )["source"].get<std::string>(),
+                       "DRC_ENGINE::EvalRules" );
+    BOOST_CHECK_EQUAL( ( *physicalCoverage )["value"]["min"].get<int>(), 888000 );
 }
 
 
