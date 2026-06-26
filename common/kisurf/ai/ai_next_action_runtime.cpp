@@ -5966,6 +5966,14 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
     {
         packet["routing_active"] =
                 context.m_ToolState.m_Kind == AI_TOOL_STATE_KIND::RoutingTrack;
+        packet["interaction_semantics"] =
+                { { "mode", "active_interactive_routing" },
+                  { "planning_target",
+                    "next_landing_from_current_route_head" },
+                  { "route_head_source", "mode_context.start" },
+                  { "cursor_is_sorting_hint", true },
+                  { "manual_click_supersedes_attempt", true },
+                  { "preview_must_be_rebased_after_click", true } };
         packet["planning_target"] =
                 routingPlanningTargetJson( context.m_ToolState );
         packet["active_route_segment"] =
@@ -6000,6 +6008,13 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 || context.m_ToolState.m_Kind == AI_TOOL_STATE_KIND::DrawingZone;
         packet["placeable_kind"] =
                 placeableKindForToolState( context.m_ToolState.m_Kind );
+        packet["interaction_semantics"] =
+                { { "mode", "active_interactive_placement" },
+                  { "planning_target", "place_current_item" },
+                  { "cursor_attached_item", true },
+                  { "manual_click_to_materialize", true },
+                  { "manual_click_supersedes_attempt", true },
+                  { "preview_must_be_rebased_after_click", true } };
         packet["planning_target"] =
                 placementPlanningTargetJson( context.m_ToolState );
         packet["placement_anchor_ids"] = anchorIdArrayJson( context.m_Anchors );
@@ -8592,6 +8607,33 @@ AiMigrateNextActionReplayTraceJson( const wxString& aReplayTraceJson,
 }
 
 
+bool containsObjectFieldRecursive( const nlohmann::json& aValue,
+                                   const char* aField )
+{
+    if( aValue.is_object() )
+    {
+        if( aValue.contains( aField ) && aValue[aField].is_object() )
+            return true;
+
+        for( auto it = aValue.begin(); it != aValue.end(); ++it )
+        {
+            if( containsObjectFieldRecursive( it.value(), aField ) )
+                return true;
+        }
+    }
+    else if( aValue.is_array() )
+    {
+        for( const nlohmann::json& item : aValue )
+        {
+            if( containsObjectFieldRecursive( item, aField ) )
+                return true;
+        }
+    }
+
+    return false;
+}
+
+
 AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 {
@@ -8650,6 +8692,20 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                 trace["publish_decision"]["preview_gate_result"]["allowed"].get<bool>();
     }
 
+    if( trace.contains( "observation_packet" )
+        && trace["observation_packet"].is_object()
+        && trace["observation_packet"].contains( "structured_facts" )
+        && trace["observation_packet"]["structured_facts"].is_object()
+        && trace["observation_packet"]["structured_facts"].contains(
+                "work_state_packet" )
+        && containsObjectFieldRecursive(
+                trace["observation_packet"]["structured_facts"]
+                     ["work_state_packet"],
+                "interaction_semantics" ) )
+    {
+        result.m_WorkStateInteractionSemanticsPresent = true;
+    }
+
     const nlohmann::json& attempts = trace["attempts"];
     result.m_AttemptCount = attempts.size();
 
@@ -8704,6 +8760,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "validation_result_count", result.m_ValidationResultCount },
               { "tool_result_count", result.m_ToolResultCount },
               { "preview_gate_allowed", result.m_PreviewGateAllowed },
+              { "work_state_interaction_semantics_present",
+                result.m_WorkStateInteractionSemanticsPresent },
               { "has_blocking_validation_issue",
                 result.m_HasBlockingValidationIssue } };
 

@@ -771,7 +771,7 @@ Next Action 的质量不能只靠主观看 demo。需要从一开始记录 repla
 - publish / abandon / retry reason
 - accept / reject / expire / supersede 状态
 
-当前代码已经开始把上述内容固化为 runtime-owned replay trace，而不是只散落在 prompt / suggestion provenance 中。第一刀 trace 覆盖 published / abandoned semantic step、hidden attempt journal、render / validation facts、tool results 和当前 suggestion terminal state；trace schema versioning / required-field validator / migration entry 已落地，并已开始提供离线 evaluation summary / batch summary / golden record / versioned golden dataset JSON / quality metric JSON substrate。后续还需要继续补齐真正驱动 runtime 的批量 replay runner、实际 golden trajectory dataset 文件、更完整的质量指标计算，以及未来 schema v2+ 的真实迁移规则。
+当前代码已经开始把上述内容固化为 runtime-owned replay trace，而不是只散落在 prompt / suggestion provenance 中。第一刀 trace 覆盖 published / abandoned semantic step、hidden attempt journal、render / validation facts、tool results 和当前 suggestion terminal state；trace schema versioning / required-field validator / migration entry 已落地，并已开始提供离线 evaluation summary / batch summary / golden record / versioned golden dataset JSON / quality metric JSON substrate。Evaluation metric 现在也会记录 `work_state_interaction_semantics_present`，用于发现 replay trace 中 observation basis 是否退化。后续还需要继续补齐真正驱动 runtime 的批量 replay runner、实际 golden trajectory dataset 文件、更完整的质量指标计算，以及未来 schema v2+ 的真实迁移规则。
 
 Correctness evaluation 和 quality evaluation 要分开。
 
