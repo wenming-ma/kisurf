@@ -12093,6 +12093,96 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonScriptPlanBeforeHiddenMutation )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeRejectsScriptPlanDirectPublishBeforeHiddenMutation )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "script_run_bounded_plan" ),
+            wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                 "\"direct_publish\":true,"
+                 "\"arguments\":{\"position\":{\"x\":1000,\"y\":2000},"
+                 "\"net\":\"GND\",\"diameter\":600,\"drill\":300,"
+                 "\"layer_pair\":{\"top\":\"F.Cu\",\"bottom\":\"B.Cu\"},"
+                 "\"alias\":\"forbidden_publish_via\"}}]},\"max_steps\":1}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "forbidden_runtime_capability" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"forbidden_runtime_capability\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"forbidden_field\":\"plan.operations[0].direct_publish\"" ) ) );
+    BOOST_CHECK( !result.m_ResultJson.Contains(
+            wxS( "\"script_step_id\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "forbidden_publish_via" ) ) );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "merged_tool_batches" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsAtomicOperationRawBoardAccessBeforeHiddenMutation )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "atomic_run_operation" ),
+            wxS( "{\"kind\":\"pcb.create_via\","
+                 "\"arguments\":{\"position\":{\"x\":1000,\"y\":2000},"
+                 "\"net\":\"GND\",\"diameter\":600,\"drill\":300,"
+                 "\"layer_pair\":{\"top\":\"F.Cu\",\"bottom\":\"B.Cu\"},"
+                 "\"alias\":\"forbidden_raw_board_via\","
+                 "\"raw_board_access\":true}}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "atomic_run_operation" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "forbidden_runtime_capability" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"forbidden_runtime_capability\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"forbidden_field\":\"plan.operations[0].arguments.raw_board_access\"" ) ) );
+    BOOST_CHECK( !result.m_ResultJson.Contains(
+            wxS( "\"script_step_id\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "forbidden_raw_board_via" ) ) );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "merged_tool_batches" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonShadowApplyCandidateBeforeMutation )
 {
     auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(

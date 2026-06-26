@@ -859,6 +859,75 @@ bool parseRuntimeToolArgumentsObject( const wxString& aArgumentsJson,
 }
 
 
+bool forbiddenRuntimeMutationKey( const std::string& aKey )
+{
+    return aKey == "direct_publish"
+           || aKey == "publish"
+           || aKey == "publish_preview"
+           || aKey == "publish.preview"
+           || aKey == "raw_board_access"
+           || aKey == "raw_board"
+           || aKey == "raw_board_pointer"
+           || aKey == "board_pointer";
+}
+
+
+std::string jsonPathChild( const std::string& aParent,
+                           const std::string& aChild )
+{
+    if( aParent.empty() )
+        return aChild;
+
+    return aParent + "." + aChild;
+}
+
+
+std::string jsonPathIndex( const std::string& aParent, size_t aIndex )
+{
+    return aParent + "[" + std::to_string( aIndex ) + "]";
+}
+
+
+bool findForbiddenRuntimeMutationCapability( const nlohmann::json& aValue,
+                                             std::string aPath,
+                                             std::string& aForbiddenPath )
+{
+    if( aValue.is_object() )
+    {
+        for( const auto& [key, value] : aValue.items() )
+        {
+            const std::string childPath = jsonPathChild( aPath, key );
+
+            if( forbiddenRuntimeMutationKey( key ) )
+            {
+                aForbiddenPath = childPath;
+                return true;
+            }
+
+            if( findForbiddenRuntimeMutationCapability( value, childPath,
+                                                        aForbiddenPath ) )
+            {
+                return true;
+            }
+        }
+    }
+    else if( aValue.is_array() )
+    {
+        for( size_t i = 0; i < aValue.size(); ++i )
+        {
+            if( findForbiddenRuntimeMutationCapability(
+                        aValue[i], jsonPathIndex( aPath, i ),
+                        aForbiddenPath ) )
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+
 bool runtimeToolEnumStringField(
         const nlohmann::json& aArguments, const char* aName,
         std::initializer_list<const char*> aAllowedValues,
@@ -13918,6 +13987,24 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                         { { "operations",
                             nlohmann::json::array( { std::move( operation ) } ) } } },
                       { "max_steps", 1 } };
+        }
+
+        std::string forbiddenPath;
+        if( findForbiddenRuntimeMutationCapability( args, std::string(),
+                                                    forbiddenPath ) )
+        {
+            return makeResult(
+                    false, false, wxS( "forbidden_runtime_capability" ),
+                    wxString::Format(
+                            wxS( "Hidden mutation batch requested forbidden "
+                                 "runtime capability: %s." ),
+                            fromUtf8String( forbiddenPath ) ),
+                    { { "tool", boundedPlanToolName },
+                      { "status", "forbidden_runtime_capability" },
+                      { "forbidden_field", forbiddenPath },
+                      { "checkpoint_first", false },
+                      { "journal_first", false },
+                      { "mutation_applied", false } } );
         }
 
         if( !args.contains( "plan" ) || !args["plan"].is_object()
