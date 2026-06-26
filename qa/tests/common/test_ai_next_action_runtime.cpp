@@ -207,6 +207,51 @@ public:
 };
 
 
+class PUBLISH_WITH_OVER_BUDGET_REVIEW_TOOL_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "publish with over-budget review tool" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            response.m_Body = publishReview();
+
+            const size_t nextCallIndex = aRequest.m_ToolResults.size() + 1;
+
+            AI_TOOL_CALL_RECORD call;
+            call.m_RequestId = aRequest.m_RequestId;
+            call.m_ToolCallId = wxString::Format(
+                    wxS( "call_review_observation_%llu" ),
+                    static_cast<unsigned long long>( nextCallIndex ) );
+            call.m_ToolName = wxS( "observation_read" );
+            call.m_ArgumentsJson = wxS( "{}" );
+            response.m_ToolCalls.push_back( call );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class RENDER_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -6951,6 +6996,31 @@ BOOST_AUTO_TEST_CASE( RuntimeRecordsFailureFactForToolRoundBudgetExhaustion )
     BOOST_CHECK( toolResults.Contains( wxS( "\"executed\":false" ) ) );
     BOOST_CHECK( toolResults.Contains(
             wxS( "Next Action tool round budget was exhausted before this tool call could run." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeBlocksPublishWhenReviewToolResultFailed )
+{
+    auto* provider = new PUBLISH_WITH_OVER_BUDGET_REVIEW_TOOL_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK( runtime.Suggestions().empty() );
+
+    const wxString& review = runtime.Steps().front().m_ReviewDecisionJson;
+
+    BOOST_CHECK( review.Contains( wxS( "call_review_observation_10" ) ) );
+    BOOST_CHECK( review.Contains( wxS( "tool_round_budget_exceeded" ) ) );
+    BOOST_CHECK( review.Contains( wxS( "provider_tool_result_failed" ) ) );
+    BOOST_CHECK( review.Contains( wxS( "\"allowed\":false" ) ) );
 }
 
 
