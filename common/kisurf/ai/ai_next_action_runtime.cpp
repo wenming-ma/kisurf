@@ -10507,6 +10507,32 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "max_steps", maxSteps } } );
         }
 
+        const ATTEMPT_BUDGET_POLICY mutationPolicy =
+                attemptPolicyForWorkState( budgetPolicyWorkStateForCandidate(
+                        aAttempt->m_Candidate ) );
+        const uint64_t currentMutationCount =
+                aAttempt->m_BudgetCounters.m_MutationCount;
+        const uint64_t requestedOperationCount =
+                static_cast<uint64_t>( operations.size() );
+        const uint64_t remainingMutationBudget =
+                currentMutationCount >= mutationPolicy.m_MaxMutations
+                        ? 0
+                        : mutationPolicy.m_MaxMutations - currentMutationCount;
+
+        if( requestedOperationCount > remainingMutationBudget )
+        {
+            return makeResult(
+                    false, false, wxS( "mutation_budget_exceeded" ),
+                    wxS( "hidden mutation batch would exceed the attempt "
+                         "mutation budget." ),
+                    { { "tool", boundedPlanToolName },
+                      { "status", "mutation_budget_exceeded" },
+                      { "operation_count", requestedOperationCount },
+                      { "attempt_mutation_count", currentMutationCount },
+                      { "remaining_mutation_budget", remainingMutationBudget },
+                      { "max_mutations", mutationPolicy.m_MaxMutations } } );
+        }
+
         nlohmann::json activeJournal = objectFromJsonText( aAttempt->m_JournalJson );
 
         const bool usingActiveAttemptFrame = aAttemptSession != nullptr;
