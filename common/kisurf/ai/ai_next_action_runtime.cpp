@@ -3809,6 +3809,42 @@ nlohmann::json boardContextSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 }
 
 
+nlohmann::json placementContextFactsJson( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    if( aContext.m_Summary.IsEmpty() )
+        return nlohmann::json::object();
+
+    nlohmann::json boardSummary = objectFromJsonText( aContext.m_Summary );
+
+    if( !boardSummary.is_object() || !boardSummary.contains( "placement_facts" )
+        || !boardSummary["placement_facts"].is_object() )
+    {
+        return nlohmann::json::object();
+    }
+
+    const nlohmann::json& placementFacts = boardSummary["placement_facts"];
+    nlohmann::json        summary =
+            { { "source", "context_summary.placement_facts" } };
+
+    copyJsonFieldIfPresent( summary, placementFacts, "footprint_count" );
+    copyJsonFieldIfPresent( summary, placementFacts,
+                            "footprints_with_courtyard_count" );
+    copyJsonFieldIfPresent( summary, placementFacts,
+                            "courtyard_pair_sample_truncated" );
+
+    bool pairTruncated = false;
+    summary["courtyard_pairs"] =
+            cappedJsonArray( placementFacts.value( "courtyard_pairs",
+                                                   nlohmann::json::array() ),
+                             16, pairTruncated );
+
+    if( pairTruncated )
+        summary["courtyard_pair_sample_truncated"] = true;
+
+    return summary;
+}
+
+
 std::string normalizedNetName( std::string aNetName )
 {
     if( !aNetName.empty() && aNetName.front() == '/' )
@@ -6032,6 +6068,20 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                 placementKeepoutFactsJson( context.m_VisibleObjects );
         packet["placement_footprint_geometry_facts"] =
                 placementFootprintGeometryFactsJson( context.m_VisibleObjects );
+
+        nlohmann::json placementContext = placementContextFactsJson( context );
+
+        if( !placementContext.empty() )
+        {
+            packet["placement_context_facts"] = placementContext;
+
+            if( placementContext.contains( "courtyard_pairs" )
+                && placementContext["courtyard_pairs"].is_array() )
+            {
+                packet["placement_courtyard_pair_facts"] =
+                        placementContext["courtyard_pairs"];
+            }
+        }
     }
     else if( packetKind == "structured_surface" )
     {

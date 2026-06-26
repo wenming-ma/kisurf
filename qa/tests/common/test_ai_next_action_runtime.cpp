@@ -5365,7 +5365,23 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"pair_effective_constraints\":[{\"type\":\"clearance\","
                  "\"layer\":\"F.Cu\","
                  "\"value\":{\"min\":220000,\"has_min\":true},"
-                 "\"evaluation_source\":\"DRC_ENGINE::EvalRules\"}]}}}" );
+                 "\"evaluation_source\":\"DRC_ENGINE::EvalRules\"}]}},"
+                 "\"placement_facts\":{\"source\":\"board\","
+                 "\"footprint_count\":2,"
+                 "\"footprints_with_courtyard_count\":2,"
+                 "\"courtyard_pairs\":[{"
+                 "\"kind\":\"footprint_courtyard_pair\","
+                 "\"side\":\"front\","
+                 "\"layer\":\"F.Courtyard\","
+                 "\"bbox_spacing\":150000,"
+                 "\"bbox_overlaps\":false,"
+                 "\"source_footprint\":{\"label\":\"U1\","
+                 "\"courtyard_bbox\":{\"x\":0,\"y\":0,"
+                 "\"width\":100000,\"height\":100000}},"
+                 "\"target_footprint\":{\"label\":\"U2\","
+                 "\"courtyard_bbox\":{\"x\":250000,\"y\":0,"
+                 "\"width\":100000,\"height\":100000}}}],"
+                 "\"courtyard_pair_sample_truncated\":false}}" );
     placementTrigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
     placementTrigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
             VECTOR2I( 180, 80 );
@@ -5658,6 +5674,31 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_footprint_geometry_facts"].at( 0 )
                     ["courtyard_bbox"]["width"].get<int>(),
             120 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_context_facts" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]["footprint_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]
+                    ["footprints_with_courtyard_count"].get<int>(),
+            2 );
+    BOOST_REQUIRE( placementPacket.contains( "placement_courtyard_pair_facts" ) );
+    BOOST_REQUIRE_EQUAL( placementPacket["placement_courtyard_pair_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_courtyard_pair_facts"].at( 0 )["kind"]
+                    .get<std::string>(),
+            "footprint_courtyard_pair" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_courtyard_pair_facts"].at( 0 )
+                    ["bbox_spacing"].get<int>(),
+            150000 );
+    BOOST_CHECK(
+            !placementPacket["placement_courtyard_pair_facts"].at( 0 )
+                     ["bbox_overlaps"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_courtyard_pair_facts"].at( 0 )
+                    ["source_footprint"]["label"].get<std::string>(),
+            "U1" );
     BOOST_REQUIRE( placementPacket.contains( "locality_region" ) );
     BOOST_CHECK_EQUAL(
             placementPacket["locality_region"]["source"].get<std::string>(),
