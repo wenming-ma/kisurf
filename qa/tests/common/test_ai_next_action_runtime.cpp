@@ -5144,11 +5144,19 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"component_graph_edges\":[{\"from\":\"U1.1\","
                  "\"to\":\"U2.1\",\"net_code\":1,\"net_name\":\"GND\","
                  "\"kind\":\"ratsnest\",\"visible\":true,"
-                 "\"estimated_manhattan_length\":420},"
+                 "\"estimated_manhattan_length\":420,"
+                 "\"source\":{\"position\":{\"x\":100,\"y\":200},"
+                 "\"item_uuid\":\"u1\",\"item_type\":1},"
+                 "\"target\":{\"position\":{\"x\":320,\"y\":200},"
+                 "\"item_uuid\":\"u2\",\"item_type\":1}},"
                  "{\"from\":\"U1.1\",\"to\":\"U3.1\","
                  "\"net_code\":1,\"net_name\":\"GND\","
                  "\"kind\":\"ratsnest\",\"visible\":false,"
-                 "\"estimated_manhattan_length\":100}],"
+                 "\"estimated_manhattan_length\":100,"
+                 "\"source\":{\"position\":{\"x\":100,\"y\":200},"
+                 "\"item_uuid\":\"u1\",\"item_type\":1},"
+                 "\"target\":{\"position\":{\"x\":180,\"y\":220},"
+                 "\"item_uuid\":\"u3\",\"item_type\":1}}],"
                  "\"unconnected_edges\":[{\"net_code\":1,"
                  "\"net_name\":\"GND\",\"visible\":true}],"
                  "\"unconnected_edge_sample_truncated\":false},"
@@ -5283,6 +5291,45 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_reachability_facts"].at( 0 )
                     ["estimated_manhattan_length"].get<int>(),
             420 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["from_endpoint"]["position"]["x"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["to_endpoint"]["position"]["x"].get<int>(),
+            320 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_render_region"]["source"].get<std::string>(),
+            "routing_reachability_swept_bbox" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_render_region"]["mode"].get<std::string>(),
+            "routing_reachability_review" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_render_region"]["bbox"]["x"].get<int>(),
+            85 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_render_region"]["bbox"]["width"].get<int>(),
+            250 );
+    BOOST_REQUIRE(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    .contains( "reachability_obstacle_facts" ) );
+
+    std::set<std::string> reachabilityObstacleLabels;
+
+    for( const nlohmann::json& fact :
+         routingPacket["routing_reachability_facts"].at( 0 )
+                 ["reachability_obstacle_facts"] )
+    {
+        reachabilityObstacleLabels.insert( fact["label"].get<std::string>() );
+    }
+
+    BOOST_CHECK( reachabilityObstacleLabels.find( "track:180,210->300,210" )
+                 != reachabilityObstacleLabels.end() );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_reachability_facts"].at( 0 )["from_node"]
                     ["id"].get<std::string>(),

@@ -3870,8 +3870,61 @@ std::optional<nlohmann::json> componentGraphNodeByIdJson(
 }
 
 
+bool jsonNumberAsInt( const nlohmann::json& aObject, const char* aField,
+                      int& aValue );
+
+
+bool jsonPointToInts( const nlohmann::json& aPoint, int& aX, int& aY );
+
+
+nlohmann::json bboxRecordJson( int aLeft, int aTop, int aWidth, int aHeight );
+
+
+nlohmann::json obstacleFactsInBBoxJson(
+        const std::vector<AI_OBJECT_REF>& aObjects,
+        const nlohmann::json& aBbox,
+        const char* aSource );
+
+
+bool graphEndpointPositionToInts( const nlohmann::json& aEdge,
+                                  const char* aEndpointField,
+                                  int& aX, int& aY )
+{
+    if( !aEdge.contains( aEndpointField )
+        || !aEdge[aEndpointField].is_object()
+        || !aEdge[aEndpointField].contains( "position" ) )
+    {
+        return false;
+    }
+
+    return jsonPointToInts( aEdge[aEndpointField]["position"], aX, aY );
+}
+
+
+nlohmann::json routingEndpointSweptBBoxJson(
+        int aStartX, int aStartY,
+        int aEndX, int aEndY,
+        const nlohmann::json& aModeContext )
+{
+    int width = 0;
+    int padding = 0;
+
+    if( jsonNumberAsInt( aModeContext, "width", width ) && width > 0 )
+        padding = std::max( 1, width / 2 );
+
+    const int left = std::min( aStartX, aEndX ) - padding;
+    const int top = std::min( aStartY, aEndY ) - padding;
+    const int right = std::max( aStartX, aEndX ) + padding;
+    const int bottom = std::max( aStartY, aEndY ) + padding;
+
+    return bboxRecordJson( left, top, right - left, bottom - top );
+}
+
+
 nlohmann::json routingReachabilityFactsJson(
-        const nlohmann::json& aActiveNetSummary )
+        const nlohmann::json& aActiveNetSummary,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        const std::vector<AI_OBJECT_REF>& aVisibleObjects )
 {
     nlohmann::json facts = nlohmann::json::array();
 
@@ -3890,6 +3943,8 @@ nlohmann::json routingReachabilityFactsJson(
                             && aActiveNetSummary["name"].is_string()
                     ? aActiveNetSummary["name"].get<std::string>()
                     : std::string();
+    const nlohmann::json modeContext =
+            objectFromJsonText( aToolState.m_ModeContextJson );
     std::vector<nlohmann::json> rankedFacts;
 
     for( const nlohmann::json& edge :
@@ -3911,6 +3966,33 @@ nlohmann::json routingReachabilityFactsJson(
         copyJsonFieldIfPresent( fact, edge, "net_name" );
         copyJsonFieldIfPresent( fact, edge, "visible" );
         copyJsonFieldIfPresent( fact, edge, "estimated_manhattan_length" );
+
+        if( edge.contains( "source" ) && edge["source"].is_object() )
+            fact["from_endpoint"] = edge["source"];
+
+        if( edge.contains( "target" ) && edge["target"].is_object() )
+            fact["to_endpoint"] = edge["target"];
+
+        int startX = 0;
+        int startY = 0;
+        int endX = 0;
+        int endY = 0;
+
+        if( graphEndpointPositionToInts( edge, "source", startX, startY )
+            && graphEndpointPositionToInts( edge, "target", endX, endY ) )
+        {
+            const nlohmann::json sweptBBox =
+                    routingEndpointSweptBBoxJson( startX, startY, endX, endY,
+                                                  modeContext );
+
+            fact["suggested_render_region"] =
+                    { { "source", "routing_reachability_swept_bbox" },
+                      { "mode", "routing_reachability_review" },
+                      { "bbox", sweptBBox } };
+            fact["reachability_obstacle_facts"] =
+                    obstacleFactsInBBoxJson( aVisibleObjects, sweptBBox,
+                                             "routing_reachability_swept_bbox" );
+        }
 
         if( edge.contains( "kind" ) )
             fact["edge_kind"] = edge["kind"];
@@ -5318,7 +5400,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
 
     nlohmann::json activeNet = activeNetSummaryJson( context );
     nlohmann::json routingReachability =
-            routingReachabilityFactsJson( activeNet );
+            routingReachabilityFactsJson( activeNet, context.m_ToolState,
+                                          context.m_VisibleObjects );
 
     if( !activeNet.empty() )
         packet["active_net_summary"] = std::move( activeNet );
