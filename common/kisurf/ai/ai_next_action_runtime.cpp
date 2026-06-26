@@ -11187,6 +11187,20 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         }
 
         AI_SESSION_OBSERVATION observation = session->EndStep( stepId );
+        bool                   rolledBackFailedPlan = false;
+
+        if( failed )
+        {
+            rolledBackFailedPlan = session->RollbackTo( checkpointId );
+            observation.m_Epoch = session->Epoch();
+            observation.m_OperationCount =
+                    session->Journal().Operations().size();
+            observation.m_Summary =
+                    rolledBackFailedPlan
+                            ? wxS( "bounded_script_plan.rollback_on_failure" )
+                            : wxS( "bounded_script_plan.rollback_failed" );
+        }
+
         nlohmann::json journal =
                 objectFromJsonText( sessionJournalJson( *session, observation ) );
 
@@ -11255,20 +11269,47 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                 keptBatches.push_back( batch );
             }
 
-            keptBatches.push_back(
-                    { { "tool", boundedPlanToolName },
-                      { "tool_call_id", toolCallId },
-                      { "operation_count", mergedOperationCount },
-                      { "script_step_id", stepId },
-                      { "checkpoint_id", checkpointId },
-                      { "active_attempt_frame", true } } );
-            journal["merged_tool_batches"] = std::move( keptBatches );
+            if( !failed || !rolledBackFailedPlan )
+            {
+                keptBatches.push_back(
+                        { { "tool", boundedPlanToolName },
+                          { "tool_call_id", toolCallId },
+                          { "operation_count", mergedOperationCount },
+                          { "script_step_id", stepId },
+                          { "checkpoint_id", checkpointId },
+                          { "active_attempt_frame", true } } );
+            }
 
-            if( activeJournal.contains( "rolled_back_tool_call_ids" )
-                && activeJournal["rolled_back_tool_call_ids"].is_array() )
+            if( !keptBatches.empty() )
+                journal["merged_tool_batches"] = std::move( keptBatches );
+
+            nlohmann::json rolledBackToolCallIds =
+                    activeJournal.contains( "rolled_back_tool_call_ids" )
+                    && activeJournal["rolled_back_tool_call_ids"].is_array()
+                            ? activeJournal["rolled_back_tool_call_ids"]
+                            : nlohmann::json::array();
+
+            if( failed && rolledBackFailedPlan )
+            {
+                bool alreadyTrackedRollback = false;
+
+                for( const nlohmann::json& id : rolledBackToolCallIds )
+                {
+                    if( id.is_string() && id.get<std::string>() == toolCallId )
+                    {
+                        alreadyTrackedRollback = true;
+                        break;
+                    }
+                }
+
+                if( !alreadyTrackedRollback )
+                    rolledBackToolCallIds.push_back( toolCallId );
+            }
+
+            if( !rolledBackToolCallIds.empty() )
             {
                 journal["rolled_back_tool_call_ids"] =
-                        activeJournal["rolled_back_tool_call_ids"];
+                        std::move( rolledBackToolCallIds );
             }
 
             aAttempt->m_JournalJson = fromUtf8String( journal.dump() );
@@ -11281,6 +11322,31 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                 provenance = nlohmann::json::object();
 
             provenance["session_journal"] = journal;
+
+            if( failed && rolledBackFailedPlan )
+            {
+                nlohmann::json rollback =
+                        { { "tool", boundedPlanToolName },
+                          { "status", "rolled_back" },
+                          { "checkpoint_id", checkpointId },
+                          { "rolled_back", true },
+                          { "rollback_scope", "active_attempt_frame" },
+                          { "rolled_back_tool_call_id", toolCallId },
+                          { "partial_mutation_discarded", true },
+                          { "attempt_session_journal", journal },
+                          { "publish_allowed", false } };
+
+                nlohmann::json rollbackHistory =
+                        provenance.contains( "rollback_history" )
+                        && provenance["rollback_history"].is_array()
+                                ? provenance["rollback_history"]
+                                : nlohmann::json::array();
+                rollbackHistory.push_back( rollback );
+                provenance["rollback_history"] = std::move( rollbackHistory );
+                provenance["last_rollback"] = std::move( rollback );
+                provenance["partial_mutation_discarded"] = true;
+            }
+
             aAttempt->m_ProvenanceJson = fromUtf8String( provenance.dump() );
             syncAttemptBudgetCountersToProvenance( *aAttempt );
         }
@@ -11306,6 +11372,16 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                   { "mutation_applied", !operations.empty() && !failed },
                   { "checkpoint_first", checkpointId != 0 },
                   { "journal_first", true } };
+
+        if( failed )
+        {
+            payload["rolled_back"] = rolledBackFailedPlan;
+            payload["rollback_checkpoint_id"] = checkpointId;
+            payload["rollback_scope"] =
+                    usingActiveAttemptFrame ? "active_attempt_frame"
+                                            : "isolated_script_session";
+            payload["partial_mutation_discarded"] = rolledBackFailedPlan;
+        }
 
         if( failed )
         {

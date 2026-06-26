@@ -661,6 +661,62 @@ public:
 };
 
 
+class FAILING_BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "failing bounded script tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"failing_bounded_script_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need failed bounded script facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_failing_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"rollback_probe_via\"}},"
+                             "{\"kind\":\"pcb.unsupported_operation\","
+                             "\"arguments\":{}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class MUTATION_BUDGET_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -7775,6 +7831,52 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
     BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "render_freshness_failed" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRollsBackFailedBoundedScriptPlanBeforeReviewContinues )
+{
+    auto* provider = new FAILING_BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result = toolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId,
+                       wxString( wxS( "call_failing_script_plan" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"script_plan_failed\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"error_code\":\"unsupported_script_operation\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"rolled_back\":true" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"rollback_checkpoint_id\":" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"partial_mutation_discarded\":true" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    const wxString& journal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( !journal.Contains( wxS( "rollback_probe_via" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "\"rolled_back_tool_call_ids\"" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "call_failing_script_plan" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"partial_mutation_discarded\":true" ) ) );
 }
 
 
