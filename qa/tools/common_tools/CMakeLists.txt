@@ -63,4 +63,47 @@ target_compile_definitions( qa_common_tools
     PRIVATE PCBNEW
 )
 
+if( WIN32 )
+    function( copy_runtime_dlls_for_qa_common_tools aTarget )
+        add_custom_command( TARGET qa_common_tools POST_BUILD
+            COMMAND ${CMAKE_COMMAND}
+                "-DKISURF_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${aTarget}>,,>"
+                "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:qa_common_tools>"
+                -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake"
+        )
+    endfunction()
+
+    add_custom_command( TARGET qa_common_tools POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicommon>" "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gal>" "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:qa_common_tools>"
+    )
+
+    copy_runtime_dlls_for_qa_common_tools( kicommon )
+    copy_runtime_dlls_for_qa_common_tools( gal )
+    copy_runtime_dlls_for_qa_common_tools( kiapi )
+
+    add_custom_target( qa_common_tools_runtime_dlls
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicommon>" "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gal>" "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:qa_common_tools>"
+        COMMAND ${CMAKE_COMMAND}
+            "-DKISURF_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:kicommon>,,>"
+            "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:qa_common_tools>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake"
+        COMMAND ${CMAKE_COMMAND}
+            "-DKISURF_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:gal>,,>"
+            "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:qa_common_tools>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake"
+        COMMAND ${CMAKE_COMMAND}
+            "-DKISURF_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:kiapi>,,>"
+            "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:qa_common_tools>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake"
+    )
+
+    add_dependencies( qa_common_tools_runtime_dlls kicommon gal kiapi )
+    add_dependencies( qa_common_tools qa_common_tools_runtime_dlls )
+endif()
+
 kicad_add_utils_executable( qa_common_tools )
