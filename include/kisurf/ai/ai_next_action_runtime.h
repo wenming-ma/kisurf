@@ -367,6 +367,29 @@ AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson 
 KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
 AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath );
 
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
+{
+    bool     m_Valid = true;
+    bool     m_Passed = true;
+    wxString m_FirstErrorCode;
+    wxString m_FirstErrorMessage;
+    wxString m_FirstFailedDatasetPath;
+    size_t   m_TotalDatasetCount = 0;
+    size_t   m_ValidDatasetCount = 0;
+    size_t   m_InvalidDatasetCount = 0;
+    size_t   m_PassedDatasetCount = 0;
+    size_t   m_FailedDatasetCount = 0;
+    size_t   m_TotalRecordCount = 0;
+    size_t   m_ValidRecordCount = 0;
+    size_t   m_InvalidRecordCount = 0;
+    size_t   m_PassedRecordCount = 0;
+    size_t   m_FailedRecordCount = 0;
+    wxString m_SummaryJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatasetPaths );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:

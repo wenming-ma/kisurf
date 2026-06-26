@@ -9487,6 +9487,87 @@ AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath 
 }
 
 
+AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatasetPaths )
+{
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT result;
+    result.m_TotalDatasetCount = aGoldenDatasetPaths.size();
+
+    nlohmann::json datasetSummaries = nlohmann::json::array();
+
+    for( size_t i = 0; i < aGoldenDatasetPaths.size(); ++i )
+    {
+        const wxString& datasetPath = aGoldenDatasetPaths[i];
+
+        AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT dataset =
+                AiEvaluateNextActionReplayGoldenDatasetFile( datasetPath );
+
+        result.m_TotalRecordCount += dataset.m_TotalRecordCount;
+        result.m_ValidRecordCount += dataset.m_ValidRecordCount;
+        result.m_InvalidRecordCount += dataset.m_InvalidRecordCount;
+        result.m_PassedRecordCount += dataset.m_PassedRecordCount;
+        result.m_FailedRecordCount += dataset.m_FailedRecordCount;
+
+        if( dataset.m_Valid )
+            ++result.m_ValidDatasetCount;
+        else
+            ++result.m_InvalidDatasetCount;
+
+        if( dataset.m_Passed )
+            ++result.m_PassedDatasetCount;
+        else
+            ++result.m_FailedDatasetCount;
+
+        if( !dataset.m_Passed && result.m_FirstErrorCode.IsEmpty() )
+        {
+            result.m_FirstErrorCode = dataset.m_FirstErrorCode;
+            result.m_FirstErrorMessage = dataset.m_FirstErrorMessage;
+            result.m_FirstFailedDatasetPath = datasetPath;
+        }
+
+        nlohmann::json datasetSummary =
+                nlohmann::json::parse( toUtf8String( dataset.m_SummaryJson ),
+                                       nullptr, false );
+
+        if( datasetSummary.is_discarded() || !datasetSummary.is_object() )
+            datasetSummary = nlohmann::json::object();
+
+        datasetSummary["dataset_path"] = toUtf8String( datasetPath );
+        datasetSummaries.push_back( datasetSummary );
+    }
+
+    result.m_Valid = result.m_InvalidDatasetCount == 0;
+    result.m_Passed = result.m_Valid && result.m_FailedDatasetCount == 0;
+
+    nlohmann::json summary =
+            { { "valid", result.m_Valid },
+              { "passed", result.m_Passed },
+              { "total_dataset_count", result.m_TotalDatasetCount },
+              { "valid_dataset_count", result.m_ValidDatasetCount },
+              { "invalid_dataset_count", result.m_InvalidDatasetCount },
+              { "passed_dataset_count", result.m_PassedDatasetCount },
+              { "failed_dataset_count", result.m_FailedDatasetCount },
+              { "total_record_count", result.m_TotalRecordCount },
+              { "valid_record_count", result.m_ValidRecordCount },
+              { "invalid_record_count", result.m_InvalidRecordCount },
+              { "passed_record_count", result.m_PassedRecordCount },
+              { "failed_record_count", result.m_FailedRecordCount },
+              { "datasets", datasetSummaries } };
+
+    if( !result.m_FirstErrorCode.IsEmpty() )
+    {
+        summary["first_error_code"] = toUtf8String( result.m_FirstErrorCode );
+        summary["first_error_message"] =
+                toUtf8String( result.m_FirstErrorMessage );
+        summary["first_failed_dataset_path"] =
+                toUtf8String( result.m_FirstFailedDatasetPath );
+    }
+
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
 bool isActiveNextActionToolState( AI_TOOL_STATE_KIND aToolState )
 {
     return aToolState == AI_TOOL_STATE_KIND::RoutingTrack
