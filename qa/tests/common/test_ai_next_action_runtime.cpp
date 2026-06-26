@@ -5339,6 +5339,18 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_corridor_facts"].at( 0 )["swept_bbox"]["height"]
                     .get<int>(),
             30 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["suggested_render_region"]
+                    ["source"].get<std::string>(),
+            "routing_corridor_swept_bbox" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["suggested_render_region"]
+                    ["mode"].get<std::string>(),
+            "routing_corridor_review" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["suggested_render_region"]
+                    ["bbox"]["x"].get<int>(),
+            85 );
     BOOST_REQUIRE(
             routingPacket["routing_corridor_facts"].at( 0 )
                     .contains( "corridor_obstacle_facts" ) );
