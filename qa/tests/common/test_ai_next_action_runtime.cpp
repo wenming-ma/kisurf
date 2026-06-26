@@ -6682,8 +6682,12 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
 
     BOOST_REQUIRE( evaluation.m_Valid );
     BOOST_CHECK_EQUAL( evaluation.m_PreviewGateFeedbackCount, 1 );
+    BOOST_CHECK( evaluation.m_PreviewGateFeedbackReasonCountsJson.Contains(
+            wxS( "\"validation_freshness_failed\":1" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"preview_gate_feedback_count\":1" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"validation_freshness_failed\":1" ) ) );
 
     wxArrayString batchInput;
     batchInput.Add( traces.front().m_ReplayJson );
@@ -6693,8 +6697,12 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
 
     BOOST_REQUIRE( batch.m_Valid );
     BOOST_CHECK_EQUAL( batch.m_PreviewGateFeedbackCount, 1 );
+    BOOST_CHECK( batch.m_PreviewGateFeedbackReasonCountsJson.Contains(
+            wxS( "\"validation_freshness_failed\":1" ) ) );
     BOOST_CHECK( batch.m_SummaryJson.Contains(
             wxS( "\"preview_gate_feedback_count\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"validation_freshness_failed\":1" ) ) );
 }
 
 

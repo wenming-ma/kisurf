@@ -8670,6 +8670,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
     result.m_Superseded = terminalState == "superseded";
     result.m_Abandoned = terminalState == "abandoned";
 
+    nlohmann::json feedbackReasonCounts = nlohmann::json::object();
+
     if( trace.contains( "tool_results" ) && trace["tool_results"].is_object() )
     {
         for( const char* phase : { "decision", "review" } )
@@ -8689,6 +8691,28 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                                    == "preview_gate_feedback" )
                     {
                         ++result.m_PreviewGateFeedbackCount;
+
+                        if( toolResult.contains( "result" )
+                            && toolResult["result"].is_object()
+                            && toolResult["result"].contains(
+                                    "preview_gate_result" )
+                            && toolResult["result"]["preview_gate_result"].is_object()
+                            && toolResult["result"]["preview_gate_result"].contains(
+                                    "reasons" )
+                            && toolResult["result"]["preview_gate_result"]["reasons"]
+                                       .is_array() )
+                        {
+                            for( const nlohmann::json& reason :
+                                 toolResult["result"]["preview_gate_result"]["reasons"] )
+                            {
+                                if( !reason.is_string() )
+                                    continue;
+
+                                const std::string key = reason.get<std::string>();
+                                feedbackReasonCounts[key] =
+                                        feedbackReasonCounts.value( key, 0 ) + 1;
+                            }
+                        }
                     }
                 }
             }
@@ -8757,6 +8781,9 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
         }
     }
 
+    result.m_PreviewGateFeedbackReasonCountsJson =
+            fromUtf8String( feedbackReasonCounts.dump() );
+
     nlohmann::json metrics =
             { { "schema_version", result.m_SchemaVersion },
               { "runtime_step_id", result.m_RuntimeStepId },
@@ -8774,6 +8801,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "tool_result_count", result.m_ToolResultCount },
               { "preview_gate_feedback_count",
                 result.m_PreviewGateFeedbackCount },
+              { "preview_gate_feedback_reason_counts",
+                feedbackReasonCounts },
               { "preview_gate_allowed", result.m_PreviewGateAllowed },
               { "work_state_interaction_semantics_present",
                 result.m_WorkStateInteractionSemanticsPresent },
@@ -8791,6 +8820,7 @@ AiEvaluateNextActionReplayTraceBatch(
 {
     AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result;
     result.m_TotalTraceCount = aReplayTraceJsons.size();
+    nlohmann::json feedbackReasonCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aReplayTraceJsons.size(); ++i )
     {
@@ -8846,9 +8876,33 @@ AiEvaluateNextActionReplayTraceBatch(
         result.m_ToolResultCount += evaluation.m_ToolResultCount;
         result.m_PreviewGateFeedbackCount +=
                 evaluation.m_PreviewGateFeedbackCount;
+
+        nlohmann::json traceFeedbackReasons =
+                nlohmann::json::parse(
+                        toUtf8String(
+                                evaluation.m_PreviewGateFeedbackReasonCountsJson ),
+                        nullptr, false );
+
+        if( traceFeedbackReasons.is_object() )
+        {
+            for( auto it = traceFeedbackReasons.begin();
+                 it != traceFeedbackReasons.end(); ++it )
+            {
+                if( it.value().is_number_integer()
+                    || it.value().is_number_unsigned() )
+                {
+                    const std::string key = it.key();
+                    feedbackReasonCounts[key] =
+                            feedbackReasonCounts.value( key, 0 )
+                            + it.value().get<size_t>();
+                }
+            }
+        }
     }
 
     result.m_Valid = result.m_InvalidTraceCount == 0;
+    result.m_PreviewGateFeedbackReasonCountsJson =
+            fromUtf8String( feedbackReasonCounts.dump() );
 
     nlohmann::json summary =
             { { "total_trace_count", result.m_TotalTraceCount },
@@ -8867,6 +8921,8 @@ AiEvaluateNextActionReplayTraceBatch(
               { "tool_result_count", result.m_ToolResultCount },
               { "preview_gate_feedback_count",
                 result.m_PreviewGateFeedbackCount },
+              { "preview_gate_feedback_reason_counts",
+                feedbackReasonCounts },
               { "preview_gate_allowed_count",
                 result.m_PreviewGateAllowedCount },
               { "work_state_interaction_semantics_present_count",
