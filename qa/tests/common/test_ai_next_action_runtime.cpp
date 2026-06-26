@@ -6972,6 +6972,55 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksExpectedTraceOutcome )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksExpectedWorkState )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json golden =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-wrong-work-state" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "work_state", "routing" } } } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( golden.dump().c_str() ) );
+
+    BOOST_CHECK( evaluation.m_Valid );
+    BOOST_CHECK( !evaluation.m_Passed );
+    BOOST_CHECK_EQUAL( evaluation.m_WorkState,
+                       wxString( wxS( "layout" ) ) );
+    BOOST_CHECK_EQUAL( evaluation.m_ErrorCode,
+                       wxString( wxS( "work_state_mismatch" ) ) );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"work_state\":\"layout\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksInnerLoopMetrics )
 {
     auto* provider =
