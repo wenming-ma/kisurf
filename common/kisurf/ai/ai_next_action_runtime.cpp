@@ -8690,6 +8690,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_checkpoint", true },
                 { "requires_journal", true },
                 { "lowers_to", "pcb.create_via" },
+                { "argument_contract",
+                  { { "net", "empty string for NoNet" } } },
                 { "max_steps", 1 } },
               { { "name", "placement.repair_move_items" },
                 { "layer", "integrated" },
@@ -9143,7 +9145,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             pointSchema( "Board position for the repaired via, using integer internal coordinates." );
                     parameters["properties"]["net"] =
                             { { "type", "string" },
-                              { "description", "Net assigned to the repaired via." } };
+                              { "description",
+                                "Net assigned to the repaired via; use empty string for NoNet." } };
                     parameters["properties"]["diameter"] =
                             { { "type", "integer" },
                               { "minimum", 1 },
