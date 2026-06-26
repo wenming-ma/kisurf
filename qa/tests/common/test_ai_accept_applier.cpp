@@ -1145,6 +1145,44 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsUnknownPatchOperationAndAborts )
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsFillEmptyOnlyCellOverwriteAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "fill empty only surface patch" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"write_policy\":\"fill_empty_only\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_cell\","
+                 "\"row_id\":\"row.power\","
+                 "\"column_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"tables\":"
+                 "{\"clearance.rules\":{\"rows\":{\"row.power\":{\"cells\":"
+                 "{\"class\":\"Signal\"}}}}}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "fill_empty_only" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
 BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleSurfaceRevisionAndAborts )
 {
     AI_EXECUTION_SESSION session = makeSession();

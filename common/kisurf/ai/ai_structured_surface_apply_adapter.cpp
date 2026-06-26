@@ -64,6 +64,115 @@ std::string stringField( const nlohmann::json& aObject, const char* aKey )
 }
 
 
+std::string surfacePatchWritePolicy( const nlohmann::json& aArgs )
+{
+    std::string policy = stringField( aArgs, "write_policy" );
+
+    if( !policy.empty() )
+        return policy;
+
+    policy = stringField( aArgs, "fill_policy" );
+
+    if( !policy.empty() )
+        return policy;
+
+    if( aArgs.contains( "patch" ) && aArgs["patch"].is_object() )
+    {
+        policy = stringField( aArgs["patch"], "write_policy" );
+
+        if( !policy.empty() )
+            return policy;
+
+        policy = stringField( aArgs["patch"], "fill_policy" );
+    }
+
+    return policy;
+}
+
+
+bool provenanceAllowsFillEmptyOnlyOverwrite( const std::string& aProvenance )
+{
+    return aProvenance == "project_default"
+           || aProvenance == "inherited"
+           || aProvenance == "deterministic_propagated"
+           || aProvenance == "ai_accepted";
+}
+
+
+bool surfaceValueAllowsFillEmptyOnlyWrite( const nlohmann::json& aCurrentValue )
+{
+    if( aCurrentValue.is_null() )
+        return true;
+
+    if( aCurrentValue.is_string() )
+        return aCurrentValue.get<std::string>().empty();
+
+    if( aCurrentValue.is_object() )
+    {
+        const std::string provenance =
+                stringField( aCurrentValue, "value_provenance" ).empty()
+                        ? stringField( aCurrentValue, "provenance" )
+                        : stringField( aCurrentValue, "value_provenance" );
+
+        if( provenanceAllowsFillEmptyOnlyOverwrite( provenance ) )
+            return true;
+
+        if( aCurrentValue.contains( "value" ) )
+            return surfaceValueAllowsFillEmptyOnlyWrite( aCurrentValue["value"] );
+    }
+
+    return false;
+}
+
+
+const nlohmann::json* currentSurfaceCellValue(
+        const nlohmann::json& aSurface,
+        const std::string& aTableId,
+        const std::string& aRowId,
+        const std::string& aColumnId )
+{
+    if( !aSurface.contains( "tables" ) || !aSurface["tables"].is_object()
+        || !aSurface["tables"].contains( aTableId )
+        || !aSurface["tables"][aTableId].is_object() )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& table = aSurface["tables"][aTableId];
+
+    if( !table.contains( "rows" ) || !table["rows"].is_object()
+        || !table["rows"].contains( aRowId )
+        || !table["rows"][aRowId].is_object() )
+    {
+        return nullptr;
+    }
+
+    const nlohmann::json& row = table["rows"][aRowId];
+
+    if( !row.contains( "cells" ) || !row["cells"].is_object()
+        || !row["cells"].contains( aColumnId ) )
+    {
+        return nullptr;
+    }
+
+    return &row["cells"][aColumnId];
+}
+
+
+const nlohmann::json* currentSurfaceFieldValue(
+        const nlohmann::json& aSurface,
+        const std::string& aFieldId )
+{
+    if( !aSurface.contains( "fields" ) || !aSurface["fields"].is_object()
+        || !aSurface["fields"].contains( aFieldId ) )
+    {
+        return nullptr;
+    }
+
+    return &aSurface["fields"][aFieldId];
+}
+
+
 bool scalarValuesEqual( const nlohmann::json& aExpected,
                         const nlohmann::json& aActual )
 {
@@ -1533,6 +1642,8 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
     }
 
     const std::string tableId = stringField( args, "table_id" );
+    const bool fillEmptyOnly =
+            surfacePatchWritePolicy( args ) == "fill_empty_only";
     nlohmann::json workingState = objectFromJsonText( m_WorkingStateJson );
 
     if( args.contains( "expected_surface_revision" ) )
@@ -1646,6 +1757,18 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
                 return false;
             }
 
+            const nlohmann::json* currentValue =
+                    currentSurfaceCellValue( surface, opTableId, rowId,
+                                             columnId );
+
+            if( fillEmptyOnly && currentValue
+                && !surfaceValueAllowsFillEmptyOnlyWrite( *currentValue ) )
+            {
+                aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
+                              "a non-empty cell." );
+                return false;
+            }
+
             surface["tables"][opTableId]["rows"][rowId]["cells"][columnId] =
                     op["value"];
             changed = true;
@@ -1659,6 +1782,17 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
             if( fieldId.empty() || !op.contains( "value" ) )
             {
                 aError = wxS( "SurfacePatch set_field requires field_id and value." );
+                return false;
+            }
+
+            const nlohmann::json* currentValue =
+                    currentSurfaceFieldValue( surface, fieldId );
+
+            if( fillEmptyOnly && currentValue
+                && !surfaceValueAllowsFillEmptyOnlyWrite( *currentValue ) )
+            {
+                aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
+                              "a non-empty field." );
                 return false;
             }
 
