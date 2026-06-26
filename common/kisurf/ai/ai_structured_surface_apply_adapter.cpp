@@ -1833,6 +1833,86 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
     nlohmann::json& surface = workingState["surfaces"][surfaceId];
     bool changed = false;
 
+    auto applyCell = [&]( const std::string& aTableId,
+                          const std::string& aRowId,
+                          const std::string& aColumnId,
+                          const nlohmann::json& aValue,
+                          const wxString& aOpName ) -> bool
+    {
+        if( aTableId.empty() || aRowId.empty() || aColumnId.empty() )
+        {
+            aError = wxString::Format(
+                    wxS( "SurfacePatch %s requires table_id, row_id, "
+                         "column_id, and value." ),
+                    aOpName );
+            return false;
+        }
+
+        const nlohmann::json* currentValue =
+                currentSurfaceCellValue( surface, aTableId, aRowId,
+                                         aColumnId );
+
+        nlohmann::json currentPolicyValue;
+
+        if( currentValue )
+        {
+            currentPolicyValue = valueWithFallbackProvenance(
+                    *currentValue,
+                    surfaceCellProvenance( surface, aTableId, aRowId,
+                                           aColumnId ) );
+        }
+
+        if( fillEmptyOnly && currentValue
+            && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
+        {
+            aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
+                          "a non-empty cell." );
+            return false;
+        }
+
+        surface["tables"][aTableId]["rows"][aRowId]["cells"][aColumnId] =
+                aValue;
+        changed = true;
+        return true;
+    };
+
+    auto applyField = [&]( const std::string& aFieldId,
+                           const nlohmann::json& aValue,
+                           const wxString& aOpName ) -> bool
+    {
+        if( aFieldId.empty() )
+        {
+            aError = wxString::Format(
+                    wxS( "SurfacePatch %s requires field_id/property_id "
+                         "and value." ),
+                    aOpName );
+            return false;
+        }
+
+        const nlohmann::json* currentValue =
+                currentSurfaceFieldValue( surface, aFieldId );
+
+        nlohmann::json currentPolicyValue;
+
+        if( currentValue )
+        {
+            currentPolicyValue = valueWithFallbackProvenance(
+                    *currentValue, surfaceFieldProvenance( surface, aFieldId ) );
+        }
+
+        if( fillEmptyOnly && currentValue
+            && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
+        {
+            aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
+                          "a non-empty field." );
+            return false;
+        }
+
+        surface["fields"][aFieldId] = aValue;
+        changed = true;
+        return true;
+    };
+
     for( const nlohmann::json& op : *operations )
     {
         const std::string opName = stringField( op, "op" );
@@ -1853,66 +1933,129 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
                 return false;
             }
 
-            const nlohmann::json* currentValue =
-                    currentSurfaceCellValue( surface, opTableId, rowId,
-                                             columnId );
-
-            nlohmann::json currentPolicyValue;
-
-            if( currentValue )
-            {
-                currentPolicyValue = valueWithFallbackProvenance(
-                        *currentValue,
-                        surfaceCellProvenance( surface, opTableId, rowId,
-                                               columnId ) );
-            }
-
-            if( fillEmptyOnly && currentValue
-                && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
-            {
-                aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
-                              "a non-empty cell." );
+            if( !applyCell( opTableId, rowId, columnId, op["value"],
+                            wxS( "set_cell" ) ) )
                 return false;
-            }
 
-            surface["tables"][opTableId]["rows"][rowId]["cells"][columnId] =
-                    op["value"];
-            changed = true;
             continue;
         }
 
-        if( opName == "set_field" )
+        if( opName == "fill_row" )
         {
-            const std::string fieldId = stringField( op, "field_id" );
+            const std::string rowId = stringField( op, "row_id" );
+            const std::string tableOverride = stringField( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( opTableId.empty() || rowId.empty() || !op.contains( "values" )
+                || !op["values"].is_object() )
+            {
+                aError = wxS( "SurfacePatch fill_row requires table_id, row_id, "
+                              "and object values." );
+                return false;
+            }
+
+            for( auto valueIt = op["values"].begin();
+                 valueIt != op["values"].end(); ++valueIt )
+            {
+                if( !applyCell( opTableId, rowId, valueIt.key(),
+                                valueIt.value(), wxS( "fill_row" ) ) )
+                {
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
+        if( opName == "fill_column" )
+        {
+            const std::string columnId = stringField( op, "column_id" );
+            const std::string tableOverride = stringField( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( opTableId.empty() || columnId.empty()
+                || !op.contains( "values" ) || !op["values"].is_object() )
+            {
+                aError = wxS( "SurfacePatch fill_column requires table_id, "
+                              "column_id, and object values." );
+                return false;
+            }
+
+            for( auto valueIt = op["values"].begin();
+                 valueIt != op["values"].end(); ++valueIt )
+            {
+                if( !applyCell( opTableId, valueIt.key(), columnId,
+                                valueIt.value(), wxS( "fill_column" ) ) )
+                {
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
+        if( opName == "fill_range" )
+        {
+            const std::string tableOverride = stringField( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( !op.contains( "cells" ) || !op["cells"].is_array() )
+            {
+                aError = wxS( "SurfacePatch fill_range requires a cells array." );
+                return false;
+            }
+
+            for( const nlohmann::json& cell : op["cells"] )
+            {
+                const std::string rowId = stringField( cell, "row_id" );
+                const std::string columnId = stringField( cell, "column_id" );
+                const std::string cellTableOverride =
+                        stringField( cell, "table_id" );
+                const std::string cellTableId =
+                        cellTableOverride.empty() ? opTableId
+                                                  : cellTableOverride;
+
+                if( cellTableId.empty() || rowId.empty() || columnId.empty()
+                    || !cell.contains( "value" ) )
+                {
+                    aError = wxS( "SurfacePatch fill_range cells require "
+                                  "table_id, row_id, column_id, and value." );
+                    return false;
+                }
+
+                if( !applyCell( cellTableId, rowId, columnId, cell["value"],
+                                wxS( "fill_range" ) ) )
+                {
+                    return false;
+                }
+            }
+
+            continue;
+        }
+
+        if( opName == "set_field" || opName == "set_property" )
+        {
+            std::string fieldId = stringField( op, "field_id" );
+
+            if( fieldId.empty() )
+                fieldId = stringField( op, "property_id" );
 
             if( fieldId.empty() || !op.contains( "value" ) )
             {
-                aError = wxS( "SurfacePatch set_field requires field_id and value." );
+                aError = wxS( "SurfacePatch set_field/set_property requires "
+                              "field_id/property_id and value." );
                 return false;
             }
 
-            const nlohmann::json* currentValue =
-                    currentSurfaceFieldValue( surface, fieldId );
-
-            nlohmann::json currentPolicyValue;
-
-            if( currentValue )
-            {
-                currentPolicyValue = valueWithFallbackProvenance(
-                        *currentValue,
-                        surfaceFieldProvenance( surface, fieldId ) );
-            }
-
-            if( fillEmptyOnly && currentValue
-                && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
-            {
-                aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
-                              "a non-empty field." );
+            if( !applyField( fieldId, op["value"],
+                             opName == "set_property"
+                                     ? wxS( "set_property" )
+                                     : wxS( "set_field" ) ) )
                 return false;
-            }
 
-            surface["fields"][fieldId] = op["value"];
-            changed = true;
             continue;
         }
 

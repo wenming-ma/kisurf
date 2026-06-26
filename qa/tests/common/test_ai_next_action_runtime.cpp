@@ -1202,6 +1202,108 @@ public:
 };
 
 
+class SURFACE_PATCH_FILL_OPS_THEN_RENDER_NEXT_ACTION_PROVIDER :
+        public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "surface patch fill ops then render next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"attempt\","
+                         "\"opportunity_type\":\"structured_surface\","
+                         "\"selected_candidate_index\":0,"
+                         "\"target_scope\":{\"kind\":\"surface\","
+                         "\"panel_id\":\"board_setup.clearance\","
+                         "\"surface_id\":\"board_setup.clearance\"},"
+                         "\"reason_code\":\"surface_patch_fill_ops_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need batch SurfacePatch lowering facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_surface_patch_fill_ops" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{"
+                             "\"kind\":\"surface.apply_patch\","
+                             "\"arguments\":{"
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"target_scope\":{\"kind\":\"surface\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"surface_id\":\"board_setup.clearance\"},"
+                             "\"patch\":{\"kind\":\"SurfacePatch\","
+                             "\"operations\":["
+                             "{\"op\":\"fill_row\",\"row_id\":\"row.power\","
+                             "\"values\":{\"class\":\"Power\",\"width\":\"0.30mm\"}},"
+                             "{\"op\":\"fill_column\",\"column_id\":\"priority\","
+                             "\"values\":{\"row.power\":1,\"row.gpio\":2}},"
+                             "{\"op\":\"fill_range\",\"cells\":["
+                             "{\"row_id\":\"row.gpio\",\"column_id\":\"class\","
+                             "\"value\":\"GPIO\"}]},"
+                             "{\"op\":\"set_property\","
+                             "\"property_id\":\"default_clearance\","
+                             "\"value\":\"0.20mm\"}]},"
+                             "\"alias\":\"surface_patch_fill_ops\"}}]},"
+                             "\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need rendered batch SurfacePatch facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_surface_patch_fill_ops" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need validation facts after batch render." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_surface_patch_fill_ops" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class SURFACE_PATCH_WRONG_COLUMN_THEN_RENDER_NEXT_ACTION_PROVIDER :
         public AI_PROVIDER
 {
@@ -10221,6 +10323,113 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolExposesSurfacePatchPreviewFacts )
                        wxString( wxS( "call_validate_surface_patch" ) ) );
     BOOST_CHECK_EQUAL( validationResult.m_ToolName,
                        wxString( wxS( "validate_hidden_attempt" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRenderToolExpandsSurfacePatchFillOps )
+{
+    auto* provider = new SURFACE_PATCH_FILL_OPS_THEN_RENDER_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makePanelFillTriggerWithTargetScope() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 3 );
+
+    const AI_TOOL_CALL_RECORD& renderResult =
+            publishRequest.m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
+                       wxString( wxS( "call_render_surface_patch_fill_ops" ) ) );
+    BOOST_CHECK_EQUAL( renderResult.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+
+    nlohmann::json renderPayload =
+            nlohmann::json::parse( renderResult.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( renderPayload.contains( "surface_patch_previews" ) );
+    const nlohmann::json& preview =
+            renderPayload["surface_patch_previews"].front();
+    BOOST_CHECK_EQUAL( preview["patch_operation_count"].get<size_t>(), 4 );
+    BOOST_REQUIRE( preview.contains( "surface_patch_diff_entries" ) );
+    BOOST_REQUIRE_EQUAL( preview["surface_patch_diff_entries"].size(), 6 );
+    BOOST_CHECK_EQUAL( preview["surface_patch_diff_entry_count"].get<size_t>(), 6 );
+
+    size_t fillRowCount = 0;
+    size_t fillColumnCount = 0;
+    size_t fillRangeCount = 0;
+    size_t setPropertyCount = 0;
+    bool   sawPowerClass = false;
+    bool   sawPowerPriority = false;
+    bool   sawGpioClass = false;
+    bool   sawDefaultClearance = false;
+
+    for( const nlohmann::json& diff : preview["surface_patch_diff_entries"] )
+    {
+        const std::string sourceOp =
+                diff.value( "source_patch_op", std::string() );
+
+        if( sourceOp == "fill_row" )
+            ++fillRowCount;
+        else if( sourceOp == "fill_column" )
+            ++fillColumnCount;
+        else if( sourceOp == "fill_range" )
+            ++fillRangeCount;
+        else if( sourceOp == "set_property" )
+            ++setPropertyCount;
+
+        if( diff.value( "row_id", std::string() ) == "row.power"
+            && diff.value( "column_id", std::string() ) == "class"
+            && diff["value"].get<std::string>() == "Power" )
+        {
+            sawPowerClass = true;
+        }
+
+        if( diff.value( "row_id", std::string() ) == "row.power"
+            && diff.value( "column_id", std::string() ) == "priority"
+            && diff["value"].get<int>() == 1 )
+        {
+            sawPowerPriority = true;
+        }
+
+        if( diff.value( "row_id", std::string() ) == "row.gpio"
+            && diff.value( "column_id", std::string() ) == "class"
+            && diff["value"].get<std::string>() == "GPIO" )
+        {
+            sawGpioClass = true;
+        }
+
+        if( diff.value( "kind", std::string() ) == "set_field"
+            && diff.value( "field_id", std::string() ) == "default_clearance"
+            && diff["value"].get<std::string>() == "0.20mm" )
+        {
+            sawDefaultClearance = true;
+        }
+    }
+
+    BOOST_CHECK_EQUAL( fillRowCount, 2 );
+    BOOST_CHECK_EQUAL( fillColumnCount, 2 );
+    BOOST_CHECK_EQUAL( fillRangeCount, 1 );
+    BOOST_CHECK_EQUAL( setPropertyCount, 1 );
+    BOOST_CHECK( sawPowerClass );
+    BOOST_CHECK( sawPowerPriority );
+    BOOST_CHECK( sawGpioClass );
+    BOOST_CHECK( sawDefaultClearance );
+
+    BOOST_REQUIRE( preview.contains( "surface_patch_diff_summary" ) );
+    const nlohmann::json& diffSummary =
+            preview["surface_patch_diff_summary"];
+    BOOST_CHECK_EQUAL( diffSummary["diff_entry_count"].get<size_t>(), 6 );
+    BOOST_CHECK_EQUAL( diffSummary["table_cell_count"].get<size_t>(), 5 );
+    BOOST_CHECK_EQUAL( diffSummary["field_count"].get<size_t>(), 1 );
 }
 
 

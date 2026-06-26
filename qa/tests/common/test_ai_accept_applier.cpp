@@ -638,6 +638,53 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayAppliesStructuredSurfaceChanges )
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayAppliesFillRowColumnRangeAndProperty )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "surface patch fill ops" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":["
+                 "{\"op\":\"fill_row\",\"row_id\":\"row.power\","
+                 "\"values\":{\"class\":\"Power\",\"width\":\"0.30mm\"}},"
+                 "{\"op\":\"fill_column\",\"column_id\":\"priority\","
+                 "\"values\":{\"row.power\":1,\"row.gpio\":2}},"
+                 "{\"op\":\"fill_range\",\"cells\":["
+                 "{\"row_id\":\"row.gpio\",\"column_id\":\"class\","
+                 "\"value\":\"GPIO\"}]},"
+                 "{\"op\":\"set_property\",\"property_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"tables\":"
+                 "{\"clearance.rules\":{\"rows\":{"
+                 "\"row.power\":{\"cells\":{\"class\":\"\",\"width\":\"\"}},"
+                 "\"row.gpio\":{\"cells\":{\"class\":\"\",\"width\":\"\"}}"
+                 "}}},\"fields\":{\"default_clearance\":\"0.15mm\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"class\":\"Power\"" ) ) );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"width\":\"0.30mm\"" ) ) );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"priority\":1" ) ) );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"priority\":2" ) ) );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"class\":\"GPIO\"" ) ) );
+    BOOST_CHECK( surfaceState.Contains(
+            wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( SurfacePatchReplayCommitsThroughStructuredSurfaceBackend )
 {
     AI_EXECUTION_SESSION session = makeSession();
@@ -1161,6 +1208,42 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsFillEmptyOnlyCellOverwriteAndAbor
                  "\"row_id\":\"row.power\","
                  "\"column_id\":\"class\","
                  "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"tables\":"
+                 "{\"clearance.rules\":{\"rows\":{\"row.power\":{\"cells\":"
+                 "{\"class\":\"Signal\"}}}}}}}}" );
+    const wxString originalSurfaceState = surfaceState;
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "apply_failed" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "fill_empty_only" ) ) );
+    BOOST_CHECK_EQUAL( surfaceState, originalSurfaceState );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsFillEmptyOnlyFillRowOverwriteAndAborts )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "surface protected fill row" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"write_policy\":\"fill_empty_only\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"fill_row\",\"row_id\":\"row.power\","
+                 "\"values\":{\"class\":\"Power\"}}]}}" ) )
                            .m_Ok );
     session.EndStep( stepId );
 

@@ -8948,6 +8948,88 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
     const std::string surfaceId = jsonStringOrEmpty( aArgs, "surface_id" );
     const std::string tableId = jsonStringOrEmpty( aArgs, "table_id" );
 
+    auto appendCellDiff = [&]( const std::string& aTableId,
+                               const std::string& aRowId,
+                               const std::string& aColumnId,
+                               const nlohmann::json& aValue,
+                               const std::string& aSourcePatchOp ) -> bool
+    {
+        if( surfaceId.empty() || aTableId.empty() || aRowId.empty()
+            || aColumnId.empty() )
+        {
+            return false;
+        }
+
+        nlohmann::json entry =
+                { { "kind", "set_cell" },
+                  { "source_patch_op", aSourcePatchOp },
+                  { "surface_id", surfaceId },
+                  { "table_id", aTableId },
+                  { "row_id", aRowId },
+                  { "column_id", aColumnId },
+                  { "value", aValue },
+                  { "target_path",
+                    "surfaces." + surfaceId + ".tables." + aTableId
+                            + ".rows." + aRowId + ".cells." + aColumnId },
+                  { "visual_target",
+                    { { "kind", "table_cell" },
+                      { "surface_id", surfaceId },
+                      { "table_id", aTableId },
+                      { "row_id", aRowId },
+                      { "column_id", aColumnId } } } };
+
+        const nlohmann::json* previousValue =
+                aSurfaceState ? surfacePatchCellValue( *aSurfaceState,
+                                                       surfaceId, aTableId,
+                                                       aRowId, aColumnId )
+                              : nullptr;
+        annotateSurfacePatchValueDiff( entry, aValue, previousValue );
+        entries.push_back( std::move( entry ) );
+
+        if( aSurfaceState )
+        {
+            ( *aSurfaceState )["surfaces"][surfaceId]["tables"][aTableId]
+                              ["rows"][aRowId]["cells"][aColumnId] =
+                    aValue;
+        }
+
+        return true;
+    };
+
+    auto appendFieldDiff = [&]( const std::string& aFieldId,
+                                const nlohmann::json& aValue,
+                                const std::string& aSourcePatchOp ) -> bool
+    {
+        if( surfaceId.empty() || aFieldId.empty() )
+            return false;
+
+        nlohmann::json entry =
+                { { "kind", "set_field" },
+                  { "source_patch_op", aSourcePatchOp },
+                  { "surface_id", surfaceId },
+                  { "field_id", aFieldId },
+                  { "value", aValue },
+                  { "target_path",
+                    "surfaces." + surfaceId + ".fields." + aFieldId },
+                  { "visual_target",
+                    { { "kind", "field" },
+                      { "surface_id", surfaceId },
+                      { "field_id", aFieldId } } } };
+
+        const nlohmann::json* previousValue =
+                aSurfaceState ? surfacePatchFieldValue( *aSurfaceState,
+                                                        surfaceId, aFieldId )
+                              : nullptr;
+        annotateSurfacePatchValueDiff( entry, aValue, previousValue );
+        entries.push_back( std::move( entry ) );
+
+        if( aSurfaceState )
+            ( *aSurfaceState )["surfaces"][surfaceId]["fields"][aFieldId] =
+                    aValue;
+
+        return true;
+    };
+
     for( const nlohmann::json& op : *operations )
     {
         const std::string opName = jsonStringOrEmpty( op, "op" );
@@ -8966,70 +9048,105 @@ nlohmann::json surfacePatchDiffEntriesJson( const nlohmann::json& aArgs,
                 continue;
             }
 
-            nlohmann::json entry =
-                    { { "kind", "set_cell" },
-                      { "surface_id", surfaceId },
-                      { "table_id", opTableId },
-                      { "row_id", rowId },
-                      { "column_id", columnId },
-                      { "value", op["value"] },
-                      { "target_path",
-                        "surfaces." + surfaceId + ".tables." + opTableId
-                                + ".rows." + rowId + ".cells." + columnId },
-                      { "visual_target",
-                        { { "kind", "table_cell" },
-                          { "surface_id", surfaceId },
-                          { "table_id", opTableId },
-                          { "row_id", rowId },
-                          { "column_id", columnId } } } };
+            appendCellDiff( opTableId, rowId, columnId, op["value"],
+                            "set_cell" );
+            continue;
+        }
 
-            const nlohmann::json* previousValue =
-                    aSurfaceState ? surfacePatchCellValue( *aSurfaceState,
-                                                           surfaceId, opTableId,
-                                                           rowId, columnId )
-                                  : nullptr;
-            annotateSurfacePatchValueDiff( entry, op["value"], previousValue );
-            entries.push_back( std::move( entry ) );
+        if( opName == "fill_row" )
+        {
+            const std::string rowId = jsonStringOrEmpty( op, "row_id" );
+            const std::string tableOverride =
+                    jsonStringOrEmpty( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
 
-            if( aSurfaceState )
+            if( opTableId.empty() || rowId.empty() || !op.contains( "values" )
+                || !op["values"].is_object() )
             {
-                ( *aSurfaceState )["surfaces"][surfaceId]["tables"][opTableId]
-                                  ["rows"][rowId]["cells"][columnId] =
-                        op["value"];
+                continue;
+            }
+
+            for( auto valueIt = op["values"].begin();
+                 valueIt != op["values"].end(); ++valueIt )
+            {
+                appendCellDiff( opTableId, rowId, valueIt.key(),
+                                valueIt.value(), "fill_row" );
             }
 
             continue;
         }
 
-        if( opName == "set_field" )
+        if( opName == "fill_column" )
         {
-            const std::string fieldId = jsonStringOrEmpty( op, "field_id" );
+            const std::string columnId = jsonStringOrEmpty( op, "column_id" );
+            const std::string tableOverride =
+                    jsonStringOrEmpty( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( opTableId.empty() || columnId.empty()
+                || !op.contains( "values" ) || !op["values"].is_object() )
+            {
+                continue;
+            }
+
+            for( auto valueIt = op["values"].begin();
+                 valueIt != op["values"].end(); ++valueIt )
+            {
+                appendCellDiff( opTableId, valueIt.key(), columnId,
+                                valueIt.value(), "fill_column" );
+            }
+
+            continue;
+        }
+
+        if( opName == "fill_range" )
+        {
+            const std::string tableOverride =
+                    jsonStringOrEmpty( op, "table_id" );
+            const std::string opTableId =
+                    tableOverride.empty() ? tableId : tableOverride;
+
+            if( !op.contains( "cells" ) || !op["cells"].is_array() )
+                continue;
+
+            for( const nlohmann::json& cell : op["cells"] )
+            {
+                const std::string rowId =
+                        jsonStringOrEmpty( cell, "row_id" );
+                const std::string columnId =
+                        jsonStringOrEmpty( cell, "column_id" );
+                const std::string cellTableOverride =
+                        jsonStringOrEmpty( cell, "table_id" );
+                const std::string cellTableId =
+                        cellTableOverride.empty() ? opTableId
+                                                  : cellTableOverride;
+
+                if( cellTableId.empty() || rowId.empty() || columnId.empty()
+                    || !cell.contains( "value" ) )
+                {
+                    continue;
+                }
+
+                appendCellDiff( cellTableId, rowId, columnId, cell["value"],
+                                "fill_range" );
+            }
+
+            continue;
+        }
+
+        if( opName == "set_field" || opName == "set_property" )
+        {
+            std::string fieldId = jsonStringOrEmpty( op, "field_id" );
+
+            if( fieldId.empty() )
+                fieldId = jsonStringOrEmpty( op, "property_id" );
 
             if( surfaceId.empty() || fieldId.empty() || !op.contains( "value" ) )
                 continue;
 
-            nlohmann::json entry =
-                    { { "kind", "set_field" },
-                      { "surface_id", surfaceId },
-                      { "field_id", fieldId },
-                      { "value", op["value"] },
-                      { "target_path",
-                        "surfaces." + surfaceId + ".fields." + fieldId },
-                      { "visual_target",
-                        { { "kind", "field" },
-                          { "surface_id", surfaceId },
-                          { "field_id", fieldId } } } };
-
-            const nlohmann::json* previousValue =
-                    aSurfaceState ? surfacePatchFieldValue( *aSurfaceState,
-                                                            surfaceId, fieldId )
-                                  : nullptr;
-            annotateSurfacePatchValueDiff( entry, op["value"], previousValue );
-            entries.push_back( std::move( entry ) );
-
-            if( aSurfaceState )
-                ( *aSurfaceState )["surfaces"][surfaceId]["fields"][fieldId] =
-                        op["value"];
+            appendFieldDiff( fieldId, op["value"], opName );
         }
     }
 
