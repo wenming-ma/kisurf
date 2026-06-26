@@ -1224,6 +1224,12 @@ public:
 class SURFACE_REPAIR_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
+    explicit SURFACE_REPAIR_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER(
+            wxString aWritePolicy = wxString() ) :
+            m_WritePolicy( std::move( aWritePolicy ) )
+    {
+    }
+
     AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
     {
         ++m_CallCount;
@@ -1258,13 +1264,23 @@ public:
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_surface_repair" );
                 call.m_ToolName = wxS( "surface_repair_patch" );
+                wxString writePolicyJson;
+
+                if( !m_WritePolicy.IsEmpty() )
+                {
+                    writePolicyJson = wxS( "\"write_policy\":\"" )
+                                      + m_WritePolicy + wxS( "\"," );
+                }
+
                 call.m_ArgumentsJson =
                         wxS( "{\"surface_id\":\"board_setup.clearance\","
                              "\"table_id\":\"clearance.rules\","
                              "\"expected_surface_revision\":17,"
                              "\"expected_schema_version\":\"net-class-v1\","
                              "\"expected_selection_fingerprint\":\"cell:row.power:class\","
-                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"],"
+                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"]," )
+                        + writePolicyJson
+                        + wxS(
                              "\"target_scope\":{\"kind\":\"column\","
                              "\"panel_id\":\"board_setup.clearance\","
                              "\"surface_id\":\"board_setup.clearance\","
@@ -1304,6 +1320,7 @@ public:
 
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    wxString                         m_WritePolicy;
 };
 
 
@@ -7811,6 +7828,41 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
             wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchPreservesExplicitWritePolicy )
+{
+    auto* provider =
+            new SURFACE_REPAIR_PATCH_THEN_RENDER_NEXT_ACTION_PROVIDER(
+                    wxS( "allow_overwrite" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makePanelFillTriggerWithTargetScope() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& repairResult = toolResults.at( 0 );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"allow_overwrite\"" ) ) );
+    BOOST_CHECK( !repairResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
+
+    const AI_TOOL_CALL_RECORD& renderResult = toolResults.at( 1 );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"allow_overwrite\"" ) ) );
+    BOOST_CHECK( !renderResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
 }
 
 
