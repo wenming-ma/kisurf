@@ -6675,6 +6675,73 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationSummarizesPublishedAttempt )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsValidationIssues )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    trace["attempts"].at( 0 )["validation_facts"]["issues"] =
+            nlohmann::json::array(
+                    { { { "kind", "clearance" },
+                        { "severity", "warning" },
+                        { "blocking", true } },
+                      { { "kind", "courtyard_overlap" },
+                        { "severity", "error" },
+                        { "blocking", false } } } );
+
+    wxString traceJson = wxString::FromUTF8( trace.dump().c_str() );
+
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceJson( traceJson );
+
+    BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidationIssueCount, 2 );
+    BOOST_CHECK( evaluation.m_ValidationIssueKindCountsJson.Contains(
+            wxS( "\"clearance\":1" ) ) );
+    BOOST_CHECK( evaluation.m_ValidationIssueKindCountsJson.Contains(
+            wxS( "\"courtyard_overlap\":1" ) ) );
+    BOOST_CHECK( evaluation.m_ValidationIssueSeverityCountsJson.Contains(
+            wxS( "\"warning\":1" ) ) );
+    BOOST_CHECK( evaluation.m_ValidationIssueSeverityCountsJson.Contains(
+            wxS( "\"error\":1" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"validation_issue_count\":2" ) ) );
+
+    wxArrayString batchInput;
+    batchInput.Add( traceJson );
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT batch =
+            AiEvaluateNextActionReplayTraceBatch( batchInput );
+
+    BOOST_REQUIRE( batch.m_Valid );
+    BOOST_CHECK_EQUAL( batch.m_ValidationIssueCount, 2 );
+    BOOST_CHECK( batch.m_ValidationIssueKindCountsJson.Contains(
+            wxS( "\"clearance\":1" ) ) );
+    BOOST_CHECK( batch.m_ValidationIssueSeverityCountsJson.Contains(
+            wxS( "\"error\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"validation_issue_count\":2" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
 {
     auto* provider =

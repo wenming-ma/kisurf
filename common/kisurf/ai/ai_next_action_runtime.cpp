@@ -8755,6 +8755,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
     result.m_Abandoned = terminalState == "abandoned";
 
     nlohmann::json feedbackReasonCounts = nlohmann::json::object();
+    nlohmann::json validationIssueKindCounts = nlohmann::json::object();
+    nlohmann::json validationIssueSeverityCounts = nlohmann::json::object();
 
     if( trace.contains( "tool_results" ) && trace["tool_results"].is_object() )
     {
@@ -8861,7 +8863,36 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
             && attempt["validation_facts"].is_object()
             && !attempt["validation_facts"].empty() )
         {
+            const nlohmann::json& validationFacts =
+                    attempt["validation_facts"];
             ++result.m_ValidationResultCount;
+
+            if( validationFacts.contains( "issues" )
+                && validationFacts["issues"].is_array() )
+            {
+                for( const nlohmann::json& issue : validationFacts["issues"] )
+                {
+                    if( !issue.is_object() )
+                        continue;
+
+                    ++result.m_ValidationIssueCount;
+
+                    if( issue.contains( "kind" ) && issue["kind"].is_string() )
+                    {
+                        incrementJsonCounter(
+                                validationIssueKindCounts,
+                                issue["kind"].get<std::string>() );
+                    }
+
+                    if( issue.contains( "severity" )
+                        && issue["severity"].is_string() )
+                    {
+                        incrementJsonCounter(
+                                validationIssueSeverityCounts,
+                                issue["severity"].get<std::string>() );
+                    }
+                }
+            }
 
             if( validationFactsBlockPreviewPublish(
                         fromUtf8String( attempt["validation_facts"].dump() ) ) )
@@ -8873,6 +8904,10 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 
     result.m_PreviewGateFeedbackReasonCountsJson =
             fromUtf8String( feedbackReasonCounts.dump() );
+    result.m_ValidationIssueKindCountsJson =
+            fromUtf8String( validationIssueKindCounts.dump() );
+    result.m_ValidationIssueSeverityCountsJson =
+            fromUtf8String( validationIssueSeverityCounts.dump() );
 
     nlohmann::json metrics =
             { { "schema_version", result.m_SchemaVersion },
@@ -8897,6 +8932,12 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
                 feedbackReasonCounts },
+              { "validation_issue_count",
+                result.m_ValidationIssueCount },
+              { "validation_issue_kind_counts",
+                validationIssueKindCounts },
+              { "validation_issue_severity_counts",
+                validationIssueSeverityCounts },
               { "preview_gate_allowed", result.m_PreviewGateAllowed },
               { "work_state_interaction_semantics_present",
                 result.m_WorkStateInteractionSemanticsPresent },
@@ -8915,6 +8956,8 @@ AiEvaluateNextActionReplayTraceBatch(
     AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result;
     result.m_TotalTraceCount = aReplayTraceJsons.size();
     nlohmann::json feedbackReasonCounts = nlohmann::json::object();
+    nlohmann::json validationIssueKindCounts = nlohmann::json::object();
+    nlohmann::json validationIssueSeverityCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aReplayTraceJsons.size(); ++i )
     {
@@ -8974,6 +9017,7 @@ AiEvaluateNextActionReplayTraceBatch(
                 evaluation.m_ReviewToolResultCount;
         result.m_PreviewGateFeedbackCount +=
                 evaluation.m_PreviewGateFeedbackCount;
+        result.m_ValidationIssueCount += evaluation.m_ValidationIssueCount;
 
         nlohmann::json traceFeedbackReasons =
                 nlohmann::json::parse(
@@ -8996,11 +9040,33 @@ AiEvaluateNextActionReplayTraceBatch(
                 }
             }
         }
+
+        nlohmann::json traceValidationIssueKinds =
+                nlohmann::json::parse(
+                        toUtf8String(
+                                evaluation.m_ValidationIssueKindCountsJson ),
+                        nullptr, false );
+
+        mergeJsonCounters( validationIssueKindCounts,
+                           traceValidationIssueKinds );
+
+        nlohmann::json traceValidationIssueSeverities =
+                nlohmann::json::parse(
+                        toUtf8String(
+                                evaluation.m_ValidationIssueSeverityCountsJson ),
+                        nullptr, false );
+
+        mergeJsonCounters( validationIssueSeverityCounts,
+                           traceValidationIssueSeverities );
     }
 
     result.m_Valid = result.m_InvalidTraceCount == 0;
     result.m_PreviewGateFeedbackReasonCountsJson =
             fromUtf8String( feedbackReasonCounts.dump() );
+    result.m_ValidationIssueKindCountsJson =
+            fromUtf8String( validationIssueKindCounts.dump() );
+    result.m_ValidationIssueSeverityCountsJson =
+            fromUtf8String( validationIssueSeverityCounts.dump() );
 
     nlohmann::json summary =
             { { "total_trace_count", result.m_TotalTraceCount },
@@ -9025,6 +9091,12 @@ AiEvaluateNextActionReplayTraceBatch(
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
                 feedbackReasonCounts },
+              { "validation_issue_count",
+                result.m_ValidationIssueCount },
+              { "validation_issue_kind_counts",
+                validationIssueKindCounts },
+              { "validation_issue_severity_counts",
+                validationIssueSeverityCounts },
               { "preview_gate_allowed_count",
                 result.m_PreviewGateAllowedCount },
               { "work_state_interaction_semantics_present_count",
