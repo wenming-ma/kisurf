@@ -380,6 +380,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
     size_t   m_InvalidRecordCount = 0;
     size_t   m_PassedRecordCount = 0;
     size_t   m_FailedRecordCount = 0;
+    size_t   m_TraceRollbackAttemptCount = 0;
+    size_t   m_TraceRolledBackAttemptCount = 0;
     size_t   m_TraceBudgetToolRoundCount = 0;
     size_t   m_TraceBudgetMutationCount = 0;
     size_t   m_TraceBudgetRenderCount = 0;
@@ -426,6 +428,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
     size_t   m_InvalidRecordCount = 0;
     size_t   m_PassedRecordCount = 0;
     size_t   m_FailedRecordCount = 0;
+    size_t   m_TraceRollbackAttemptCount = 0;
+    size_t   m_TraceRolledBackAttemptCount = 0;
     size_t   m_TraceBudgetToolRoundCount = 0;
     size_t   m_TraceBudgetMutationCount = 0;
     size_t   m_TraceBudgetRenderCount = 0;

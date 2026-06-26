@@ -7395,6 +7395,96 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksBudgetMetrics )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksRollbackMetrics )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"rollback_retry\","
+                   "\"reason_code\":\"revise_candidate\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json passing =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-rollback-retry" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "min_rollback_attempt_count", 1 },
+                  { "min_rolled_back_attempt_count", 1 } } } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT passEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( passing.dump().c_str() ) );
+
+    BOOST_CHECK( passEvaluation.m_Valid );
+    BOOST_CHECK( passEvaluation.m_Passed );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_rollback_attempt_count\":1" ) ) );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_rolled_back_attempt_count\":1" ) ) );
+
+    wxArrayString dataset;
+    dataset.Add( wxString::FromUTF8( passing.dump().c_str() ) );
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT datasetEvaluation =
+            AiEvaluateNextActionReplayGoldenDataset( dataset );
+
+    BOOST_REQUIRE( datasetEvaluation.m_Valid );
+    BOOST_REQUIRE( datasetEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL( datasetEvaluation.m_TraceRollbackAttemptCount, 1 );
+    BOOST_CHECK_EQUAL( datasetEvaluation.m_TraceRolledBackAttemptCount, 1 );
+    BOOST_CHECK( datasetEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_rollback_attempt_count\":1" ) ) );
+    BOOST_CHECK( datasetEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_rolled_back_attempt_count\":1" ) ) );
+
+    nlohmann::json failing = passing;
+    failing["expected"]["min_rollback_attempt_count"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT rollbackFail =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( rollbackFail.m_Valid );
+    BOOST_CHECK( !rollbackFail.m_Passed );
+    BOOST_CHECK_EQUAL(
+            rollbackFail.m_ErrorCode,
+            wxString( wxS( "rollback_attempt_count_below_minimum" ) ) );
+
+    failing = passing;
+    failing["expected"]["min_rolled_back_attempt_count"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT rolledBackFail =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( rolledBackFail.m_Valid );
+    BOOST_CHECK( !rolledBackFail.m_Passed );
+    BOOST_CHECK_EQUAL(
+            rolledBackFail.m_ErrorCode,
+            wxString( wxS( "rolled_back_attempt_count_below_minimum" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksValidationIssueMetrics )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
@@ -7843,6 +7933,8 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
             wxS( "accept_context_drift_inner_loop_smoke.json" ) ) );
     datasetPaths.Add( repositoryGoldenDatasetPath(
             wxS( "validation_issue_inner_loop_smoke.json" ) ) );
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "placement_rollback_retry_inner_loop_smoke.json" ) ) );
 
     for( const wxString& datasetPath : datasetPaths )
     {
@@ -7856,15 +7948,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
 
     BOOST_CHECK( evaluation.m_Valid );
     BOOST_CHECK( evaluation.m_Passed );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 5 );
-    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 5 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 5 );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 5 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 5 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 6 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 6 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 6 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 6 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 6 );
     BOOST_CHECK_EQUAL( evaluation.m_DatasetPassRate, 1.0 );
     BOOST_CHECK_EQUAL( evaluation.m_RecordPassRate, 1.0 );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
-            wxS( "\"placement\":3" ) ) );
+            wxS( "\"placement\":4" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
             wxS( "\"routing\":1" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
@@ -7877,15 +7969,19 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_REQUIRE( summary.is_object() );
     BOOST_CHECK_EQUAL( summary["dataset_pass_rate"].get<double>(), 1.0 );
     BOOST_CHECK_EQUAL( summary["record_pass_rate"].get<double>(), 1.0 );
-    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 4 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
-    BOOST_CHECK_EQUAL( summary["trace_preview_gate_feedback_count"].get<int>(), 5 );
+    BOOST_CHECK_EQUAL( summary["trace_preview_gate_feedback_count"].get<int>(), 6 );
     BOOST_CHECK_EQUAL(
             summary["trace_preview_gate_feedback_reason_counts"]
                    ["render_validation_fresh"]
                            .get<int>(),
-            5 );
+            6 );
+    BOOST_CHECK_EQUAL( summary["trace_rollback_attempt_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_rolled_back_attempt_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_TraceRollbackAttemptCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_TraceRolledBackAttemptCount, 1 );
     BOOST_CHECK_EQUAL( summary["trace_budget_tool_round_count"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["trace_budget_mutation_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["trace_budget_render_count"].get<int>(), 1 );
@@ -7912,9 +8008,9 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_REQUIRE( summary["error_code_counts"].is_object() );
     BOOST_CHECK( summary["error_code_counts"].empty() );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_dataset_count\":5" ) ) );
+            wxS( "\"total_dataset_count\":6" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_record_count\":5" ) ) );
+            wxS( "\"total_record_count\":6" ) ) );
 }
 
 
