@@ -272,6 +272,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
     bool     m_Superseded = false;
     bool     m_Abandoned = false;
     size_t   m_AttemptCount = 0;
+    size_t   m_RollbackAttemptCount = 0;
+    size_t   m_RolledBackAttemptCount = 0;
     size_t   m_HiddenOperationCount = 0;
     size_t   m_RenderResultCount = 0;
     size_t   m_ValidationResultCount = 0;
@@ -315,6 +317,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
     size_t   m_SupersededCount = 0;
     size_t   m_AbandonedCount = 0;
     size_t   m_AttemptCount = 0;
+    size_t   m_RollbackAttemptCount = 0;
+    size_t   m_RolledBackAttemptCount = 0;
     size_t   m_HiddenOperationCount = 0;
     size_t   m_RenderResultCount = 0;
     size_t   m_ValidationResultCount = 0;

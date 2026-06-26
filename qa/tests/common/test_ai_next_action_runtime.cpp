@@ -6820,6 +6820,55 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsRollbackAttempts )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"rollback_retry\","
+                   "\"reason_code\":\"revise_candidate\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceJson( traces.front().m_ReplayJson );
+
+    BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_AttemptCount, 2 );
+    BOOST_CHECK_EQUAL( evaluation.m_RollbackAttemptCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_RolledBackAttemptCount, 1 );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"rollback_attempt_count\":1" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"rolled_back_attempt_count\":1" ) ) );
+
+    wxArrayString batchInput;
+    batchInput.Add( traces.front().m_ReplayJson );
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT batch =
+            AiEvaluateNextActionReplayTraceBatch( batchInput );
+
+    BOOST_REQUIRE( batch.m_Valid );
+    BOOST_CHECK_EQUAL( batch.m_RollbackAttemptCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_RolledBackAttemptCount, 1 );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"rollback_attempt_count\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"rolled_back_attempt_count\":1" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationRejectsInvalidTrace )
 {
     AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
