@@ -6004,6 +6004,78 @@ nlohmann::json placementCandidateFactsJson(
 }
 
 
+nlohmann::json placementCandidateSummaryJson( const nlohmann::json& aFacts )
+{
+    if( !aFacts.is_array() || aFacts.empty() )
+        return nlohmann::json::object();
+
+    nlohmann::json summary =
+            { { "source", "placement_candidate_facts" },
+              { "candidate_count", static_cast<int>( aFacts.size() ) } };
+
+    bool hasNearest = false;
+    int  nearestDistance = 0;
+    const nlohmann::json* top = nullptr;
+
+    for( const nlohmann::json& fact : aFacts )
+    {
+        int distance = 0;
+
+        if( jsonNumberAsInt( fact, "manhattan_distance", distance ) )
+        {
+            if( !hasNearest || distance < nearestDistance )
+            {
+                nearestDistance = distance;
+                top = &fact;
+            }
+
+            hasNearest = true;
+        }
+        else if( !top )
+        {
+            top = &fact;
+        }
+    }
+
+    if( hasNearest )
+        summary["nearest_manhattan_distance"] = nearestDistance;
+
+    if( !top )
+        top = &aFacts.at( 0 );
+
+    if( top->contains( "anchor_id" ) )
+        summary["top_anchor_id"] = ( *top )["anchor_id"];
+
+    if( top->contains( "anchor_kind" ) )
+        summary["top_anchor_kind"] = ( *top )["anchor_kind"];
+
+    if( top->contains( "anchor_label" ) )
+        summary["top_anchor_label"] = ( *top )["anchor_label"];
+
+    if( top->contains( "placeable_kind" ) )
+        summary["top_placeable_kind"] = ( *top )["placeable_kind"];
+
+    if( top->contains( "candidate_position" ) )
+        summary["top_candidate_position"] = ( *top )["candidate_position"];
+
+    if( top->contains( "suggested_tool_call" ) )
+        summary["top_suggested_tool_call"] = ( *top )["suggested_tool_call"];
+
+    if( top->contains( "suggested_render_region" ) )
+        summary["top_suggested_render_region"] =
+                ( *top )["suggested_render_region"];
+
+    if( top->contains( "candidate_obstacle_facts" )
+        && ( *top )["candidate_obstacle_facts"].is_array() )
+    {
+        summary["top_candidate_obstacle_count"] =
+                static_cast<int>( ( *top )["candidate_obstacle_facts"].size() );
+    }
+
+    return summary;
+}
+
+
 wxString routingSegmentStyle( int aDx, int aDy )
 {
     const int absDx = std::abs( aDx );
@@ -6308,9 +6380,15 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["placement_anchor_ids"] = anchorIdArrayJson( context.m_Anchors );
         packet["placement_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isPlacementPacketAnchor );
-        packet["placement_candidate_facts"] =
+        nlohmann::json placementCandidates =
                 placementCandidateFactsJson( context.m_Anchors, context.m_ToolState,
                                              context.m_VisibleObjects );
+        packet["placement_candidate_facts"] = placementCandidates;
+
+        if( !placementCandidates.empty() )
+            packet["placement_candidate_summary"] =
+                    placementCandidateSummaryJson( placementCandidates );
+
         packet["placement_obstacle_facts"] =
                 placementObstacleFactsJson( context.m_VisibleObjects );
         packet["placement_keepout_facts"] =
