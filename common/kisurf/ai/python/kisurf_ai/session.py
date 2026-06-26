@@ -184,6 +184,143 @@ class KiSurfSession:
         _set_optional(args, "metadata", metadata)
         self.emit("surface.apply_patch", **args)
 
+    def apply_surface_patch_ops(self, *, surface_id: str,
+                                operations: list[dict[str, Any]],
+                                table_id: str = "", target_scope: Any = None,
+                                alias: str = "",
+                                write_policy: str = "",
+                                expected_surface_revision: Any = None,
+                                expected_schema_version: Any = None,
+                                expected_selection_fingerprint: Any = None,
+                                expected_overlap_set: Any = None,
+                                metadata: dict[str, Any] | None = None) -> None:
+        if not operations:
+            raise ValueError("apply_surface_patch_ops requires operations")
+
+        self.apply_surface_patch(
+            surface_id=surface_id,
+            table_id=table_id,
+            target_scope=target_scope,
+            patch={"kind": "SurfacePatch", "operations": operations},
+            alias=alias,
+            write_policy=write_policy,
+            expected_surface_revision=expected_surface_revision,
+            expected_schema_version=expected_schema_version,
+            expected_selection_fingerprint=expected_selection_fingerprint,
+            expected_overlap_set=expected_overlap_set,
+            metadata=metadata,
+        )
+
+    def surface_set_cell_op(self, *, row_id: str, column_id: str, value: Any,
+                            table_id: str = "") -> dict[str, Any]:
+        op: dict[str, Any] = {
+            "op": "set_cell",
+            "row_id": row_id,
+            "column_id": column_id,
+            "value": value,
+        }
+        _set_optional(op, "table_id", table_id)
+        return op
+
+    def surface_fill_row_op(self, *, row_id: str,
+                            values: dict[str, Any],
+                            table_id: str = "") -> dict[str, Any]:
+        if not isinstance(values, dict) or not values:
+            raise ValueError("surface_fill_row_op requires non-empty values")
+
+        op: dict[str, Any] = {
+            "op": "fill_row",
+            "row_id": row_id,
+            "values": values,
+        }
+        _set_optional(op, "table_id", table_id)
+        return op
+
+    def surface_fill_column_op(self, *, column_id: str,
+                               values: dict[str, Any],
+                               table_id: str = "") -> dict[str, Any]:
+        if not isinstance(values, dict) or not values:
+            raise ValueError("surface_fill_column_op requires non-empty values")
+
+        op: dict[str, Any] = {
+            "op": "fill_column",
+            "column_id": column_id,
+            "values": values,
+        }
+        _set_optional(op, "table_id", table_id)
+        return op
+
+    def surface_fill_range_op(self, *,
+                              cells: list[dict[str, Any]],
+                              table_id: str = "") -> dict[str, Any]:
+        if not cells:
+            raise ValueError("surface_fill_range_op requires cells")
+
+        op: dict[str, Any] = {
+            "op": "fill_range",
+            "cells": cells,
+        }
+        _set_optional(op, "table_id", table_id)
+        return op
+
+    def surface_set_field_op(self, *, field_id: str,
+                             value: Any) -> dict[str, Any]:
+        return {
+            "op": "set_field",
+            "field_id": field_id,
+            "value": value,
+        }
+
+    def surface_set_property_op(self, *, property_id: str,
+                                value: Any) -> dict[str, Any]:
+        return {
+            "op": "set_property",
+            "property_id": property_id,
+            "value": value,
+        }
+
+    def fill_surface_row(self, *, surface_id: str, row_id: str,
+                         values: dict[str, Any], table_id: str = "",
+                         **patch_options: Any) -> None:
+        self.apply_surface_patch_ops(
+            surface_id=surface_id,
+            table_id=table_id,
+            operations=[self.surface_fill_row_op(row_id=row_id, values=values)],
+            **patch_options,
+        )
+
+    def fill_surface_column(self, *, surface_id: str, column_id: str,
+                            values: dict[str, Any], table_id: str = "",
+                            **patch_options: Any) -> None:
+        self.apply_surface_patch_ops(
+            surface_id=surface_id,
+            table_id=table_id,
+            operations=[
+                self.surface_fill_column_op(column_id=column_id, values=values)
+            ],
+            **patch_options,
+        )
+
+    def fill_surface_range(self, *, surface_id: str,
+                           cells: list[dict[str, Any]], table_id: str = "",
+                           **patch_options: Any) -> None:
+        self.apply_surface_patch_ops(
+            surface_id=surface_id,
+            table_id=table_id,
+            operations=[self.surface_fill_range_op(cells=cells)],
+            **patch_options,
+        )
+
+    def set_surface_property(self, *, surface_id: str, property_id: str,
+                             value: Any, **patch_options: Any) -> None:
+        self.apply_surface_patch_ops(
+            surface_id=surface_id,
+            operations=[
+                self.surface_set_property_op(property_id=property_id, value=value)
+            ],
+            **patch_options,
+        )
+
     def query_board_summary(self) -> None:
         self.emit("query.board_summary")
 

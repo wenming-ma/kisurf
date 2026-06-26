@@ -371,6 +371,84 @@ BOOST_AUTO_TEST_CASE( DecodeCellResultMapsSurfacePatchRequest )
 }
 
 
+BOOST_AUTO_TEST_CASE( LocalWorkerRunsSurfacePatchFillHelpers )
+{
+    const wxString interpreter = wxS( "python" );
+
+    wxFileName sdkRoot( wxString::FromUTF8( QA_SRC_ROOT ), wxEmptyString );
+    sdkRoot.AppendDir( wxS( "common" ) );
+    sdkRoot.AppendDir( wxS( "kisurf" ) );
+    sdkRoot.AppendDir( wxS( "ai" ) );
+    sdkRoot.AppendDir( wxS( "python" ) );
+
+    AI_PYTHON_LOCAL_WORKER worker( interpreter, sdkRoot.GetPath() );
+    BOOST_REQUIRE( worker.IsConnected() );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 14;
+    options.m_BoardId = wxS( "board-main" );
+    options.m_BaseHash = wxS( "h0" );
+    AI_EXECUTION_SESSION session( options );
+
+    AI_PYTHON_CELL_REQUEST request;
+    request.m_SessionId = session.SessionId();
+    request.m_BoardId = session.BoardId();
+    request.m_BaseHash = session.BaseHash();
+    request.m_Epoch = session.Epoch();
+    request.m_CellId = wxS( "cell-surface-fill-helpers" );
+    request.m_CellText = wxS(
+            "ops = [\n"
+            "    session.surface_fill_row_op(\n"
+            "        row_id='row.power',\n"
+            "        values={'class': 'Power', 'width': '0.30mm'}),\n"
+            "    session.surface_fill_column_op(\n"
+            "        column_id='priority',\n"
+            "        values={'row.power': 1, 'row.gpio': 2}),\n"
+            "    session.surface_fill_range_op(\n"
+            "        cells=[{'row_id': 'row.gpio', 'column_id': 'class',\n"
+            "                'value': 'GPIO'}]),\n"
+            "    session.surface_set_property_op(\n"
+            "        property_id='default_clearance', value='0.20mm'),\n"
+            "]\n"
+            "session.apply_surface_patch_ops(\n"
+            "    surface_id='board_setup.clearance',\n"
+            "    table_id='clearance.rules',\n"
+            "    operations=ops,\n"
+            "    write_policy='fill_empty_only',\n"
+            "    alias='surface_patch_fill_helpers')\n" );
+
+    AI_PYTHON_CELL_RESULT result = worker.RunCell( session, request );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Ok,
+                           "error_code=" << toStdString( result.m_ErrorCode )
+                                         << " message=" << toStdString( result.m_Message )
+                                         << " stderr=" << toStdString( result.m_Stderr ) );
+    BOOST_REQUIRE_EQUAL( result.m_Operations.size(), 1 );
+    BOOST_CHECK( result.m_Operations[0].m_Kind
+                 == AI_SESSION_OPERATION_KIND::ApplySurfacePatch );
+
+    nlohmann::json args = nlohmann::json::parse(
+            toStdString( result.m_Operations[0].m_ArgumentsJson ) );
+    BOOST_CHECK_EQUAL( args["surface_id"].get<std::string>(),
+                       "board_setup.clearance" );
+    BOOST_CHECK_EQUAL( args["table_id"].get<std::string>(),
+                       "clearance.rules" );
+    BOOST_CHECK_EQUAL( args["write_policy"].get<std::string>(),
+                       "fill_empty_only" );
+    BOOST_CHECK_EQUAL( args["alias"].get<std::string>(),
+                       "surface_patch_fill_helpers" );
+    BOOST_REQUIRE_EQUAL( args["patch"]["operations"].size(), 4 );
+    BOOST_CHECK_EQUAL( args["patch"]["operations"][0]["op"].get<std::string>(),
+                       "fill_row" );
+    BOOST_CHECK_EQUAL( args["patch"]["operations"][1]["op"].get<std::string>(),
+                       "fill_column" );
+    BOOST_CHECK_EQUAL( args["patch"]["operations"][2]["op"].get<std::string>(),
+                       "fill_range" );
+    BOOST_CHECK_EQUAL( args["patch"]["operations"][3]["op"].get<std::string>(),
+                       "set_property" );
+}
+
+
 BOOST_AUTO_TEST_CASE( DecodeCellResultMapsSdkControlRequests )
 {
     kiapi::ai::session::WorkerResponse response = makeCellResponse();
