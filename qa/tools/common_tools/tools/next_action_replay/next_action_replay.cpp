@@ -15,6 +15,7 @@
 #include <common.h>
 
 #include <wx/cmdline.h>
+#include <wx/ffile.h>
 
 #include <iostream>
 
@@ -34,6 +35,39 @@ static const wxCmdLineEntryDesc g_cmdLineDesc[] = {
       wxCMD_LINE_PARAM_MULTIPLE },
     { wxCMD_LINE_NONE }
 };
+
+
+static int nextActionReplayBatchMain( int argc, char** argv )
+{
+    wxCmdLineParser parser( argc, argv );
+    parser.SetDesc( g_cmdLineDesc );
+    parser.AddUsageText( _( "Evaluate a Next Action replay batch JSON file" ) );
+
+    int parsed = parser.Parse();
+
+    if( parsed != 0 )
+        return parsed == -1 ? KI_TEST::RET_CODES::OK : KI_TEST::RET_CODES::BAD_CMDLINE;
+
+    if( parser.GetParamCount() != 1 )
+        return KI_TEST::RET_CODES::BAD_CMDLINE;
+
+    wxFFile batchFile( parser.GetParam( 0 ), wxS( "rb" ) );
+
+    if( !batchFile.IsOpened() )
+        return KI_TEST::RET_CODES::BAD_CMDLINE;
+
+    wxString batchJson;
+
+    if( !batchFile.ReadAll( &batchJson ) )
+        return KI_TEST::RET_CODES::BAD_CMDLINE;
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceBatchJson( batchJson );
+
+    std::cout << evaluation.m_SummaryJson.ToStdString() << std::endl;
+
+    return evaluation.m_Valid ? KI_TEST::RET_CODES::OK : KI_TEST::RET_CODES::TOOL_SPECIFIC;
+}
 
 
 static int nextActionReplayGoldenMain( int argc, char** argv )
@@ -68,4 +102,10 @@ static bool registered = UTILITY_REGISTRY::Register( {
         "next_action_replay_golden",
         "Evaluate Next Action golden replay dataset files",
         nextActionReplayGoldenMain,
+} );
+
+static bool registeredBatch = UTILITY_REGISTRY::Register( {
+        "next_action_replay_batch",
+        "Evaluate a Next Action replay batch JSON file",
+        nextActionReplayBatchMain,
 } );
