@@ -3979,6 +3979,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingBusRepairRequiredSegments = false;
     bool sawSurfaceRepairRequiredPatch = false;
     bool sawSurfaceRepairExpectedMetadata = false;
+    bool sawSurfaceRepairWritePolicy = false;
     bool sawPlacementRepairPointSchema = false;
     bool sawPlacementMoveDeltaPointSchema = false;
     bool sawRoutingRepairSegmentPointSchema = false;
@@ -4624,6 +4625,22 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     && properties.contains( "expected_schema_version" )
                     && properties.contains( "expected_selection_fingerprint" )
                     && properties.contains( "expected_overlap_set" );
+
+            if( properties.contains( "write_policy" )
+                && properties["write_policy"].is_object()
+                && properties["write_policy"].contains( "enum" )
+                && properties["write_policy"]["enum"].is_array() )
+            {
+                for( const nlohmann::json& value :
+                     properties["write_policy"]["enum"] )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "fill_empty_only" )
+                    {
+                        sawSurfaceRepairWritePolicy = true;
+                    }
+                }
+            }
         }
     }
 
@@ -4673,6 +4690,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingConstraintRerouteHandleSchema );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
+    BOOST_CHECK( sawSurfaceRepairWritePolicy );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(

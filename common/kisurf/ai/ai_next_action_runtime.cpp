@@ -9361,6 +9361,15 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description",
                                 "SurfacePatch object. It must contain operations, "
                                 "ops, or changes describing typed surface edits." } };
+                    parameters["properties"]["write_policy"] =
+                            { { "type", "string" },
+                              { "enum",
+                                nlohmann::json::array(
+                                        { "fill_empty_only", "allow_overwrite" } ) },
+                              { "description",
+                                "Structured surface write policy. Use fill_empty_only "
+                                "for ambient Auto-fill or Refill so accept replay "
+                                "cannot overwrite user-authored non-empty values." } };
                     parameters["properties"]["alias"] =
                             { { "type", "string" },
                               { "description",
