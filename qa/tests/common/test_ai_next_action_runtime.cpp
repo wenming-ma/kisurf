@@ -6681,9 +6681,13 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
             AiEvaluateNextActionReplayTraceJson( traces.front().m_ReplayJson );
 
     BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_DecisionToolResultCount, 0 );
+    BOOST_CHECK_EQUAL( evaluation.m_ReviewToolResultCount, 4 );
     BOOST_CHECK_EQUAL( evaluation.m_PreviewGateFeedbackCount, 1 );
     BOOST_CHECK( evaluation.m_PreviewGateFeedbackReasonCountsJson.Contains(
             wxS( "\"validation_freshness_failed\":1" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"review_tool_result_count\":4" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"preview_gate_feedback_count\":1" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
@@ -6696,9 +6700,13 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationCountsPreviewGateFeedback )
             AiEvaluateNextActionReplayTraceBatch( batchInput );
 
     BOOST_REQUIRE( batch.m_Valid );
+    BOOST_CHECK_EQUAL( batch.m_DecisionToolResultCount, 0 );
+    BOOST_CHECK_EQUAL( batch.m_ReviewToolResultCount, 4 );
     BOOST_CHECK_EQUAL( batch.m_PreviewGateFeedbackCount, 1 );
     BOOST_CHECK( batch.m_PreviewGateFeedbackReasonCountsJson.Contains(
             wxS( "\"validation_freshness_failed\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"review_tool_result_count\":4" ) ) );
     BOOST_CHECK( batch.m_SummaryJson.Contains(
             wxS( "\"preview_gate_feedback_count\":1" ) ) );
     BOOST_CHECK( batch.m_SummaryJson.Contains(

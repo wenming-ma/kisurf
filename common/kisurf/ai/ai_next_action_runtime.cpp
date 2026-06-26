@@ -8679,7 +8679,13 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
             if( trace["tool_results"].contains( phase )
                 && trace["tool_results"][phase].is_array() )
             {
-                result.m_ToolResultCount += trace["tool_results"][phase].size();
+                const size_t phaseCount = trace["tool_results"][phase].size();
+                result.m_ToolResultCount += phaseCount;
+
+                if( std::string( phase ) == "decision" )
+                    result.m_DecisionToolResultCount += phaseCount;
+                else if( std::string( phase ) == "review" )
+                    result.m_ReviewToolResultCount += phaseCount;
 
                 for( const nlohmann::json& toolResult :
                      trace["tool_results"][phase] )
@@ -8799,6 +8805,10 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
               { "tool_result_count", result.m_ToolResultCount },
+              { "decision_tool_result_count",
+                result.m_DecisionToolResultCount },
+              { "review_tool_result_count",
+                result.m_ReviewToolResultCount },
               { "preview_gate_feedback_count",
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
@@ -8874,6 +8884,10 @@ AiEvaluateNextActionReplayTraceBatch(
         result.m_RenderResultCount += evaluation.m_RenderResultCount;
         result.m_ValidationResultCount += evaluation.m_ValidationResultCount;
         result.m_ToolResultCount += evaluation.m_ToolResultCount;
+        result.m_DecisionToolResultCount +=
+                evaluation.m_DecisionToolResultCount;
+        result.m_ReviewToolResultCount +=
+                evaluation.m_ReviewToolResultCount;
         result.m_PreviewGateFeedbackCount +=
                 evaluation.m_PreviewGateFeedbackCount;
 
@@ -8919,6 +8933,10 @@ AiEvaluateNextActionReplayTraceBatch(
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
               { "tool_result_count", result.m_ToolResultCount },
+              { "decision_tool_result_count",
+                result.m_DecisionToolResultCount },
+              { "review_tool_result_count",
+                result.m_ReviewToolResultCount },
               { "preview_gate_feedback_count",
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
