@@ -53,6 +53,44 @@ bool pointSchemaRequiresXY( const nlohmann::json& aSchema )
            && std::find( aSchema["required"].begin(), aSchema["required"].end(),
                          "y" ) != aSchema["required"].end();
 }
+
+
+bool boxSchemaSupportsCanonicalForms( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+        || !aSchema["anyOf"].is_array() )
+    {
+        return false;
+    }
+
+    bool sawOriginSizeBox = false;
+    bool sawMinMaxBox = false;
+
+    for( const nlohmann::json& variant : aSchema["anyOf"] )
+    {
+        if( !variant.is_object() || !variant.contains( "properties" )
+            || !variant["properties"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& properties = variant["properties"];
+
+        sawOriginSizeBox = sawOriginSizeBox
+                           || ( properties.contains( "x" )
+                                && properties.contains( "y" )
+                                && properties.contains( "width" )
+                                && properties.contains( "height" ) );
+
+        sawMinMaxBox = sawMinMaxBox
+                       || ( properties.contains( "min" )
+                            && properties.contains( "max" )
+                            && pointSchemaRequiresXY( properties["min"] )
+                            && pointSchemaRequiresXY( properties["max"] ) );
+    }
+
+    return sawOriginSizeBox && sawMinMaxBox;
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNativeProvider )
@@ -700,6 +738,12 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      "hatch_pattern" )
                              != typedPropsContract["properties"]["fill_mode"]
                                                   ["enum"].end() );
+                BOOST_REQUIRE( operationContracts.contains( "pcb.refill_zones" ) );
+                BOOST_REQUIRE( operationContracts["pcb.refill_zones"]["properties"]
+                                       .contains( "affected_area" ) );
+                BOOST_CHECK( boxSchemaSupportsCanonicalForms(
+                        operationContracts["pcb.refill_zones"]["properties"]
+                                          ["affected_area"] ) );
                 BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& rollbackParameters =
                         toolByName["kisurf_rollback_to"]["function"]["parameters"];

@@ -4432,7 +4432,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptGeometryPatchContract = false;
     bool sawScriptZoneOutlineContract = false;
     bool sawScriptTypedPropsContract = false;
+    bool sawScriptAffectedAreaContract = false;
     bool sawRepairSurfacePatchKind = false;
+    bool sawRepairAffectedAreaContract = false;
+    bool sawAtomicRunAffectedAreaContract = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
     bool sawPlacementOrientationRepairRequiredFacts = false;
@@ -4493,6 +4496,47 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 return hasX && hasY && requiresX && requiresY
                        && aSchema.value( "additionalProperties", true )
                                   == false;
+            };
+
+    auto boxSchemaSupportsCanonicalForms =
+            [&]( const nlohmann::json& aSchema )
+            {
+                if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+                    || !aSchema["anyOf"].is_array() )
+                {
+                    return false;
+                }
+
+                bool sawOriginSizeBox = false;
+                bool sawMinMaxBox = false;
+
+                for( const nlohmann::json& variant : aSchema["anyOf"] )
+                {
+                    if( !variant.is_object()
+                        || !variant.contains( "properties" )
+                        || !variant["properties"].is_object() )
+                    {
+                        continue;
+                    }
+
+                    const nlohmann::json& properties = variant["properties"];
+
+                    sawOriginSizeBox =
+                            sawOriginSizeBox
+                            || ( properties.contains( "x" )
+                                 && properties.contains( "y" )
+                                 && properties.contains( "width" )
+                                 && properties.contains( "height" ) );
+
+                    sawMinMaxBox =
+                            sawMinMaxBox
+                            || ( properties.contains( "min" )
+                                 && properties.contains( "max" )
+                                 && pointSchemaRequiresXY( properties["min"] )
+                                 && pointSchemaRequiresXY( properties["max"] ) );
+                }
+
+                return sawOriginSizeBox && sawMinMaxBox;
             };
 
     auto handleSchemaRequiresHandleId =
@@ -4631,6 +4675,15 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                                    ["expected_surface_revision"].is_object()
                         && contracts["surface.apply_patch"]["properties"]
                                    ["expected_schema_version"].is_object();
+
+                sawAtomicRunAffectedAreaContract =
+                        contracts.contains( "pcb.refill_zones" )
+                        && contracts["pcb.refill_zones"].contains( "properties" )
+                        && contracts["pcb.refill_zones"]["properties"].contains(
+                                   "affected_area" )
+                        && boxSchemaSupportsCanonicalForms(
+                                   contracts["pcb.refill_zones"]["properties"]
+                                            ["affected_area"] );
             }
         }
 
@@ -4654,6 +4707,28 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     if( functionName == "repair_apply_bounded_plan" )
                         sawRepairSurfacePatchKind = true;
                 }
+            }
+
+            if( function["parameters"].contains( "$defs" )
+                && function["parameters"]["$defs"].contains( "operation_contracts" ) )
+            {
+                const nlohmann::json& contracts =
+                        function["parameters"]["$defs"]["operation_contracts"];
+
+                const bool hasAffectedAreaContract =
+                        contracts.contains( "pcb.refill_zones" )
+                        && contracts["pcb.refill_zones"].contains( "properties" )
+                        && contracts["pcb.refill_zones"]["properties"].contains(
+                                   "affected_area" )
+                        && boxSchemaSupportsCanonicalForms(
+                                   contracts["pcb.refill_zones"]["properties"]
+                                            ["affected_area"] );
+
+                if( functionName == "script_run_bounded_plan" )
+                    sawScriptAffectedAreaContract = hasAffectedAreaContract;
+
+                if( functionName == "repair_apply_bounded_plan" )
+                    sawRepairAffectedAreaContract = hasAffectedAreaContract;
             }
 
             if( functionName == "script_run_bounded_plan"
@@ -5364,7 +5439,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptGeometryPatchContract );
     BOOST_CHECK( sawScriptZoneOutlineContract );
     BOOST_CHECK( sawScriptTypedPropsContract );
+    BOOST_CHECK( sawScriptAffectedAreaContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
+    BOOST_CHECK( sawRepairAffectedAreaContract );
+    BOOST_CHECK( sawAtomicRunAffectedAreaContract );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
     BOOST_CHECK( sawPlacementOrientationRepairRequiredFacts );

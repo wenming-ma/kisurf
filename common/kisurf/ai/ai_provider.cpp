@@ -262,6 +262,35 @@ nlohmann::json internalPointArraySchema( const char* aDescription, int aMinItems
 }
 
 
+nlohmann::json internalBoxSchema( const char* aDescription )
+{
+    return { { "description", aDescription },
+             { "anyOf",
+               nlohmann::json::array(
+                       { { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x", { { "type", "integer" } } },
+                               { "y", { { "type", "integer" } } },
+                               { "width",
+                                 { { "type", "integer" }, { "minimum", 1 } } },
+                               { "height",
+                                 { { "type", "integer" }, { "minimum", 1 } } } } },
+                           { "required",
+                             nlohmann::json::array(
+                                     { "x", "y", "width", "height" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "min",
+                                 internalPointSchema( "Minimum box corner." ) },
+                               { "max",
+                                 internalPointSchema( "Maximum box corner." ) } } },
+                           { "required",
+                             nlohmann::json::array( { "min", "max" } ) } } } ) } };
+}
+
+
 nlohmann::json geometryPatchSchema()
 {
     nlohmann::json schema = { { "type", "object" },
@@ -543,7 +572,8 @@ nlohmann::json atomicOperationContractSchemas()
             { "properties",
               { { "handles", handleArraySchema( "Zone handles to refill." ) },
                 { "affected_area",
-                  { { "type", "object" }, { "additionalProperties", true } } },
+                  internalBoxSchema(
+                          "Zone refill area in internal coordinates." ) },
                 { "all", { { "type", "boolean" } } } } } } },
         { "pcb.rebuild_connectivity",
           { { "type", "object" },

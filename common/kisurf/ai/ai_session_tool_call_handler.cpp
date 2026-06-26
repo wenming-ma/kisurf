@@ -183,6 +183,35 @@ nlohmann::json catalogPointArraySchema( const char* aDescription, int aMinItems 
 }
 
 
+nlohmann::json catalogBoxSchema( const char* aDescription )
+{
+    return { { "description", aDescription },
+             { "anyOf",
+               nlohmann::json::array(
+                       { { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x", { { "type", "integer" } } },
+                               { "y", { { "type", "integer" } } },
+                               { "width",
+                                 { { "type", "integer" }, { "minimum", 1 } } },
+                               { "height",
+                                 { { "type", "integer" }, { "minimum", 1 } } } } },
+                           { "required",
+                             nlohmann::json::array(
+                                     { "x", "y", "width", "height" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "min",
+                                 catalogPointSchema( "Minimum box corner." ) },
+                               { "max",
+                                 catalogPointSchema( "Maximum box corner." ) } } },
+                           { "required",
+                             nlohmann::json::array( { "min", "max" } ) } } } ) } };
+}
+
+
 nlohmann::json catalogGeometryPatchSchema()
 {
     nlohmann::json schema = { { "type", "object" },
@@ -426,7 +455,8 @@ nlohmann::json sessionAtomicOperationContractsJson()
             { "properties",
               { { "handles", catalogHandleArraySchema( "Zone handles to refill." ) },
                 { "affected_area",
-                  { { "type", "object" }, { "additionalProperties", true } } },
+                  catalogBoxSchema(
+                          "Zone refill area in internal coordinates." ) },
                 { "all", { { "type", "boolean" } } } } } } },
         { "pcb.rebuild_connectivity",
           { { "type", "object" },

@@ -11566,6 +11566,45 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto boxSchema =
+                        [&]( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "description", aDescription },
+                                { "anyOf",
+                                  nlohmann::json::array(
+                                          { { { "type", "object" },
+                                              { "additionalProperties", false },
+                                              { "properties",
+                                                { { "x",
+                                                    { { "type", "integer" } } },
+                                                  { "y",
+                                                    { { "type", "integer" } } },
+                                                  { "width",
+                                                    { { "type", "integer" },
+                                                      { "minimum", 1 } } },
+                                                  { "height",
+                                                    { { "type", "integer" },
+                                                      { "minimum", 1 } } } } },
+                                              { "required",
+                                                nlohmann::json::array(
+                                                        { "x", "y", "width",
+                                                          "height" } ) } },
+                                            { { "type", "object" },
+                                              { "additionalProperties", false },
+                                              { "properties",
+                                                { { "min",
+                                                    pointSchema(
+                                                            "Minimum box corner." ) },
+                                                  { "max",
+                                                    pointSchema(
+                                                            "Maximum box corner." ) } } },
+                                              { "required",
+                                                nlohmann::json::array(
+                                                        { "min", "max" } ) } } } ) }
+                            };
+                        };
+
                 auto atomicOperationContracts =
                         [&]()
                         {
@@ -11776,8 +11815,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                       { { "handles",
                                           handleArraySchema( "Zone handles to refill." ) },
                                         { "affected_area",
-                                          { { "type", "object" },
-                                            { "additionalProperties", true } } },
+                                          boxSchema(
+                                                  "Zone refill area in internal coordinates." ) },
                                         { "all", { { "type", "boolean" } } } } } } },
                                 { "pcb.rebuild_connectivity",
                                   { { "type", "object" },
