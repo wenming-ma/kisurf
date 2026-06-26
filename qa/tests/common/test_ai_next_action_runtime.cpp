@@ -3827,6 +3827,7 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_via\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "empty string for NoNet" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"placement.repair_move_items\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.repair_footprint_orientation\"" ) ) );
