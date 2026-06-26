@@ -4988,6 +4988,44 @@ nlohmann::json pointPairBoundingBoxJson( int aX1, int aY1, int aX2, int aY2 )
 }
 
 
+std::optional<nlohmann::json> placementCandidateRenderRegionJson(
+        const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        int aCandidateX,
+        int aCandidateY )
+{
+    std::optional<nlohmann::json> source =
+            toolContextObjectField( aToolState, "cursor_region" );
+    const char* basis = "cursor_region";
+
+    if( !source )
+    {
+        source = toolContextObjectField( aToolState, "viewport" );
+        basis = "viewport";
+    }
+
+    if( !source || !source->is_object() )
+        return std::nullopt;
+
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( *source, "width", width )
+        || !jsonNumberAsInt( *source, "height", height )
+        || width <= 0 || height <= 0 )
+    {
+        return std::nullopt;
+    }
+
+    return nlohmann::json{
+        { "source", "placement_candidate_region" },
+        { "basis", basis },
+        { "mode", "placement_candidate_review" },
+        { "bbox", bboxRecordJson( aCandidateX - width / 2,
+                                  aCandidateY - height / 2,
+                                  width, height ) } };
+}
+
+
 nlohmann::json placementCandidateFactJson(
         const AI_CONTEXT_ANCHOR& aAnchor,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
@@ -5014,6 +5052,14 @@ nlohmann::json placementCandidateFactJson(
               { "manhattan_distance", absDx + absDy },
               { "confidence", aAnchor.m_Confidence },
               { "click_required_to_materialize", true } };
+
+    if( std::optional<nlohmann::json> renderRegion =
+                placementCandidateRenderRegionJson( aToolState,
+                                                    aAnchor.m_Position.x,
+                                                    aAnchor.m_Position.y ) )
+    {
+        fact["suggested_render_region"] = std::move( *renderRegion );
+    }
 
     nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
 
