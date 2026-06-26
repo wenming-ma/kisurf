@@ -28,6 +28,7 @@
 #include <zone.h>
 
 #include <map>
+#include <cmath>
 #include <set>
 #include <utility>
 #include <vector>
@@ -2749,6 +2750,150 @@ wxString makeObstacleFactsJson( const BOARD& aBoard )
 }
 
 
+wxString courtyardSideToken( PCB_LAYER_ID aLayer )
+{
+    return aLayer == B_CrtYd ? wxS( "back" ) : wxS( "front" );
+}
+
+
+PCB_LAYER_ID footprintCourtyardLayer( const FOOTPRINT& aFootprint )
+{
+    return aFootprint.GetLayer() == B_Cu ? B_CrtYd : F_CrtYd;
+}
+
+
+int bboxAxisGap( int aMinA, int aMaxA, int aMinB, int aMaxB )
+{
+    if( aMaxA < aMinB )
+        return aMinB - aMaxA;
+
+    if( aMaxB < aMinA )
+        return aMinA - aMaxB;
+
+    return 0;
+}
+
+
+int bboxSpacing( const BOX2I& aBoxA, const BOX2I& aBoxB )
+{
+    const int gapX = bboxAxisGap( aBoxA.GetX(), aBoxA.GetEnd().x,
+                                  aBoxB.GetX(), aBoxB.GetEnd().x );
+    const int gapY = bboxAxisGap( aBoxA.GetY(), aBoxA.GetEnd().y,
+                                  aBoxB.GetY(), aBoxB.GetEnd().y );
+
+    return static_cast<int>( std::llround( std::sqrt(
+            static_cast<double>( gapX ) * static_cast<double>( gapX )
+            + static_cast<double>( gapY ) * static_cast<double>( gapY ) ) ) );
+}
+
+
+bool bboxOverlapsWithArea( const BOX2I& aBoxA, const BOX2I& aBoxB )
+{
+    return aBoxA.GetX() < aBoxB.GetEnd().x && aBoxB.GetX() < aBoxA.GetEnd().x
+           && aBoxA.GetY() < aBoxB.GetEnd().y && aBoxB.GetY() < aBoxA.GetEnd().y;
+}
+
+
+wxString placementFootprintJson( const FOOTPRINT& aFootprint, const BOX2I& aCourtyardBBox )
+{
+    return wxString::Format(
+            wxS( "{\"uuid\":%s,\"type\":%d,\"kind\":\"footprint\",\"label\":%s,"
+                 "\"reference\":%s,\"position\":%s,\"bbox\":%s,"
+                 "\"courtyard_bbox\":%s}" ),
+            quotedJson( aFootprint.m_Uuid.AsString() ),
+            static_cast<int>( aFootprint.Type() ),
+            quotedJson( footprintContextLabel( aFootprint ) ),
+            quotedJson( aFootprint.GetReference() ),
+            pointDetailsJson( aFootprint.GetPosition() ),
+            boxRectDetailsJson( aFootprint.GetBoundingBox( false ) ),
+            boxRectDetailsJson( aCourtyardBBox ) );
+}
+
+
+wxString courtyardPairJson( const FOOTPRINT& aFootprintA, const BOX2I& aCourtyardA,
+                            const FOOTPRINT& aFootprintB, const BOX2I& aCourtyardB,
+                            PCB_LAYER_ID aLayer )
+{
+    return wxString::Format(
+            wxS( "{\"kind\":\"footprint_courtyard_pair\","
+                 "\"side\":%s,\"layer\":%s,\"bbox_spacing\":%d,"
+                 "\"bbox_overlaps\":%s,\"source_footprint\":%s,"
+                 "\"target_footprint\":%s}" ),
+            quotedJson( courtyardSideToken( aLayer ) ),
+            quotedJson( boardLayerName( aFootprintA, aLayer ) ),
+            bboxSpacing( aCourtyardA, aCourtyardB ),
+            boolJson( bboxOverlapsWithArea( aCourtyardA, aCourtyardB ) ),
+            placementFootprintJson( aFootprintA, aCourtyardA ),
+            placementFootprintJson( aFootprintB, aCourtyardB ) );
+}
+
+
+wxString makePlacementFactsJson( const BOARD& aBoard )
+{
+    struct FOOTPRINT_COURTYARD_FACT
+    {
+        const FOOTPRINT* m_Footprint = nullptr;
+        PCB_LAYER_ID     m_Layer = UNDEFINED_LAYER;
+        BOX2I            m_BBox;
+    };
+
+    constexpr size_t maxCourtyardPairSample = 64;
+    std::vector<FOOTPRINT_COURTYARD_FACT> courtyardFootprints;
+    std::vector<wxString>                 pairEntries;
+    size_t                                footprintCount = 0;
+    bool                                  pairSampleTruncated = false;
+
+    for( FOOTPRINT* footprint : aBoard.Footprints() )
+    {
+        ++footprintCount;
+
+        const PCB_LAYER_ID layer = footprintCourtyardLayer( *footprint );
+        const SHAPE_POLY_SET& courtyard = footprint->GetCourtyard( layer );
+
+        if( courtyard.IsEmpty() )
+            continue;
+
+        FOOTPRINT_COURTYARD_FACT fact;
+        fact.m_Footprint = footprint;
+        fact.m_Layer = layer;
+        fact.m_BBox = courtyard.BBox();
+        courtyardFootprints.push_back( fact );
+    }
+
+    for( size_t i = 0; i < courtyardFootprints.size(); ++i )
+    {
+        for( size_t j = i + 1; j < courtyardFootprints.size(); ++j )
+        {
+            const FOOTPRINT_COURTYARD_FACT& a = courtyardFootprints[i];
+            const FOOTPRINT_COURTYARD_FACT& b = courtyardFootprints[j];
+
+            if( !a.m_Footprint || !b.m_Footprint || a.m_Layer != b.m_Layer )
+                continue;
+
+            if( pairEntries.size() >= maxCourtyardPairSample )
+            {
+                pairSampleTruncated = true;
+                break;
+            }
+
+            pairEntries.push_back( courtyardPairJson( *a.m_Footprint, a.m_BBox,
+                                                       *b.m_Footprint, b.m_BBox,
+                                                       a.m_Layer ) );
+        }
+
+        if( pairSampleTruncated )
+            break;
+    }
+
+    return wxString::Format(
+            wxS( "{\"source\":\"board\",\"footprint_count\":%zu,"
+                 "\"footprints_with_courtyard_count\":%zu,"
+                 "\"courtyard_pairs\":%s,\"courtyard_pair_sample_truncated\":%s}" ),
+            footprintCount, courtyardFootprints.size(), jsonArray( pairEntries ),
+            boolJson( pairSampleTruncated ) );
+}
+
+
 wxString makeBoardSummaryJson( const BOARD& aBoard )
 {
     size_t netCount = 0;
@@ -2812,14 +2957,16 @@ wxString makeBoardSummaryJson( const BOARD& aBoard )
                  "\"edge_cut_count\":%zu,\"zone_count\":%zu,\"keepout_count\":%zu,"
                  "\"board_edges_bbox\":%s,\"clearance_sources\":%s,"
                  "\"constraint_facts\":%s,\"obstacle_facts\":%s,"
+                 "\"placement_facts\":%s,"
                  "\"net_facts\":%s,\"layer_context\":%s,"
                  "\"connectivity_summary\":%s}" ),
             netCount, footprintCount, padCount, trackCount, arcCount, viaCount,
             drawingCount, edgeCutCount, zoneCount, keepoutCount,
             boxDetailsJson( aBoard.GetBoardEdgesBoundingBox() ),
             makeClearanceSourcesJson( aBoard ), makeConstraintFactsJson( aBoard ),
-            makeObstacleFactsJson( aBoard ), makeNetFactsJson( aBoard ),
-            makeLayerContextJson( aBoard ), makeConnectivitySummaryJson( aBoard ) );
+            makeObstacleFactsJson( aBoard ), makePlacementFactsJson( aBoard ),
+            makeNetFactsJson( aBoard ), makeLayerContextJson( aBoard ),
+            makeConnectivitySummaryJson( aBoard ) );
 }
 
 
