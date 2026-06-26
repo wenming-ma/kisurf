@@ -3931,7 +3931,8 @@ AI_OBJECT_REF padRef()
 {
     return AI_OBJECT_REF(
             KIID(), PCB_PAD_T, wxS( "pad:U4.1" ),
-            wxS( "{\"kind\":\"pad\",\"footprint_reference\":\"U4\",\"number\":\"1\","
+            wxS( "{\"kind\":\"pad\",\"footprint_reference\":\"U4\","
+                 "\"footprint_value\":\"SensorAFE\",\"number\":\"1\","
                  "\"position\":{\"x\":240,\"y\":210},"
                  "\"bbox\":{\"x\":220,\"y\":190,\"width\":40,\"height\":40},"
                  "\"layer\":\"F.Cu\",\"net_name\":\"GND\"}" ) );
@@ -5824,6 +5825,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 
         if( fact.value( "kind", "" ) == "pad_obstacle"
             && fact.value( "footprint_reference", "" ) == "U4"
+            && fact.value( "footprint_value", "" ) == "SensorAFE"
             && fact.value( "pad_number", "" ) == "1"
             && fact["position"]["x"].get<int>() == 240 )
         {
@@ -6649,6 +6651,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 
         if( fact.value( "kind", "" ) == "pad_obstacle"
             && fact.value( "footprint_reference", "" ) == "U4"
+            && fact.value( "footprint_value", "" ) == "SensorAFE"
             && fact.value( "pad_number", "" ) == "1" )
         {
             sawRoutingPadIdentity = true;

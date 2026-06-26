@@ -4756,6 +4756,7 @@ nlohmann::json placementObstacleFactJson( const AI_OBJECT_REF& aObject )
         fact["kind"] = "pad_obstacle";
         copyJsonFieldIfPresent( fact, details, "footprint" );
         copyJsonFieldIfPresent( fact, details, "footprint_reference" );
+        copyJsonFieldIfPresent( fact, details, "footprint_value" );
         copyJsonFieldIfPresent( fact, details, "pad_name" );
         copyJsonFieldIfPresent( fact, details, "pad_number" );
         copyJsonFieldIfPresent( fact, details, "number" );

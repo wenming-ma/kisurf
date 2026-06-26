@@ -1796,6 +1796,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToFootprintsAndPads )
     nlohmann::json padDetails = detailsForLabel( index.VisibleObjects(), wxS( "U3.7" ) );
     BOOST_CHECK_EQUAL( padDetails["kind"].get<std::string>(), "pad" );
     BOOST_CHECK_EQUAL( padDetails["footprint_reference"].get<std::string>(), "U3" );
+    BOOST_CHECK_EQUAL( padDetails["footprint_value"].get<std::string>(), "MCU" );
     BOOST_CHECK_EQUAL( padDetails["number"].get<std::string>(), "7" );
     BOOST_CHECK_EQUAL( padDetails["position"]["x"].get<int>(), 1200 );
     BOOST_CHECK_EQUAL( padDetails["size"]["x"].get<int>(), 300 );
@@ -2015,6 +2016,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsPadAndViaSemanticAnchors )
     BOOST_CHECK_EQUAL( padDetails["role"].get<std::string>(), "center" );
     BOOST_CHECK_EQUAL( padDetails["source_label"].get<std::string>(), "U9.1" );
     BOOST_CHECK_EQUAL( padDetails["footprint_reference"].get<std::string>(), "U9" );
+    BOOST_CHECK_EQUAL( padDetails["footprint_value"].get<std::string>(), "MCU" );
     BOOST_CHECK_EQUAL( padDetails["pad_number"].get<std::string>(), "1" );
     BOOST_CHECK_EQUAL( padDetails["net_name"].get<std::string>(), "/GPIO" );
     BOOST_CHECK_EQUAL( padDetails["position"]["x"].get<int>(), 1200 );

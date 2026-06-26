@@ -580,11 +580,13 @@ void appendRoutingAnchors( const PCB_TRACK& aTrack, std::vector<AI_CONTEXT_ANCHO
 wxString makePadDetailsJson( const FOOTPRINT& aFootprint, const PAD& aPad )
 {
     return wxString::Format( wxS( "{\"kind\":\"pad\",\"footprint_reference\":%s,"
-                                  "\"number\":%s,\"position\":%s,\"size\":%s,"
+                                  "\"footprint_value\":%s,\"number\":%s,"
+                                  "\"position\":%s,\"size\":%s,"
                                   "\"drill\":%s,\"shape\":%s,\"layer\":%s,"
                                   "\"orientation_degrees\":%s,\"net_code\":%d,"
                                   "\"net_name\":%s}" ),
                              quotedJson( aFootprint.GetReference() ),
+                             quotedJson( aFootprint.GetValue() ),
                              quotedJson( aPad.GetNumber() ),
                              pointDetailsJson( aPad.GetPosition() ),
                              pointDetailsJson( aPad.GetSize( PADSTACK::ALL_LAYERS ) ),
@@ -609,9 +611,11 @@ AI_CONTEXT_ANCHOR makePadAnchor( const FOOTPRINT& aFootprint, const PAD& aPad )
     const wxString label = padContextLabel( aFootprint, aPad );
     const VECTOR2I position = aPad.GetPosition();
     const wxString extra =
-            wxString::Format( wxS( "\"footprint_reference\":%s,\"pad_number\":%s,"
+            wxString::Format( wxS( "\"footprint_reference\":%s,"
+                                  "\"footprint_value\":%s,\"pad_number\":%s,"
                                   "\"net_code\":%d,\"net_name\":%s" ),
                               quotedJson( aFootprint.GetReference() ),
+                              quotedJson( aFootprint.GetValue() ),
                               quotedJson( aPad.GetNumber() ), aPad.GetNetCode(),
                               quotedJson( aPad.GetNetname() ) );
 
