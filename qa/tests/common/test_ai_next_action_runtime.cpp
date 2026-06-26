@@ -7319,6 +7319,104 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksBudgetMetrics )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksValidationIssueMetrics )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    trace["attempts"].at( 0 )["validation_facts"]["issues"] =
+            nlohmann::json::array(
+                    { { { "kind", "clearance" },
+                        { "severity", "warning" },
+                        { "blocking", false } },
+                      { { "kind", "courtyard_overlap" },
+                        { "severity", "error" },
+                        { "blocking", false } } } );
+
+    nlohmann::json passing =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-validation-issues" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "min_validation_issue_count", 2 },
+                  { "min_validation_issue_kind_counts",
+                    { { "clearance", 1 }, { "courtyard_overlap", 1 } } },
+                  { "min_validation_issue_severity_counts",
+                    { { "warning", 1 }, { "error", 1 } } } } } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT passEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( passing.dump().c_str() ) );
+
+    BOOST_CHECK( passEvaluation.m_Valid );
+    BOOST_CHECK( passEvaluation.m_Passed );
+
+    nlohmann::json failing = passing;
+    failing["id"] = "placement-via-validation-issues-too-high";
+    failing["expected"]["min_validation_issue_count"] = 3;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failEvaluation.m_Valid );
+    BOOST_CHECK( !failEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failEvaluation.m_ErrorCode,
+            wxString( wxS( "validation_issue_count_below_minimum" ) ) );
+
+    failing = passing;
+    failing["id"] = "placement-via-validation-issue-kind-too-high";
+    failing["expected"]["min_validation_issue_kind_counts"]["clearance"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failKindEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failKindEvaluation.m_Valid );
+    BOOST_CHECK( !failKindEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failKindEvaluation.m_ErrorCode,
+            wxString( wxS( "validation_issue_kind_count_below_minimum" ) ) );
+
+    failing = passing;
+    failing["id"] = "placement-via-validation-issue-severity-too-high";
+    failing["expected"]["min_validation_issue_severity_counts"]["error"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failSeverityEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failSeverityEvaluation.m_Valid );
+    BOOST_CHECK( !failSeverityEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failSeverityEvaluation.m_ErrorCode,
+            wxString( wxS( "validation_issue_severity_count_below_minimum" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationReportsExpectationMismatch )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(

@@ -9685,6 +9685,71 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
         }
     }
 
+    if( auto checked = checkMinimum(
+                "min_validation_issue_count",
+                traceEval.m_ValidationIssueCount,
+                wxS( "validation_issue_count_below_minimum" ),
+                wxS( "Replay validation issue count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    auto checkMinimumCounters =
+            [&]( const char* aExpectedKey, const wxString& aActualCountsJson,
+                 const wxString& aErrorCode, const wxString& aMessage )
+            -> std::optional<AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT>
+            {
+                if( !expected.contains( aExpectedKey )
+                    || !expected[aExpectedKey].is_object() )
+                {
+                    return std::nullopt;
+                }
+
+                nlohmann::json actualCounts =
+                        parseJsonObjectOrEmpty( aActualCountsJson );
+
+                for( auto it = expected[aExpectedKey].begin();
+                     it != expected[aExpectedKey].end(); ++it )
+                {
+                    if( !( it.value().is_number_unsigned()
+                           || ( it.value().is_number_integer()
+                                && it.value().get<int64_t>() >= 0 ) ) )
+                    {
+                        continue;
+                    }
+
+                    const size_t minimum =
+                            it.value().is_number_unsigned()
+                                    ? it.value().get<size_t>()
+                                    : static_cast<size_t>(
+                                              it.value().get<int64_t>() );
+
+                    if( jsonCounterValue( actualCounts, it.key() ) < minimum )
+                        return finish( true, false, aErrorCode, aMessage,
+                                       &traceEval );
+                }
+
+                return std::nullopt;
+            };
+
+    if( auto checked = checkMinimumCounters(
+                "min_validation_issue_kind_counts",
+                traceEval.m_ValidationIssueKindCountsJson,
+                wxS( "validation_issue_kind_count_below_minimum" ),
+                wxS( "Replay validation issue kind count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimumCounters(
+                "min_validation_issue_severity_counts",
+                traceEval.m_ValidationIssueSeverityCountsJson,
+                wxS( "validation_issue_severity_count_below_minimum" ),
+                wxS( "Replay validation issue severity count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
     return finish( true, true, wxEmptyString, wxEmptyString, &traceEval );
 }
 
