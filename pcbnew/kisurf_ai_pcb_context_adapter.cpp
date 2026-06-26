@@ -2119,6 +2119,14 @@ std::vector<wxString> makeGeometrySpecificRuleCoverageEntries( const BOARD& aBoa
     if( !aEngine.HasGeometryDependentRules() )
         return entries;
 
+    static const DRC_CONSTRAINT_T coverageTypes[] = {
+        CLEARANCE_CONSTRAINT,
+        PHYSICAL_CLEARANCE_CONSTRAINT,
+        HOLE_CLEARANCE_CONSTRAINT,
+        PHYSICAL_HOLE_CLEARANCE_CONSTRAINT,
+        EDGE_CLEARANCE_CONSTRAINT
+    };
+
     std::vector<const BOARD_CONNECTED_ITEM*> items = collectPairConstraintItems( aBoard );
 
     for( size_t i = 0; i < items.size(); ++i )
@@ -2136,25 +2144,26 @@ std::vector<wxString> makeGeometrySpecificRuleCoverageEntries( const BOARD& aBoa
             if( !firstCommonCopperLayer( aBoard, *itemA, *itemB, layer ) )
                 continue;
 
-            DRC_CONSTRAINT constraint =
-                    aEngine.EvalRules( CLEARANCE_CONSTRAINT, itemA, itemB, layer );
-
-            if( constraint.IsNull() || constraint.GetName().IsEmpty()
-                || !constraint.GetValue().HasMin() )
+            for( DRC_CONSTRAINT_T type : coverageTypes )
             {
-                continue;
-            }
+                DRC_CONSTRAINT constraint = aEngine.EvalRules( type, itemA, itemB, layer );
 
-            if( entries.size() >= maxCoverageSample )
-            {
-                aTruncated = true;
-                return entries;
-            }
+                if( constraint.IsNull() || constraint.GetName().IsEmpty()
+                    || !constraint.GetValue().HasMin() )
+                {
+                    continue;
+                }
 
-            entries.push_back( geometrySpecificRuleCoverageJson( aBoard, *itemA, *itemB,
-                                                                  layer,
-                                                                  CLEARANCE_CONSTRAINT,
-                                                                  constraint ) );
+                if( entries.size() >= maxCoverageSample )
+                {
+                    aTruncated = true;
+                    return entries;
+                }
+
+                entries.push_back( geometrySpecificRuleCoverageJson( aBoard, *itemA, *itemB,
+                                                                      layer, type,
+                                                                      constraint ) );
+            }
         }
     }
 
