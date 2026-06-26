@@ -9361,6 +9361,7 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
     AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result;
     result.m_TotalRecordCount = aGoldenRecordJsons.size();
     nlohmann::json workStateCounts = nlohmann::json::object();
+    nlohmann::json errorCodeCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenRecordJsons.size(); ++i )
     {
@@ -9370,6 +9371,10 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
         if( !record.m_Valid )
         {
             ++result.m_InvalidRecordCount;
+
+            if( !record.m_ErrorCode.IsEmpty() )
+                incrementJsonCounter( errorCodeCounts,
+                                      toUtf8String( record.m_ErrorCode ) );
 
             if( result.m_FirstErrorCode.IsEmpty() )
             {
@@ -9395,6 +9400,10 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
 
         ++result.m_FailedRecordCount;
 
+        if( !record.m_ErrorCode.IsEmpty() )
+            incrementJsonCounter( errorCodeCounts,
+                                  toUtf8String( record.m_ErrorCode ) );
+
         if( result.m_FirstErrorCode.IsEmpty() )
         {
             result.m_FirstErrorCode = record.m_ErrorCode;
@@ -9414,7 +9423,8 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
-              { "work_state_counts", workStateCounts } };
+              { "work_state_counts", workStateCounts },
+              { "error_code_counts", errorCodeCounts } };
 
     if( !result.m_FirstErrorCode.IsEmpty() )
     {
@@ -9426,6 +9436,7 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
     }
 
     result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
+    result.m_ErrorCodeCountsJson = fromUtf8String( errorCodeCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }
@@ -9443,6 +9454,8 @@ AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson 
                 result.m_Passed = false;
                 result.m_FirstErrorCode = aErrorCode;
                 result.m_FirstErrorMessage = aMessage;
+                nlohmann::json errorCodeCounts = nlohmann::json::object();
+                incrementJsonCounter( errorCodeCounts, toUtf8String( aErrorCode ) );
 
                 nlohmann::json summary =
                         { { "dataset_id", toUtf8String( aDatasetId ) },
@@ -9454,8 +9467,11 @@ AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson 
                           { "valid_record_count", 0 },
                           { "invalid_record_count", 0 },
                           { "passed_record_count", 0 },
-                          { "failed_record_count", 0 } };
+                          { "failed_record_count", 0 },
+                          { "error_code_counts", errorCodeCounts } };
 
+                result.m_ErrorCodeCountsJson =
+                        fromUtf8String( errorCodeCounts.dump() );
                 result.m_SummaryJson = fromUtf8String( summary.dump() );
                 return result;
             };
@@ -9542,6 +9558,8 @@ AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath 
                 result.m_Passed = false;
                 result.m_FirstErrorCode = aErrorCode;
                 result.m_FirstErrorMessage = aMessage;
+                nlohmann::json errorCodeCounts = nlohmann::json::object();
+                incrementJsonCounter( errorCodeCounts, toUtf8String( aErrorCode ) );
 
                 nlohmann::json summary =
                         { { "dataset_path", toUtf8String( aDatasetPath ) },
@@ -9553,8 +9571,11 @@ AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath 
                           { "valid_record_count", 0 },
                           { "invalid_record_count", 0 },
                           { "passed_record_count", 0 },
-                          { "failed_record_count", 0 } };
+                          { "failed_record_count", 0 },
+                          { "error_code_counts", errorCodeCounts } };
 
+                result.m_ErrorCodeCountsJson =
+                        fromUtf8String( errorCodeCounts.dump() );
                 result.m_SummaryJson = fromUtf8String( summary.dump() );
                 return result;
             };
@@ -9599,6 +9620,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
 
     nlohmann::json datasetSummaries = nlohmann::json::array();
     nlohmann::json workStateCounts = nlohmann::json::object();
+    nlohmann::json errorCodeCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenDatasetPaths.size(); ++i )
     {
@@ -9651,6 +9673,30 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
 
         mergeJsonCounters( workStateCounts, datasetWorkStateCounts );
 
+        nlohmann::json datasetErrorCodeCounts =
+                nlohmann::json::parse( toUtf8String( dataset.m_ErrorCodeCountsJson ),
+                                       nullptr, false );
+
+        if( ( datasetErrorCodeCounts.is_discarded()
+              || !datasetErrorCodeCounts.is_object() )
+            && datasetSummary.contains( "error_code_counts" )
+            && datasetSummary["error_code_counts"].is_object() )
+        {
+            datasetErrorCodeCounts = datasetSummary["error_code_counts"];
+        }
+
+        if( ( datasetErrorCodeCounts.is_discarded()
+              || !datasetErrorCodeCounts.is_object()
+              || datasetErrorCodeCounts.empty() )
+            && !dataset.m_FirstErrorCode.IsEmpty() )
+        {
+            datasetErrorCodeCounts = nlohmann::json::object();
+            incrementJsonCounter( datasetErrorCodeCounts,
+                                  toUtf8String( dataset.m_FirstErrorCode ) );
+        }
+
+        mergeJsonCounters( errorCodeCounts, datasetErrorCodeCounts );
+
         datasetSummary["dataset_path"] = toUtf8String( datasetPath );
         datasetSummaries.push_back( datasetSummary );
     }
@@ -9684,6 +9730,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
               { "dataset_pass_rate", result.m_DatasetPassRate },
               { "record_pass_rate", result.m_RecordPassRate },
               { "work_state_counts", workStateCounts },
+              { "error_code_counts", errorCodeCounts },
               { "datasets", datasetSummaries } };
 
     if( !result.m_FirstErrorCode.IsEmpty() )
@@ -9696,6 +9743,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
     }
 
     result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
+    result.m_ErrorCodeCountsJson = fromUtf8String( errorCodeCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }

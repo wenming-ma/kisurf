@@ -7182,8 +7182,16 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetEvaluationAggregatesRecordResults )
                        wxString( wxS( "placement-via-fails" ) ) );
     BOOST_CHECK_EQUAL( evaluation.m_FirstErrorCode,
                        wxString( wxS( "terminal_state_mismatch" ) ) );
+    BOOST_CHECK( evaluation.m_ErrorCodeCountsJson.Contains(
+            wxS( "\"terminal_state_mismatch\":1" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
             wxS( "\"failed_record_count\":1" ) ) );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( evaluation.m_SummaryJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL(
+            summary["error_code_counts"]["terminal_state_mismatch"].get<int>(), 1 );
 }
 
 
@@ -7366,6 +7374,7 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
             wxS( "\"routing\":1" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
             wxS( "\"structured_surface\":1" ) ) );
+    BOOST_CHECK_EQUAL( evaluation.m_ErrorCodeCountsJson, wxString( wxS( "{}" ) ) );
 
     nlohmann::json summary =
             nlohmann::json::parse( evaluation.m_SummaryJson.ToStdString() );
@@ -7376,6 +7385,8 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
+    BOOST_REQUIRE( summary["error_code_counts"].is_object() );
+    BOOST_CHECK( summary["error_code_counts"].empty() );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
             wxS( "\"total_dataset_count\":3" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(

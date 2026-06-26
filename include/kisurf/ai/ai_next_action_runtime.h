@@ -355,6 +355,7 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
     size_t   m_PassedRecordCount = 0;
     size_t   m_FailedRecordCount = 0;
     wxString m_WorkStateCountsJson;
+    wxString m_ErrorCodeCountsJson;
     wxString m_SummaryJson;
 };
 
@@ -389,6 +390,7 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
     double   m_DatasetPassRate = 0.0;
     double   m_RecordPassRate = 0.0;
     wxString m_WorkStateCountsJson;
+    wxString m_ErrorCodeCountsJson;
     wxString m_SummaryJson;
 };
 
