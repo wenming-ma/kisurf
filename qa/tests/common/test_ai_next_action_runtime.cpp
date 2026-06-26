@@ -6213,6 +6213,48 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_reachability_facts"].at( 1 )["priority_reason"]
                     .get<std::string>(),
             "shorter_estimated_connection" );
+    BOOST_REQUIRE( routingPacket.contains( "routing_reachability_summary" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["source"].get<std::string>(),
+            "routing_reachability_facts" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["active_net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["candidate_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["visible_candidate_count"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]
+                    ["shortest_estimated_manhattan_length"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]
+                    ["visible_shortest_estimated_manhattan_length"].get<int>(),
+            420 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["top_priority_rank"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["top_priority_reason"]
+                    .get<std::string>(),
+            "visible_remaining_connection" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["top_from"].get<std::string>(),
+            "U1.1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["top_to"].get<std::string>(),
+            "U2.1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]
+                    ["top_suggested_landing_endpoint"]["position"]["x"].get<int>(),
+            320 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_summary"]["top_router_cost_hint"]
+                    ["candidate_obstacle_count"].get<int>(),
+            2 );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
             routingPacket["active_route_segment"]["start"]["x"].get<int>(),
