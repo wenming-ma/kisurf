@@ -194,7 +194,15 @@ nlohmann::json sessionRunCellToolParameters()
                        "access raw BOARD or BOARD_ITEM pointers." } } },
                  { "cell_id",
                    { { "type", "string" },
-                     { "description", "Optional caller supplied stable cell id." } } } } },
+                     { "description", "Optional caller supplied stable cell id." } } },
+                 { "max_operation_count",
+                   { { "type", "integer" },
+                     { "minimum", 1 },
+                     { "maximum", 256 },
+                     { "description",
+                       "Optional bounded batch limit. KiSurf rejects and rolls back "
+                       "the cell if the Python SDK emits more typed operations than "
+                       "this value." } } } } },
              { "required", nlohmann::json::array( { "cell_text" } ) },
              { "additionalProperties", false } };
 }
@@ -205,6 +213,7 @@ const char* sessionRunCellToolDescription()
     return "Run a Python-first KiSurf session cell. Python can only mutate "
            "the board through typed session SDK operations; it cannot access "
            "raw BOARD or BOARD_ITEM pointers and it cannot publish directly. "
+           "Use max_operation_count to bound the emitted operation batch. "
            "Available atomic operation ids include: pcb.create_via, "
            "pcb.create_track_segment, pcb.create_track_polyline, "
            "pcb.create_zone, pcb.create_shape, pcb.move_items, "

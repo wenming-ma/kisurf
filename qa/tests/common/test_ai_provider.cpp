@@ -776,7 +776,21 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( runCellParameters["required"].dump().find( "cell_text" )
                              != std::string::npos );
                 BOOST_CHECK( runCellParameters["properties"].contains( "cell_id" ) );
+                BOOST_CHECK( runCellParameters["properties"].contains(
+                                     "max_operation_count" ) );
+                BOOST_CHECK_EQUAL(
+                        runCellParameters["properties"]["max_operation_count"]["minimum"]
+                                .get<int>(),
+                        1 );
+                BOOST_CHECK_EQUAL(
+                        runCellParameters["properties"]["max_operation_count"]["maximum"]
+                                .get<int>(),
+                        256 );
                 BOOST_CHECK( !runCellParameters["additionalProperties"].get<bool>() );
+                BOOST_CHECK( runCellDescription.find( "max_operation_count" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "cannot publish" )
+                             != std::string::npos );
                 const nlohmann::json& atomicParameters =
                         toolByName["kisurf_run_atomic_operation"]["function"]["parameters"];
                 const std::string atomicDescription =

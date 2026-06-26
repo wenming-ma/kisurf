@@ -881,6 +881,18 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             "argument_contract" ) );
     BOOST_CHECK( validationSchemaDeclaresTypedObservationArgs(
             ( *catalogTool( "kisurf_run_validation" ) )["argument_contract"] ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_cell" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_run_cell" )->value( "layer",
+                                                               std::string() ),
+                       "script" );
+    BOOST_CHECK( !catalogTool( "kisurf_run_cell" )->value( "can_publish", true ) );
+    BOOST_CHECK( !catalogTool( "kisurf_run_cell" )->value( "direct_publish", true ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_cell" )->contains(
+            "script_budget" ) );
+    BOOST_CHECK_EQUAL(
+            ( *catalogTool( "kisurf_run_cell" ) )["script_budget"]
+                    ["default_max_operation_count"].get<int>(),
+            256 );
     BOOST_REQUIRE( catalogTool( "kisurf_accept_session" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_accept_session" )->value( "layer",
                                                                      std::string() ),
@@ -994,6 +1006,72 @@ BOOST_AUTO_TEST_CASE( RunCellWithConnectedWorkerAppliesLoweredAtomicOps )
     BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 1 );
     BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 1 );
     BOOST_REQUIRE( handler.ActiveSession()->ResolveAlias( wxS( "py-via-0" ) ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RunCellRejectsOperationBatchOverCallerLimit )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "too many operations" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"budget-via-a\",\"net\":\"GND\","
+                   "\"position\":{\"x\":25,\"y\":50}}" ) } );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"budget-via-b\",\"net\":\"GND\","
+                   "\"position\":{\"x\":35,\"y\":60}}" ) } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    nlohmann::json args = {
+        { "cell_text", "session.create_via(...); session.create_via(...)" },
+        { "cell_id", "cell-budget" },
+        { "max_operation_count", 1 }
+    };
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "kisurf_run_cell" ), jsonText( args ) ) );
+
+    BOOST_REQUIRE( result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 0 );
+    BOOST_CHECK( !handler.ActiveSession()->ResolveAlias( wxS( "budget-via-a" ) ).has_value() );
+    BOOST_CHECK( !handler.ActiveSession()->ResolveAlias( wxS( "budget-via-b" ) ).has_value() );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "cell_failed" );
+    BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
+                       "script_operation_budget_exceeded" );
+    BOOST_CHECK_EQUAL( payload["operation_count"].get<size_t>(), 2 );
+    BOOST_CHECK_EQUAL( payload["max_operation_count"].get<size_t>(), 1 );
+    BOOST_CHECK( payload["rolled_back"].get<bool>() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RunCellRejectsCallerOperationLimitAboveRuntimeCap )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    nlohmann::json args = {
+        { "cell_text", "pass" },
+        { "max_operation_count", 257 }
+    };
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "kisurf_run_cell" ), jsonText( args ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( !handler.ActiveSession() );
 }
 
 
@@ -1733,6 +1811,38 @@ BOOST_AUTO_TEST_CASE( RunCellFailureRollsBackObservationJournalRecords )
     BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "cell_failed" );
     BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
                        "unsupported_operation" );
+    BOOST_CHECK( payload["rolled_back"].get<bool>() );
+}
+
+
+BOOST_AUTO_TEST_CASE( RunCellRejectsMalformedPythonOperationArguments )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "malformed python operation args" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia, wxS( "{" ) } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"session.emit('pcb.create_via')\","
+                           "\"cell_id\":\"cell-bad-operation-json\"}" ) ) );
+
+    BOOST_REQUIRE( result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Epoch(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 0 );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "cell_failed" );
+    BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
+                       "malformed_operation_arguments" );
     BOOST_CHECK( payload["rolled_back"].get<bool>() );
 }
 

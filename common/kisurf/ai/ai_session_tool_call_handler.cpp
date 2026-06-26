@@ -24,6 +24,8 @@
 
 namespace
 {
+constexpr uint64_t DEFAULT_SCRIPT_OPERATION_LIMIT = 256;
+
 std::string toUtf8String( const wxString& aText )
 {
     wxScopedCharBuffer buffer = aText.ToUTF8();
@@ -703,6 +705,11 @@ nlohmann::json sessionToolCatalogJson()
             tool["requires_journal"] = true;
             tool["lowers_to_atomic_ops"] = sessionAtomicOperationSetJson();
             tool["execution_runtime"] = "python_subprocess_session_sdk";
+            tool["cannot_publish"] = true;
+            tool["script_budget"] = {
+                { "default_max_operation_count", DEFAULT_SCRIPT_OPERATION_LIMIT },
+                { "enforcement", "reject_and_rollback_before_apply" }
+            };
         }
         else if( name == "kisurf_query_items" )
         {
@@ -1478,6 +1485,31 @@ nlohmann::json parseObjectJson( const wxString& aText )
         return nlohmann::json::object();
 
     return parsed;
+}
+
+
+bool parsePythonOperationArguments( const wxString& aText, nlohmann::json& aArguments,
+                                    wxString& aMessage )
+{
+    const std::string text = toUtf8String( aText );
+    nlohmann::json parsed =
+            text.empty() ? nlohmann::json::object()
+                         : nlohmann::json::parse( text, nullptr, false );
+
+    if( parsed.is_discarded() )
+    {
+        aMessage = wxS( "Python operation arguments must be valid JSON." );
+        return false;
+    }
+
+    if( !parsed.is_object() )
+    {
+        aMessage = wxS( "Python operation arguments must be a JSON object." );
+        return false;
+    }
+
+    aArguments = std::move( parsed );
+    return true;
 }
 
 
@@ -2743,6 +2775,26 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                  wxS( "kisurf_run_cell requires non-empty cell_text." ) );
         }
 
+        uint64_t maxOperationCount = DEFAULT_SCRIPT_OPERATION_LIMIT;
+
+        if( arguments.contains( "max_operation_count" )
+            && !jsonIntegerToUint64( arguments["max_operation_count"],
+                                     maxOperationCount ) )
+        {
+            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+                                 wxS( "max_operation_count must be a positive integer." ) );
+        }
+
+        if( maxOperationCount > DEFAULT_SCRIPT_OPERATION_LIMIT )
+        {
+            return deniedResult(
+                    aRequest, aToolCall, wxS( "malformed_arguments" ),
+                    wxString::Format(
+                            wxS( "max_operation_count cannot exceed the runtime cap of %llu." ),
+                            static_cast<unsigned long long>(
+                                    DEFAULT_SCRIPT_OPERATION_LIMIT ) ) );
+        }
+
         if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
             openSessionFromRequest( aRequest, wxEmptyString, contextBaseHash( aRequest ) );
 
@@ -2811,9 +2863,38 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             bool hasExplicitPreview = false;
             wxString operationErrorCode;
             wxString operationMessage;
+            const size_t operationCount = workerResult.m_Operations.size();
+
+            if( operationCount > static_cast<size_t>( maxOperationCount ) )
+            {
+                operationErrorCode = wxS( "script_operation_budget_exceeded" );
+                operationMessage = wxString::Format(
+                        wxS( "Python cell produced %llu operations, exceeding the "
+                             "max_operation_count limit of %llu." ),
+                        static_cast<unsigned long long>( operationCount ),
+                        static_cast<unsigned long long>( maxOperationCount ) );
+                operationResults.push_back(
+                        { { "status", "script_operation_budget_exceeded" },
+                          { "operation_count", operationCount },
+                          { "max_operation_count", maxOperationCount },
+                          { "board_mutated", false } } );
+            }
 
             for( const AI_PYTHON_OPERATION_REQUEST& operation : workerResult.m_Operations )
             {
+                if( !operationErrorCode.IsEmpty() )
+                    break;
+
+                nlohmann::json operationArguments = nlohmann::json::object();
+
+                if( !parsePythonOperationArguments( operation.m_ArgumentsJson,
+                                                    operationArguments,
+                                                    operationMessage ) )
+                {
+                    operationErrorCode = wxS( "malformed_operation_arguments" );
+                    break;
+                }
+
                 if( operation.m_Kind == AI_SESSION_OPERATION_KIND::RunValidation )
                     hasExplicitValidation = true;
 
@@ -2822,9 +2903,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
                 if( operation.m_Kind == AI_SESSION_OPERATION_KIND::Checkpoint )
                 {
-                    const nlohmann::json controlArgs =
-                            parseObjectJson( operation.m_ArgumentsJson );
-                    wxString name = optionalString( controlArgs, "name" );
+                    wxString name = optionalString( operationArguments, "name" );
 
                     if( name.IsEmpty() )
                     {
@@ -2839,7 +2918,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                     operationResults.push_back(
                             { { "kind", toUtf8String( AiSessionOperationKindId(
                                                   operation.m_Kind ) ) },
-                              { "arguments", controlArgs },
+                              { "arguments", operationArguments },
                               { "status", "checkpoint_created" },
                               { "checkpoint_id", controlCheckpointId },
                               { "board_mutated", false } } );
@@ -2848,13 +2927,11 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
                 if( operation.m_Kind == AI_SESSION_OPERATION_KIND::RollbackTo )
                 {
-                    const nlohmann::json controlArgs =
-                            parseObjectJson( operation.m_ArgumentsJson );
                     uint64_t controlCheckpointId = 0;
                     wxString checkpointName;
                     wxString error;
 
-                    if( !resolveCheckpointReference( *m_Session, controlArgs,
+                    if( !resolveCheckpointReference( *m_Session, operationArguments,
                                                      controlCheckpointId,
                                                      checkpointName, error ) )
                     {
@@ -2876,7 +2953,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                     nlohmann::json rollbackResult =
                             { { "kind", toUtf8String( AiSessionOperationKindId(
                                                   operation.m_Kind ) ) },
-                              { "arguments", controlArgs },
+                              { "arguments", operationArguments },
                               { "status", "rolled_back" },
                               { "checkpoint_id", controlCheckpointId },
                               { "preview_restored",
@@ -3081,6 +3158,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                          { "checkpoint_id", checkpointId },
                                          { "applied_operation_count",
                                           appliedOperationCount },
+                                         { "operation_count", operationCount },
+                                         { "max_operation_count", maxOperationCount },
                                          { "operation_ids", operationIdsJson( operationIds ) },
                                          { "operation_results", operationResults },
                                          { "step_results", stepResults },
@@ -3105,6 +3184,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                           { "rolled_back", workerResult.m_RollbackOnError },
                           { "checkpoint_id", checkpointId },
                           { "applied_operation_count", appliedOperationCount },
+                          { "operation_count", operationCount },
+                          { "max_operation_count", maxOperationCount },
                           { "operation_ids", operationIdsJson( operationIds ) },
                           { "operation_results", operationResults },
                           { "step_results", stepResults },
