@@ -122,6 +122,31 @@ BOOST_AUTO_TEST_CASE( ParsesCreateCircleShapePreviewOperation )
 }
 
 
+BOOST_AUTO_TEST_CASE( ParsesCreateArcShapePreviewOperation )
+{
+    const wxString payload = wxS(
+            "{\"operation\":\"create_shape_preview\",\"shape\":\"arc\","
+            "\"layer\":\"F.SilkS\",\"width\":50000,"
+            "\"start\":{\"x\":0,\"y\":0},"
+            "\"mid\":{\"x\":50,\"y\":100},"
+            "\"end\":{\"x\":100,\"y\":0}}" );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation = ParseAiSuggestionOperation( payload );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsCreateShapePreview() );
+    BOOST_CHECK_EQUAL( operation->m_Shape, wxString( wxS( "arc" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_LayerName, wxString( wxS( "F.SilkS" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_Width, 50000 );
+    BOOST_CHECK_EQUAL( operation->m_Start.x, 0 );
+    BOOST_CHECK_EQUAL( operation->m_Start.y, 0 );
+    BOOST_CHECK_EQUAL( operation->m_Position.x, 50 );
+    BOOST_CHECK_EQUAL( operation->m_Position.y, 100 );
+    BOOST_CHECK_EQUAL( operation->m_End.x, 100 );
+    BOOST_CHECK_EQUAL( operation->m_End.y, 0 );
+}
+
+
 BOOST_AUTO_TEST_CASE( ParsesCreateCopperZonePreviewOperation )
 {
     const wxString payload = wxS(

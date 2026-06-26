@@ -335,6 +335,35 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
                                   fromJson( details ) );
         }
 
+        if( shape == "arc" )
+        {
+            std::optional<nlohmann::json> start =
+                    geometry.contains( "start" ) ? previewPoint( geometry["start"] )
+                                                 : std::nullopt;
+            std::optional<nlohmann::json> mid =
+                    geometry.contains( "mid" ) ? previewPoint( geometry["mid"] )
+                                               : std::nullopt;
+            std::optional<nlohmann::json> end =
+                    geometry.contains( "end" ) ? previewPoint( geometry["end"] )
+                                               : std::nullopt;
+
+            if( !start || !mid || !end )
+                return std::nullopt;
+
+            details = {
+                { "operation", "create_shape_preview" },
+                { "shape", shape },
+                { "layer", layerOrFallback( aItem ) },
+                { "width", width },
+                { "start", *start },
+                { "mid", *mid },
+                { "end", *end }
+            };
+            type = PCB_SHAPE_T;
+            return AI_OBJECT_REF( KIID(), type, shadowItemPreviewLabel( aItem ),
+                                  fromJson( details ) );
+        }
+
         std::optional<nlohmann::json> start =
                 geometry.contains( "start" ) ? previewPoint( geometry["start"] )
                                              : std::nullopt;

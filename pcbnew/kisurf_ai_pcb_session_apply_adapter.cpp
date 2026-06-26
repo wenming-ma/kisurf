@@ -316,6 +316,9 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
     if( aShape.CmpNoCase( wxS( "circle" ) ) == 0 )
         return SHAPE_T::CIRCLE;
 
+    if( aShape.CmpNoCase( wxS( "arc" ) ) == 0 )
+        return SHAPE_T::ARC;
+
     return std::nullopt;
 }
 
@@ -362,6 +365,8 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
             geometry.contains( "start" ) ? pointFromJson( geometry["start"] ) : std::nullopt;
     std::optional<VECTOR2I> end =
             geometry.contains( "end" ) ? pointFromJson( geometry["end"] ) : std::nullopt;
+    std::optional<VECTOR2I> mid =
+            geometry.contains( "mid" ) ? pointFromJson( geometry["mid"] ) : std::nullopt;
     std::optional<VECTOR2I> center =
             geometry.contains( "center" ) ? pointFromJson( geometry["center"] ) : std::nullopt;
     std::optional<int> radius = intField( geometry, "radius" );
@@ -380,6 +385,14 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
             return nullptr;
         }
     }
+    else if( *shapeType == SHAPE_T::ARC )
+    {
+        if( !start || !mid || !end )
+        {
+            aError = wxS( "CreateShape arc requires start, mid, and end." );
+            return nullptr;
+        }
+    }
     else if( !start || !end )
     {
         aError = wxS( "CreateShape requires start and end for this shape type." );
@@ -393,6 +406,10 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
     {
         shape->SetStart( *center );
         shape->SetEnd( VECTOR2I( center->x + *radius, center->y ) );
+    }
+    else if( *shapeType == SHAPE_T::ARC )
+    {
+        shape->SetArcGeometry( *start, *mid, *end );
     }
     else
     {

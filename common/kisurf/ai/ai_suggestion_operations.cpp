@@ -244,7 +244,8 @@ bool isSupportedShapeKind( const wxString& aShape )
     return aShape.CmpNoCase( wxS( "segment" ) ) == 0
            || aShape.CmpNoCase( wxS( "line" ) ) == 0
            || aShape.CmpNoCase( wxS( "rectangle" ) ) == 0
-           || aShape.CmpNoCase( wxS( "circle" ) ) == 0;
+           || aShape.CmpNoCase( wxS( "circle" ) ) == 0
+           || aShape.CmpNoCase( wxS( "arc" ) ) == 0;
 }
 
 
@@ -293,6 +294,27 @@ std::optional<AI_SUGGESTION_OPERATION> parseCreateShapePreview( const nlohmann::
 
         operation.m_Position = center;
         operation.m_Diameter = radius;
+        return operation;
+    }
+
+    if( shape.CmpNoCase( wxS( "arc" ) ) == 0 )
+    {
+        VECTOR2I start;
+        VECTOR2I mid;
+        VECTOR2I end;
+
+        if( !aArgs.contains( "start" ) || !aArgs.contains( "mid" )
+            || !aArgs.contains( "end" )
+            || !jsonPointToVector2I( aArgs["start"], start )
+            || !jsonPointToVector2I( aArgs["mid"], mid )
+            || !jsonPointToVector2I( aArgs["end"], end ) )
+        {
+            return std::nullopt;
+        }
+
+        operation.m_Start = start;
+        operation.m_Position = mid;
+        operation.m_End = end;
         return operation;
     }
 

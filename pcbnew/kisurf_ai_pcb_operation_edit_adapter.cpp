@@ -86,6 +86,9 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
     if( aShape.CmpNoCase( wxS( "circle" ) ) == 0 )
         return SHAPE_T::CIRCLE;
 
+    if( aShape.CmpNoCase( wxS( "arc" ) ) == 0 )
+        return SHAPE_T::ARC;
+
     return std::nullopt;
 }
 
@@ -112,6 +115,11 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const AI_SUGGESTION_OPERATION& aOperation
         shape->SetStart( aOperation.m_Position );
         shape->SetEnd( VECTOR2I( aOperation.m_Position.x + aOperation.m_Diameter,
                                  aOperation.m_Position.y ) );
+    }
+    else if( *shapeType == SHAPE_T::ARC )
+    {
+        shape->SetArcGeometry( aOperation.m_Start, aOperation.m_Position,
+                               aOperation.m_End );
     }
     else
     {

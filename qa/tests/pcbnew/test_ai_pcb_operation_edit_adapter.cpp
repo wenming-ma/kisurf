@@ -12,6 +12,7 @@
 #include <tool/tool_manager.h>
 #include <zone.h>
 
+#include <cstdlib>
 #include <vector>
 #include <wx/string.h>
 
@@ -142,6 +143,18 @@ AI_OBJECT_REF circleShapePreviewRef()
                  "\"layer\":\"F.SilkS\",\"width\":50000,"
                  "\"center\":{\"x\":400,\"y\":500},"
                  "\"radius\":125000}" ) );
+}
+
+
+AI_OBJECT_REF arcShapePreviewRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_SHAPE_T, wxS( "preview:arc" ),
+            wxS( "{\"operation\":\"create_shape_preview\",\"shape\":\"arc\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"start\":{\"x\":0,\"y\":0},"
+                 "\"mid\":{\"x\":50,\"y\":100},"
+                 "\"end\":{\"x\":100,\"y\":0}}" ) );
 }
 
 
@@ -313,6 +326,38 @@ BOOST_AUTO_TEST_CASE( SessionAddsCircleShapeThroughOneCommit )
     BOOST_CHECK_EQUAL( shape->GetCenter().x, 400 );
     BOOST_CHECK_EQUAL( shape->GetCenter().y, 500 );
     BOOST_CHECK_EQUAL( shape->GetRadius(), 125000 );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionAddsArcShapeThroughOneCommit )
+{
+    PCB_OPERATION_FIXTURE         fixture;
+    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
+    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+    KISURF_AI_PCB_OPERATION_EDIT_ADAPTER adapter( resolver, commit );
+    AI_EDIT_SESSION                       session( adapter );
+
+    BOOST_CHECK( session.Apply( { arcShapePreviewRef() }, AI_VALIDATION_SUMMARY() ) );
+
+    BOOST_REQUIRE_EQUAL( commit.m_Added.size(), 1 );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
+    BOOST_REQUIRE_EQUAL( fixture.m_Board.Drawings().size(), 1 );
+
+    BOARD_ITEM* drawing = fixture.m_Board.Drawings().front();
+    BOOST_REQUIRE_EQUAL( drawing->Type(), PCB_SHAPE_T );
+
+    PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( drawing );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::ARC );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+    BOOST_CHECK( shape->EndsSwapped() );
+    BOOST_CHECK_EQUAL( shape->GetStart().x, 100 );
+    BOOST_CHECK_EQUAL( shape->GetStart().y, 0 );
+    BOOST_CHECK_EQUAL( shape->GetArcMid().x, 50 );
+    BOOST_CHECK_LE( std::abs( shape->GetArcMid().y - 100 ), 1 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().x, 0 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().y, 0 );
     BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
 }
 
