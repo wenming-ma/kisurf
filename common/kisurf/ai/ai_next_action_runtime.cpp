@@ -796,6 +796,313 @@ bool stringStartsWith( const std::string& aText, const char* aPrefix )
 }
 
 
+bool runtimeToolObjectHasOnlyFields(
+        const nlohmann::json& aArguments,
+        std::initializer_list<const char*> aAllowedFields,
+        wxString& aError )
+{
+    if( !aArguments.is_object() )
+    {
+        aError = wxS( "Runtime tool arguments must be a JSON object." );
+        return false;
+    }
+
+    for( const auto& [key, value] : aArguments.items() )
+    {
+        wxUnusedVar( value );
+        bool allowed = false;
+
+        for( const char* field : aAllowedFields )
+        {
+            if( key == field )
+            {
+                allowed = true;
+                break;
+            }
+        }
+
+        if( !allowed )
+        {
+            aError = wxString::Format( wxS( "Unsupported runtime tool argument: %s." ),
+                                       fromUtf8String( key ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool parseRuntimeToolArgumentsObject( const wxString& aArgumentsJson,
+                                      nlohmann::json& aArguments,
+                                      wxString& aError )
+{
+    nlohmann::json parsed = nlohmann::json::parse(
+            toUtf8String( aArgumentsJson ), nullptr, false );
+
+    if( parsed.is_discarded() )
+    {
+        aError = wxS( "Runtime tool arguments must be valid JSON." );
+        aArguments = nlohmann::json::object();
+        return false;
+    }
+
+    if( !parsed.is_object() )
+    {
+        aError = wxS( "Runtime tool arguments must be a JSON object." );
+        aArguments = nlohmann::json::object();
+        return false;
+    }
+
+    aArguments = std::move( parsed );
+    return true;
+}
+
+
+bool runtimeToolEnumStringField(
+        const nlohmann::json& aArguments, const char* aName,
+        std::initializer_list<const char*> aAllowedValues,
+        wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    if( !aArguments[aName].is_string() )
+    {
+        aError = wxString::Format( wxS( "%s must be a string." ),
+                                   fromUtf8String( aName ) );
+        return false;
+    }
+
+    const std::string value = aArguments[aName].get<std::string>();
+
+    for( const char* allowedValue : aAllowedValues )
+    {
+        if( value == allowedValue )
+            return true;
+    }
+
+    aError = wxString::Format( wxS( "%s is not supported." ),
+                               fromUtf8String( aName ) );
+    return false;
+}
+
+
+bool runtimeToolStringField( const nlohmann::json& aArguments,
+                             const char* aName, wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    if( aArguments[aName].is_string() )
+        return true;
+
+    aError = wxString::Format( wxS( "%s must be a string." ),
+                               fromUtf8String( aName ) );
+    return false;
+}
+
+
+bool runtimeToolStringArrayField( const nlohmann::json& aArguments,
+                                  const char* aName, wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& array = aArguments[aName];
+
+    if( !array.is_array() || array.empty() )
+    {
+        aError = wxString::Format( wxS( "%s must be a non-empty string array." ),
+                                   fromUtf8String( aName ) );
+        return false;
+    }
+
+    for( const nlohmann::json& item : array )
+    {
+        if( !item.is_string() )
+        {
+            aError = wxString::Format( wxS( "%s must contain only strings." ),
+                                       fromUtf8String( aName ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool runtimeToolIntegerField( const nlohmann::json& aObject, const char* aName )
+{
+    return aObject.contains( aName ) && aObject[aName].is_number_integer();
+}
+
+
+bool runtimeToolPositiveIntegerField( const nlohmann::json& aObject,
+                                      const char* aName )
+{
+    return runtimeToolIntegerField( aObject, aName )
+           && aObject[aName].get<int64_t>() > 0;
+}
+
+
+bool runtimeToolPointObject( const nlohmann::json& aValue )
+{
+    wxString ignoredError;
+    return aValue.is_object()
+           && runtimeToolObjectHasOnlyFields( aValue, { "x", "y" },
+                                              ignoredError )
+           && runtimeToolIntegerField( aValue, "x" )
+           && runtimeToolIntegerField( aValue, "y" );
+}
+
+
+bool runtimeToolBoxField( const nlohmann::json& aArguments, const char* aName,
+                          wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& box = aArguments[aName];
+
+    if( !box.is_object() )
+    {
+        aError = wxString::Format( wxS( "%s must be a canonical bbox object." ),
+                                   fromUtf8String( aName ) );
+        return false;
+    }
+
+    wxString ignoredError;
+    const bool originSize =
+            runtimeToolObjectHasOnlyFields(
+                    box, { "x", "y", "width", "height" }, ignoredError )
+            && runtimeToolIntegerField( box, "x" )
+            && runtimeToolIntegerField( box, "y" )
+            && runtimeToolPositiveIntegerField( box, "width" )
+            && runtimeToolPositiveIntegerField( box, "height" );
+
+    const bool minMax =
+            runtimeToolObjectHasOnlyFields( box, { "min", "max" },
+                                            ignoredError )
+            && box.contains( "min" ) && runtimeToolPointObject( box["min"] )
+            && box.contains( "max" ) && runtimeToolPointObject( box["max"] );
+
+    if( originSize || minMax )
+        return true;
+
+    aError = wxString::Format( wxS( "%s must use x/y/width/height or min/max." ),
+                               fromUtf8String( aName ) );
+    return false;
+}
+
+
+bool runtimeToolHandleRef( const nlohmann::json& aValue )
+{
+    if( aValue.is_string() )
+        return !aValue.get<std::string>().empty();
+
+    if( aValue.is_number_integer() && aValue.get<int64_t>() > 0 )
+        return true;
+
+    if( !aValue.is_object() )
+        return false;
+
+    wxString ignoredError;
+
+    if( !runtimeToolObjectHasOnlyFields(
+                aValue, { "session_id", "handle_id", "generation", "alias" },
+                ignoredError ) )
+    {
+        return false;
+    }
+
+    if( !runtimeToolPositiveIntegerField( aValue, "handle_id" ) )
+        return false;
+
+    if( aValue.contains( "session_id" )
+        && !runtimeToolPositiveIntegerField( aValue, "session_id" ) )
+    {
+        return false;
+    }
+
+    if( aValue.contains( "generation" )
+        && !runtimeToolPositiveIntegerField( aValue, "generation" ) )
+    {
+        return false;
+    }
+
+    return !aValue.contains( "alias" ) || aValue["alias"].is_string();
+}
+
+
+bool runtimeToolHandleArrayField( const nlohmann::json& aArguments,
+                                  const char* aName, wxString& aError )
+{
+    if( !aArguments.contains( aName ) )
+        return true;
+
+    const nlohmann::json& handles = aArguments[aName];
+
+    if( !handles.is_array() || handles.empty() )
+    {
+        aError = wxString::Format( wxS( "%s must be a non-empty handle array." ),
+                                   fromUtf8String( aName ) );
+        return false;
+    }
+
+    for( const nlohmann::json& handle : handles )
+    {
+        if( !runtimeToolHandleRef( handle ) )
+        {
+            aError = wxString::Format( wxS( "%s contains an invalid handle reference." ),
+                                       fromUtf8String( aName ) );
+            return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool validateRuntimeRenderToolArguments( const nlohmann::json& aArguments,
+                                         wxString& aError )
+{
+    return runtimeToolObjectHasOnlyFields(
+                   aArguments,
+                   { "scope", "mode", "region", "layer_mask", "view_mode" },
+                   aError )
+           && runtimeToolEnumStringField(
+                      aArguments, "scope",
+                      { "session", "affected_area", "selection", "region" },
+                      aError )
+           && runtimeToolStringField( aArguments, "mode", aError )
+           && runtimeToolBoxField( aArguments, "region", aError )
+           && runtimeToolStringArrayField( aArguments, "layer_mask", aError )
+           && runtimeToolStringField( aArguments, "view_mode", aError );
+}
+
+
+bool validateRuntimeValidationToolArguments( const nlohmann::json& aArguments,
+                                             wxString& aError )
+{
+    return runtimeToolObjectHasOnlyFields(
+                   aArguments,
+                   { "scope", "level", "region", "handles", "gate" },
+                   aError )
+           && runtimeToolEnumStringField(
+                      aArguments, "scope",
+                      { "session", "affected_area", "selection", "region" },
+                      aError )
+           && runtimeToolEnumStringField(
+                      aArguments, "level",
+                      { "geometry", "drc_lite", "full_drc" }, aError )
+           && runtimeToolBoxField( aArguments, "region", aError )
+           && runtimeToolHandleArrayField( aArguments, "handles", aError )
+           && runtimeToolEnumStringField( aArguments, "gate",
+                                          { "preview", "accept" }, aError );
+}
+
+
 bool isBoundedPlanMutationTool( const std::string& aToolName )
 {
     return aToolName == "script.run_bounded_plan"
@@ -13978,6 +14285,20 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "status", "missing_attempt_context" } } );
         }
 
+        nlohmann::json args;
+        wxString       argumentError;
+
+        if( !parseRuntimeToolArgumentsObject( aToolCall.m_ArgumentsJson, args,
+                                              argumentError )
+            || !validateRuntimeRenderToolArguments( args, argumentError ) )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ), argumentError,
+                    { { "tool", "render.hidden_attempt" },
+                      { "status", "malformed_arguments" },
+                      { "message", toUtf8String( argumentError ) } } );
+        }
+
         const ATTEMPT_BUDGET_POLICY renderPolicy =
                 attemptPolicyForWorkState( budgetPolicyWorkStateForCandidate(
                         aAttempt->m_Candidate ) );
@@ -14008,7 +14329,7 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         aAttempt->m_RenderOutputsJson =
                 RenderAttempt( *session, aAttempt->m_Candidate,
-                               aToolCall.m_ArgumentsJson );
+                               fromUtf8String( args.dump() ) );
         ++aAttempt->m_BudgetCounters.m_RenderCount;
         syncAttemptBudgetCountersToProvenance( *aAttempt );
 
@@ -14037,6 +14358,20 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     wxS( "validate.hidden_attempt requires an active attempt." ),
                     { { "tool", "validate.hidden_attempt" },
                       { "status", "missing_attempt_context" } } );
+        }
+
+        nlohmann::json args;
+        wxString       argumentError;
+
+        if( !parseRuntimeToolArgumentsObject( aToolCall.m_ArgumentsJson, args,
+                                              argumentError )
+            || !validateRuntimeValidationToolArguments( args, argumentError ) )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ), argumentError,
+                    { { "tool", "validate.hidden_attempt" },
+                      { "status", "malformed_arguments" },
+                      { "message", toUtf8String( argumentError ) } } );
         }
 
         const ATTEMPT_BUDGET_POLICY validationPolicy =
@@ -14070,7 +14405,7 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         aAttempt->m_ValidationFactsJson =
                 ValidateAttempt( *session, aAttempt->m_Candidate,
-                                 aToolCall.m_ArgumentsJson );
+                                 fromUtf8String( args.dump() ) );
         ++aAttempt->m_BudgetCounters.m_ValidationCount;
         syncAttemptBudgetCountersToProvenance( *aAttempt );
 

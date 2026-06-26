@@ -310,6 +310,63 @@ public:
 };
 
 
+class INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER( wxString aToolName,
+                                                       wxString aArgumentsJson ) :
+            m_ToolName( std::move( aToolName ) ),
+            m_ArgumentsJson( std::move( aArgumentsJson ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "invalid review tool argument next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need runtime tool facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_invalid_review_tool" );
+                call.m_ToolName = m_ToolName;
+                call.m_ArgumentsJson = m_ArgumentsJson;
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = wxS( "{\"decision_kind\":\"abandon\","
+                                  "\"reason_code\":\"invalid_tool_result_seen\"}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    wxString                         m_ToolName;
+    wxString                         m_ArgumentsJson;
+};
+
+
 class CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -8778,6 +8835,136 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeRejectsMalformedRenderToolArgumentsBeforeService )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "render_hidden_attempt" ), wxS( "{\"unexpected\":true}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+    BOOST_CHECK_EQUAL( services.m_Preview.m_RenderCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_RenderCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonRenderToolArgumentsBeforeService )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "render_hidden_attempt" ), wxS( "{" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK_EQUAL( services.m_Preview.m_RenderCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_RenderCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsMalformedValidationToolArgumentsBeforeService )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "validate_hidden_attempt" ), wxS( "{\"gate\":\"publish\"}" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+    BOOST_CHECK_EQUAL( services.m_Validation.m_RunCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ValidationCount,
+                       1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonValidationToolArgumentsBeforeService )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "validate_hidden_attempt" ), wxS( "{" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK_EQUAL( services.m_Validation.m_RunCount, 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ValidationCount,
+                       1 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
 {
     auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
@@ -11652,7 +11839,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolPassesRequestedRenderArgs )
 {
     auto* provider = new RENDER_TOOL_NEXT_ACTION_PROVIDER(
             wxS( "{\"mode\":\"visual_review\","
-                 "\"region\":{\"x\":10,\"y\":20,\"w\":300,\"h\":400},"
+                 "\"region\":{\"x\":10,\"y\":20,\"width\":300,\"height\":400},"
                  "\"layer_mask\":[\"F.Cu\",\"B.Cu\"]}" ) );
 
     PASSING_SESSION_VALIDATION_SERVICE validationService;
@@ -11674,7 +11861,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRenderToolPassesRequestedRenderArgs )
                        "visual_review" );
     BOOST_CHECK_EQUAL( toolRenderArgs["scope"].get<std::string>(),
                        "session" );
-    BOOST_CHECK_EQUAL( toolRenderArgs["region"]["w"].get<int>(), 300 );
+    BOOST_CHECK_EQUAL( toolRenderArgs["region"]["width"].get<int>(), 300 );
     BOOST_REQUIRE_EQUAL( toolRenderArgs["layer_mask"].size(), 2 );
     BOOST_CHECK_EQUAL( toolRenderArgs["layer_mask"].at( 0 ).get<std::string>(),
                        "F.Cu" );
