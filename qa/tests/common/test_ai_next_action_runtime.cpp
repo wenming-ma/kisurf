@@ -5481,6 +5481,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_candidate_facts"].at( 0 )["placeable_kind"]
                     .get<std::string>(),
             "via" );
+    BOOST_REQUIRE(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    .contains( "interaction_semantics" ) );
+    const nlohmann::json& placementInteraction =
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["interaction_semantics"];
+    BOOST_CHECK_EQUAL( placementInteraction["mode"].get<std::string>(),
+                       "active_interactive_placement" );
+    BOOST_CHECK_EQUAL( placementInteraction["planning_target"].get<std::string>(),
+                       "place_current_item" );
+    BOOST_CHECK_EQUAL( placementInteraction["placement_anchor_source"].get<std::string>(),
+                       "placement_anchor" );
+    BOOST_CHECK( placementInteraction["cursor_attached_item"].get<bool>() );
+    BOOST_CHECK( placementInteraction["manual_click_to_materialize"].get<bool>() );
+    BOOST_CHECK( placementInteraction["manual_click_supersedes_attempt"].get<bool>() );
+    BOOST_CHECK( placementInteraction["preview_must_be_rebased_after_click"].get<bool>() );
     BOOST_CHECK_EQUAL(
             placementPacket["placement_candidate_facts"].at( 0 )
                     ["suggested_tool_call"]["name"].get<std::string>(),
