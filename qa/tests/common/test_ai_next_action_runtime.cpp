@@ -5369,6 +5369,10 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"placement_facts\":{\"source\":\"board\","
                  "\"footprint_count\":2,"
                  "\"footprints_with_courtyard_count\":2,"
+                 "\"courtyard_pair_count\":1,"
+                 "\"courtyard_overlap_count\":0,"
+                 "\"minimum_courtyard_bbox_spacing\":150000,"
+                 "\"minimum_non_overlapping_courtyard_bbox_spacing\":150000,"
                  "\"courtyard_pairs\":[{"
                  "\"kind\":\"footprint_courtyard_pair\","
                  "\"side\":\"front\","
@@ -5682,6 +5686,20 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_context_facts"]
                     ["footprints_with_courtyard_count"].get<int>(),
             2 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]["courtyard_pair_count"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]["courtyard_overlap_count"].get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]
+                    ["minimum_courtyard_bbox_spacing"].get<int>(),
+            150000 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_context_facts"]
+                    ["minimum_non_overlapping_courtyard_bbox_spacing"].get<int>(),
+            150000 );
     BOOST_REQUIRE( placementPacket.contains( "placement_courtyard_pair_facts" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_courtyard_pair_facts"].size(), 1 );
     BOOST_CHECK_EQUAL(
