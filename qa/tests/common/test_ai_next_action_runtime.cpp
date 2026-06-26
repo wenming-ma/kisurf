@@ -8,6 +8,7 @@
 #include <kisurf/ai/ai_suggestion_operations.h>
 
 #include <json_common.h>
+#include <qa_utils/wx_utils/unit_test_utils.h>
 
 #include <wx/ffile.h>
 #include <wx/filename.h>
@@ -7245,6 +7246,31 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFileEvaluationRunsVersionedDataset )
     BOOST_CHECK( evaluation.m_SummaryJson.Contains( wxS( "\"dataset_path\":" ) ) );
 
     wxRemoveFile( datasetPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFileEvaluationRunsRepositoryFixture )
+{
+    wxFileName datasetPath( KI_TEST::GetTestDataRootDir() );
+    datasetPath.AppendDir( wxS( "ai" ) );
+    datasetPath.AppendDir( wxS( "next_action" ) );
+    datasetPath.AppendDir( wxS( "golden" ) );
+    datasetPath.SetFullName( wxS( "placement_via_inner_loop_smoke.json" ) );
+
+    BOOST_REQUIRE_MESSAGE( wxFileName::FileExists( datasetPath.GetFullPath() ),
+                           "Missing repository golden dataset fixture: "
+                                   << datasetPath.GetFullPath() );
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayGoldenDatasetFile( datasetPath.GetFullPath() );
+
+    BOOST_CHECK( evaluation.m_Valid );
+    BOOST_CHECK( evaluation.m_Passed );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 1 );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"dataset_id\":\"next-action-placement-via-inner-loop-smoke\"" ) ) );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains( wxS( "\"dataset_path\":" ) ) );
 }
 
 
