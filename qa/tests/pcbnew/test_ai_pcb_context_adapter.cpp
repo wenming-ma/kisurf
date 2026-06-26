@@ -647,6 +647,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
     BOOST_CHECK( graphEdge["to"].get<std::string>().find( "net:1:component:" ) == 0 );
     BOOST_CHECK( graphEdge["source"].contains( "position" ) );
     BOOST_CHECK( graphEdge["target"].contains( "position" ) );
+    BOOST_CHECK_EQUAL( graphEdge["estimated_manhattan_length"].get<int>(), 200000 );
 }
 
 

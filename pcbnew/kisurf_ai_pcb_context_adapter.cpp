@@ -1430,6 +1430,19 @@ wxString connectivityEndpointJson( const std::shared_ptr<const CN_ANCHOR>& aAnch
 }
 
 
+int anchorManhattanLength( const std::shared_ptr<const CN_ANCHOR>& aSource,
+                           const std::shared_ptr<const CN_ANCHOR>& aTarget )
+{
+    if( !aSource || !aTarget )
+        return 0;
+
+    const VECTOR2I source = aSource->Pos();
+    const VECTOR2I target = aTarget->Pos();
+
+    return std::abs( source.x - target.x ) + std::abs( source.y - target.y );
+}
+
+
 std::vector<wxString> makeNetUnconnectedEdgeEntries(
         const std::shared_ptr<CONNECTIVITY_DATA>& aConnectivity, int aNetCode,
         bool& aTruncated )
@@ -1830,7 +1843,7 @@ std::vector<wxString> makeBoardComponentGraphEdgeEntries(
                     entries.push_back( wxString::Format(
                             wxS( "{\"id\":%s,\"net_code\":%d,\"net_name\":%s,"
                                  "\"kind\":\"ratsnest\",\"from\":%s,\"to\":%s,"
-                                 "\"visible\":%s,"
+                                 "\"visible\":%s,\"estimated_manhattan_length\":%d,"
                                  "\"source_component\":%d,\"target_component\":%d,"
                                  "\"source\":%s,\"target\":%s}" ),
                             quotedJson( wxString::Format( wxS( "net:%d:ratsnest:%d" ),
@@ -1841,7 +1854,9 @@ std::vector<wxString> makeBoardComponentGraphEdgeEntries(
                                                               sourceComponent ) ),
                             quotedJson( componentGraphNodeId( net->GetNetCode(),
                                                               targetComponent ) ),
-                            boolJson( aEdge.IsVisible() ), sourceComponent, targetComponent,
+                            boolJson( aEdge.IsVisible() ),
+                            anchorManhattanLength( sourceNode, targetNode ),
+                            sourceComponent, targetComponent,
                             connectivityEndpointJson( sourceNode ),
                             connectivityEndpointJson( targetNode ) ) );
 
