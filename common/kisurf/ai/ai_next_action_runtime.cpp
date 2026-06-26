@@ -3780,6 +3780,69 @@ nlohmann::json activeNetSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
         nlohmann::json summary = netFact;
         summary["source"] = "context_summary.net_facts";
         summary["requested_net"] = activeNet;
+
+        if( boardSummary.contains( "connectivity_summary" )
+            && boardSummary["connectivity_summary"].is_object() )
+        {
+            const nlohmann::json& connectivity = boardSummary["connectivity_summary"];
+            const bool hasNetCode = netFact.contains( "code" )
+                                    && netFact["code"].is_number_integer();
+            const int  netCode = hasNetCode ? netFact["code"].get<int>() : 0;
+
+            auto belongsToActiveNet =
+                    [&]( const nlohmann::json& aFact ) -> bool
+                    {
+                        if( !aFact.is_object() )
+                            return false;
+
+                        if( hasNetCode && aFact.contains( "net_code" )
+                            && aFact["net_code"].is_number_integer()
+                            && aFact["net_code"].get<int>() == netCode )
+                        {
+                            return true;
+                        }
+
+                        return aFact.contains( "net_name" ) && aFact["net_name"].is_string()
+                               && netNamesMatch( activeNet,
+                                                 aFact["net_name"].get<std::string>() );
+                    };
+
+            auto filteredFacts =
+                    [&]( const char* aFieldName ) -> nlohmann::json
+                    {
+                        nlohmann::json facts = nlohmann::json::array();
+
+                        if( !connectivity.contains( aFieldName )
+                            || !connectivity[aFieldName].is_array() )
+                        {
+                            return facts;
+                        }
+
+                        for( const nlohmann::json& fact : connectivity[aFieldName] )
+                        {
+                            if( belongsToActiveNet( fact ) )
+                                facts.push_back( fact );
+                        }
+
+                        return facts;
+                    };
+
+            bool graphNodeTruncated = false;
+            bool graphEdgeTruncated = false;
+            summary["component_graph_nodes"] =
+                    cappedJsonArray( filteredFacts( "component_graph_nodes" ), 16,
+                                     graphNodeTruncated );
+            summary["component_graph_edges"] =
+                    cappedJsonArray( filteredFacts( "component_graph_edges" ), 16,
+                                     graphEdgeTruncated );
+
+            if( graphNodeTruncated )
+                summary["component_graph_node_sample_truncated"] = true;
+
+            if( graphEdgeTruncated )
+                summary["component_graph_edge_sample_truncated"] = true;
+        }
+
         return summary;
     }
 

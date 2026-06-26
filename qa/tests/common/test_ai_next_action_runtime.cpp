@@ -5192,6 +5192,20 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["active_net_summary"]["topology"]
                     ["visible_unconnected_edge_count"].get<int>(),
             1 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["active_net_summary"]["component_graph_nodes"].size(),
+            2 );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["active_net_summary"]["component_graph_edges"].size(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["component_graph_edges"]
+                    .at( 0 )["kind"].get<std::string>(),
+            "ratsnest" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["active_net_summary"]["component_graph_edges"]
+                    .at( 0 )["from"].get<std::string>(),
+            "U1.1" );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
             routingPacket["active_route_segment"]["start"]["x"].get<int>(),
