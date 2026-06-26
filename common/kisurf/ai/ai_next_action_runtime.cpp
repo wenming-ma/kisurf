@@ -4116,6 +4116,119 @@ nlohmann::json routingProgressFactsJson(
 }
 
 
+nlohmann::json routingLayerReachabilityFactsJson(
+        const nlohmann::json& aActiveNetSummary,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    nlohmann::json facts = nlohmann::json::array();
+
+    if( !aActiveNetSummary.is_object()
+        || !aActiveNetSummary.contains( "component_graph_edges" )
+        || !aActiveNetSummary["component_graph_edges"].is_array() )
+    {
+        return facts;
+    }
+
+    const nlohmann::json modeContext =
+            objectFromJsonText( aToolState.m_ModeContextJson );
+
+    if( !modeContext.contains( "layer" ) || !modeContext["layer"].is_string() )
+        return facts;
+
+    const std::string activeLayer = modeContext["layer"].get<std::string>();
+    int               candidateEdgeCount = 0;
+    int               visibleCandidateEdgeCount = 0;
+    int               estimatedLength = 0;
+    int               layerSwitchEdgeCount = 0;
+    bool              hasEstimatedLength = false;
+
+    for( const nlohmann::json& edge : aActiveNetSummary["component_graph_edges"] )
+    {
+        if( !edge.is_object() )
+            continue;
+
+        std::string candidateLayer = activeLayer;
+
+        if( edge.contains( "candidate_layer" ) && edge["candidate_layer"].is_string() )
+            candidateLayer = edge["candidate_layer"].get<std::string>();
+        else if( edge.contains( "layer" ) && edge["layer"].is_string() )
+            candidateLayer = edge["layer"].get<std::string>();
+
+        const bool reachesOnActiveLayer = candidateLayer == activeLayer;
+
+        if( !reachesOnActiveLayer )
+        {
+            ++layerSwitchEdgeCount;
+            continue;
+        }
+
+        ++candidateEdgeCount;
+
+        if( edge.contains( "visible" ) && edge["visible"].is_boolean()
+            && edge["visible"].get<bool>() )
+        {
+            ++visibleCandidateEdgeCount;
+        }
+
+        int edgeLength = 0;
+
+        if( jsonNumberAsInt( edge, "estimated_manhattan_length", edgeLength )
+            && edgeLength >= 0 )
+        {
+            hasEstimatedLength = true;
+            estimatedLength += edgeLength;
+        }
+    }
+
+    nlohmann::json activeLayerFact =
+            { { "source",
+                "active_net_summary.component_graph_edges+mode_context.layer" },
+              { "purpose", "layer_specific_routing_reachability_review" },
+              { "layer", activeLayer },
+              { "active_layer", true },
+              { "candidate_edge_count", candidateEdgeCount },
+              { "visible_candidate_edge_count", visibleCandidateEdgeCount },
+              { "requires_layer_switch", layerSwitchEdgeCount > 0 },
+              { "layer_switch_edge_count", layerSwitchEdgeCount },
+              { "via_transition_count_estimate", layerSwitchEdgeCount },
+              { "cost_model", "heuristic_manhattan_active_layer" } };
+
+    if( hasEstimatedLength )
+        activeLayerFact["estimated_manhattan_length"] = estimatedLength;
+
+    if( aActiveNetSummary.contains( "name" )
+        && aActiveNetSummary["name"].is_string() )
+    {
+        activeLayerFact["active_net"] = aActiveNetSummary["name"];
+    }
+
+    if( aActiveNetSummary.contains( "routed_layer_lengths" )
+        && aActiveNetSummary["routed_layer_lengths"].is_array() )
+    {
+        for( const nlohmann::json& layerFact :
+             aActiveNetSummary["routed_layer_lengths"] )
+        {
+            if( !layerFact.is_object()
+                || !layerFact.contains( "layer" )
+                || !layerFact["layer"].is_string()
+                || layerFact["layer"].get<std::string>() != activeLayer )
+            {
+                continue;
+            }
+
+            copyJsonFieldIfPresent( activeLayerFact, layerFact,
+                                    "routed_track_length" );
+            copyJsonFieldIfPresent( activeLayerFact, layerFact,
+                                    "routed_track_segment_count" );
+            break;
+        }
+    }
+
+    facts.push_back( std::move( activeLayerFact ) );
+    return facts;
+}
+
+
 nlohmann::json routingReachabilityFactsJson(
         const nlohmann::json& aActiveNetSummary,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
@@ -5720,6 +5833,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
     nlohmann::json activeNet = activeNetSummaryJson( context );
     nlohmann::json routingProgress =
             routingProgressFactsJson( activeNet, context.m_ToolState );
+    nlohmann::json routingLayerReachability =
+            routingLayerReachabilityFactsJson( activeNet, context.m_ToolState );
     nlohmann::json routingReachability =
             routingReachabilityFactsJson( activeNet, context.m_ToolState,
                                           context.m_VisibleObjects );
@@ -5752,6 +5867,10 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
 
         if( !routingProgress.empty() )
             packet["routing_progress_facts"] = std::move( routingProgress );
+
+        if( !routingLayerReachability.empty() )
+            packet["routing_layer_reachability_facts"] =
+                    std::move( routingLayerReachability );
 
         if( !routingReachability.empty() )
             packet["routing_reachability_facts"] =
