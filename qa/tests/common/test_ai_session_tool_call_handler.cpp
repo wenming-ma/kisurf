@@ -215,6 +215,62 @@ bool queryHandleSchemaSupportsTypedReferences( const nlohmann::json& aSchema )
 }
 
 
+bool handleArraySchemaSupportsTypedReferences( const nlohmann::json& aSchema )
+{
+    return aSchema.is_object() && aSchema.value( "type", std::string() ) == "array"
+           && aSchema.contains( "items" )
+           && queryHandleSchemaSupportsTypedReferences( aSchema["items"] );
+}
+
+
+bool renderPreviewSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "region" )
+           && boxSchemaSupportsCanonicalForms( properties["region"] )
+           && properties.contains( "layer_mask" )
+           && properties["layer_mask"].value( "type", std::string() ) == "array"
+           && properties["layer_mask"].contains( "items" )
+           && properties["layer_mask"]["items"].value( "type", std::string() ) == "string"
+           && properties.contains( "view_mode" )
+           && properties["view_mode"].value( "type", std::string() ) == "string";
+}
+
+
+bool validationSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "scope" )
+           && stringEnumContainsAll( properties["scope"],
+                                     { "session", "affected_area", "selection",
+                                       "region" } )
+           && properties.contains( "level" )
+           && stringEnumContainsAll( properties["level"],
+                                     { "geometry", "drc_lite", "full_drc" } )
+           && properties.contains( "region" )
+           && boxSchemaSupportsCanonicalForms( properties["region"] )
+           && properties.contains( "handles" )
+           && handleArraySchemaSupportsTypedReferences( properties["handles"] )
+           && properties.contains( "gate" )
+           && stringEnumContainsAll( properties["gate"],
+                                     { "preview", "accept" } );
+}
+
+
 AI_TOOL_CALL_RECORD toolCall( const wxString& aToolName, const wxString& aArguments )
 {
     AI_TOOL_CALL_RECORD call;
@@ -813,10 +869,18 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_render_preview" )->value( "side_effect",
                                                                      std::string() ),
                        "render" );
+    BOOST_REQUIRE( catalogTool( "kisurf_render_preview" )->contains(
+            "argument_contract" ) );
+    BOOST_CHECK( renderPreviewSchemaDeclaresTypedObservationArgs(
+            ( *catalogTool( "kisurf_render_preview" ) )["argument_contract"] ) );
     BOOST_REQUIRE( catalogTool( "kisurf_run_validation" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_run_validation" )->value( "side_effect",
                                                                      std::string() ),
                        "validate" );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_validation" )->contains(
+            "argument_contract" ) );
+    BOOST_CHECK( validationSchemaDeclaresTypedObservationArgs(
+            ( *catalogTool( "kisurf_run_validation" ) )["argument_contract"] ) );
     BOOST_REQUIRE( catalogTool( "kisurf_accept_session" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_accept_session" )->value( "layer",
                                                                      std::string() ),

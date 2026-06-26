@@ -184,6 +184,62 @@ bool queryHandleSchemaSupportsTypedReferences( const nlohmann::json& aSchema )
 
     return sawAlias && sawHandleId && sawHandleObject;
 }
+
+
+bool handleArraySchemaSupportsTypedReferences( const nlohmann::json& aSchema )
+{
+    return aSchema.is_object() && aSchema.value( "type", std::string() ) == "array"
+           && aSchema.contains( "items" )
+           && queryHandleSchemaSupportsTypedReferences( aSchema["items"] );
+}
+
+
+bool renderPreviewSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "region" )
+           && boxSchemaSupportsCanonicalForms( properties["region"] )
+           && properties.contains( "layer_mask" )
+           && properties["layer_mask"].value( "type", std::string() ) == "array"
+           && properties["layer_mask"].contains( "items" )
+           && properties["layer_mask"]["items"].value( "type", std::string() ) == "string"
+           && properties.contains( "view_mode" )
+           && properties["view_mode"].value( "type", std::string() ) == "string";
+}
+
+
+bool validationSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "scope" )
+           && stringEnumContainsAll( properties["scope"],
+                                     { "session", "affected_area", "selection",
+                                       "region" } )
+           && properties.contains( "level" )
+           && stringEnumContainsAll( properties["level"],
+                                     { "geometry", "drc_lite", "full_drc" } )
+           && properties.contains( "region" )
+           && boxSchemaSupportsCanonicalForms( properties["region"] )
+           && properties.contains( "handles" )
+           && handleArraySchemaSupportsTypedReferences( properties["handles"] )
+           && properties.contains( "gate" )
+           && stringEnumContainsAll( properties["gate"],
+                                     { "preview", "accept" } );
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNativeProvider )
@@ -874,12 +930,14 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( !rollbackParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& validationParameters =
                         toolByName["kisurf_run_validation"]["function"]["parameters"];
-                BOOST_CHECK( validationParameters["properties"]["level"]["enum"].dump().find(
-                                     "drc_lite" ) != std::string::npos );
+                BOOST_CHECK( validationSchemaDeclaresTypedObservationArgs(
+                        validationParameters ) );
                 const nlohmann::json& renderPreviewParameters =
                         toolByName["kisurf_render_preview"]["function"]["parameters"];
                 BOOST_CHECK( renderPreviewParameters["properties"]["mode"]["enum"].dump().find(
                                      "native" ) != std::string::npos );
+                BOOST_CHECK( renderPreviewSchemaDeclaresTypedObservationArgs(
+                        renderPreviewParameters ) );
                 const nlohmann::json& contextParameters =
                         toolByName["kisurf_get_context_snapshot"]["function"]["parameters"];
                 BOOST_CHECK( contextParameters["required"].empty() );

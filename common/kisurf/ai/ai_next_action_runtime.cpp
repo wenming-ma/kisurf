@@ -11555,6 +11555,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto flexibleHandleSchema =
+                        [&]()
+                        {
+                            return nlohmann::json{
+                                { "description",
+                                  "Session handle as an alias, session-local handle id, or typed handle object." },
+                                { "anyOf",
+                                  nlohmann::json::array(
+                                          { { { "type", "string" },
+                                              { "description",
+                                                "Session handle alias." } },
+                                            { { "type", "integer" },
+                                              { "minimum", 1 } },
+                                            handleSchema() } ) }
+                            };
+                        };
+
+                auto flexibleHandleArraySchema =
+                        [&]( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "type", "array" },
+                                { "description", aDescription },
+                                { "items", flexibleHandleSchema() },
+                                { "minItems", 1 }
+                            };
+                        };
+
                 auto stringArraySchema =
                         []( const char* aDescription )
                         {
@@ -11615,6 +11643,17 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                   nlohmann::json::array(
                                           { "session", "affected_area",
                                             "selection", "region" } ) }
+                            };
+                        };
+
+                auto gateSchema =
+                        []( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "type", "string" },
+                                { "description", aDescription },
+                                { "enum",
+                                  nlohmann::json::array( { "preview", "accept" } ) }
                             };
                         };
 
@@ -11991,15 +12030,15 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                               { "description",
                                 "Render mode requested for model review, for example visual_review." } };
                     parameters["properties"]["region"] =
-                            { { "type", "object" },
-                              { "additionalProperties", true },
-                              { "description",
-                                "Optional board or viewport region to render." } };
+                            boxSchema(
+                                    "Optional board-space region to render around the hidden attempt." );
                     parameters["properties"]["layer_mask"] =
-                            { { "type", "array" },
-                              { "items", { { "type", "string" } } },
+                            stringArraySchema(
+                                    "Optional layer names to include in the rendered view." );
+                    parameters["properties"]["view_mode"] =
+                            { { "type", "string" },
                               { "description",
-                                "Optional layer names to include in the rendered view." } };
+                                "Optional visual review mode or viewport profile requested by the model." } };
                 }
                 else if( aName == "validate.hidden_attempt" )
                 {
@@ -12018,6 +12057,15 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 nlohmann::json::array(
                                         { "geometry", "drc_lite", "full_drc" } ) },
                               { "description", "Validation depth requested for the hidden attempt." } };
+                    parameters["properties"]["region"] =
+                            boxSchema(
+                                    "Optional board-space validation region in internal coordinates." );
+                    parameters["properties"]["handles"] =
+                            flexibleHandleArraySchema(
+                                    "Optional session handles to validate." );
+                    parameters["properties"]["gate"] =
+                            gateSchema(
+                                    "Optional runtime gate requesting stricter validation facts." );
                 }
                 else if( aName == "rollback.attempt" )
                 {

@@ -807,21 +807,20 @@ nlohmann::json sessionAcceptToolParameters()
 nlohmann::json sessionRenderPreviewToolParameters()
 {
     nlohmann::json properties;
-    properties["region"] = {
-        { "type", "object" },
-        { "description",
-          "Optional board-space region to render around the shadow board preview." },
-        { "additionalProperties", true }
-    };
-    properties["layer_mask"] = {
-        { "type", "array" },
-        { "description", "Optional layer names to include." },
-        { "items", { { "type", "string" } } }
-    };
+    properties["region"] =
+            internalBoxSchema(
+                    "Optional board-space region to render around the shadow board preview." );
+    properties["layer_mask"] =
+            stringArraySchema( "Optional layer names to include." );
     properties["mode"] = {
         { "type", "string" },
         { "enum", nlohmann::json::array( { "native", "visual", "semantic", "diff" } ) },
         { "description", "Preview render mode." }
+    };
+    properties["view_mode"] = {
+        { "type", "string" },
+        { "description",
+          "Optional visual review mode or viewport profile requested by the model." }
     };
 
     return { { "type", "object" },
@@ -835,17 +834,28 @@ nlohmann::json sessionValidationToolParameters()
     return { { "type", "object" },
              { "properties",
                { { "scope",
-                   { { "type", "object" },
-                     { "description",
-                       "Optional validation scope such as bbox, handles, or affected "
-                       "area." },
-                     { "additionalProperties", true } } },
+                   operationScopeSchema(
+                           "Validation scope requested for the session attempt." ) },
                  { "level",
                    { { "type", "string" },
                      { "enum",
                        nlohmann::json::array(
                                { "geometry", "drc_lite", "full_drc" } ) },
-                     { "description", "Validation depth." } } } } },
+                     { "description", "Validation depth." } } },
+                 { "region",
+                   internalBoxSchema(
+                           "Optional board-space validation region in internal coordinates." ) },
+                 { "handles",
+                   { { "type", "array" },
+                     { "description", "Optional session handles to validate." },
+                     { "items", queryHandleFilterSchema() },
+                     { "minItems", 1 } } },
+                 { "gate",
+                   { { "type", "string" },
+                     { "enum",
+                       nlohmann::json::array( { "preview", "accept" } ) },
+                     { "description",
+                       "Optional runtime gate requesting stricter validation facts." } } } } },
              { "additionalProperties", false } };
 }
 

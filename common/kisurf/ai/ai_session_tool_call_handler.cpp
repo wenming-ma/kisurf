@@ -265,6 +265,67 @@ nlohmann::json catalogQueryItemsFilterSchema()
 }
 
 
+nlohmann::json catalogValidationHandleArraySchema( const char* aDescription )
+{
+    return { { "type", "array" },
+             { "description", aDescription },
+             { "items", catalogQueryHandleFilterSchema() },
+             { "minItems", 1 } };
+}
+
+
+nlohmann::json catalogRenderPreviewArgumentsSchema()
+{
+    return { { "type", "object" },
+             { "additionalProperties", false },
+             { "properties",
+               { { "region",
+                   catalogBoxSchema(
+                           "Optional board-space region to render around the shadow board preview." ) },
+                 { "layer_mask",
+                   catalogStringArraySchema( "Optional layer names to include." ) },
+                 { "mode",
+                   { { "type", "string" },
+                     { "enum",
+                       nlohmann::json::array(
+                               { "native", "visual", "semantic", "diff" } ) },
+                     { "description", "Preview render mode." } } },
+                 { "view_mode",
+                   { { "type", "string" },
+                     { "description",
+                       "Optional visual review mode or viewport profile requested by the model." } } } } } };
+}
+
+
+nlohmann::json catalogValidationArgumentsSchema()
+{
+    return { { "type", "object" },
+             { "additionalProperties", false },
+             { "properties",
+               { { "scope",
+                   catalogOperationScopeSchema(
+                           "Validation scope requested for the session attempt." ) },
+                 { "level",
+                   { { "type", "string" },
+                     { "enum",
+                       nlohmann::json::array(
+                               { "geometry", "drc_lite", "full_drc" } ) },
+                     { "description", "Validation depth." } } },
+                 { "region",
+                   catalogBoxSchema(
+                           "Optional board-space validation region in internal coordinates." ) },
+                 { "handles",
+                   catalogValidationHandleArraySchema(
+                           "Optional session handles to validate." ) },
+                 { "gate",
+                   { { "type", "string" },
+                     { "enum",
+                       nlohmann::json::array( { "preview", "accept" } ) },
+                     { "description",
+                       "Optional runtime gate requesting stricter validation facts." } } } } } };
+}
+
+
 nlohmann::json catalogGeometryPatchSchema()
 {
     nlohmann::json schema = { { "type", "object" },
@@ -650,6 +711,14 @@ nlohmann::json sessionToolCatalogJson()
         else if( name == "kisurf_query_item" )
         {
             tool["handle_contract"] = catalogQueryHandleFilterSchema();
+        }
+        else if( name == "kisurf_render_preview" )
+        {
+            tool["argument_contract"] = catalogRenderPreviewArgumentsSchema();
+        }
+        else if( name == "kisurf_run_validation" )
+        {
+            tool["argument_contract"] = catalogValidationArgumentsSchema();
         }
         else if( name == "kisurf_accept_session" )
         {

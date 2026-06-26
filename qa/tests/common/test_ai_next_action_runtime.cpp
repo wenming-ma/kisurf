@@ -4465,6 +4465,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingNamespaceDescription = false;
     bool sawScriptNamespaceDescription = false;
     bool sawSurfaceNamespaceDescription = false;
+    bool sawRenderHiddenAttemptTypedArgs = false;
+    bool sawValidateHiddenAttemptTypedArgs = false;
 
     auto pointSchemaRequiresXY =
             []( const nlohmann::json& aSchema )
@@ -4745,6 +4747,53 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 sawAtomicRunMaintenanceScopeContract =
                         contractsDeclareMaintenanceScopes( contracts );
             }
+        }
+
+        if( functionName == "render_hidden_attempt" )
+        {
+            const nlohmann::json& properties =
+                    function["parameters"]["properties"];
+
+            sawRenderHiddenAttemptTypedArgs =
+                    properties.contains( "region" )
+                    && boxSchemaSupportsCanonicalForms( properties["region"] )
+                    && properties.contains( "layer_mask" )
+                    && properties["layer_mask"].value( "type", std::string() )
+                               == "array"
+                    && properties["layer_mask"].contains( "items" )
+                    && properties["layer_mask"]["items"].value(
+                               "type", std::string() )
+                               == "string"
+                    && properties.contains( "view_mode" )
+                    && properties["view_mode"].value( "type", std::string() )
+                               == "string";
+        }
+
+        if( functionName == "validate_hidden_attempt" )
+        {
+            const nlohmann::json& properties =
+                    function["parameters"]["properties"];
+
+            sawValidateHiddenAttemptTypedArgs =
+                    properties.contains( "scope" )
+                    && stringEnumContainsAll(
+                            properties["scope"],
+                            { "session", "affected_area", "selection",
+                              "region" } )
+                    && properties.contains( "level" )
+                    && stringEnumContainsAll(
+                            properties["level"],
+                            { "geometry", "drc_lite", "full_drc" } )
+                    && properties.contains( "region" )
+                    && boxSchemaSupportsCanonicalForms( properties["region"] )
+                    && properties.contains( "handles" )
+                    && properties["handles"].value( "type", std::string() )
+                               == "array"
+                    && properties["handles"].contains( "items" )
+                    && properties["handles"]["items"].contains( "anyOf" )
+                    && properties.contains( "gate" )
+                    && stringEnumContainsAll( properties["gate"],
+                                              { "preview", "accept" } );
         }
 
         if( functionName == "script_run_bounded_plan"
@@ -5537,6 +5586,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingNamespaceDescription );
     BOOST_CHECK( sawScriptNamespaceDescription );
     BOOST_CHECK( sawSurfaceNamespaceDescription );
+    BOOST_CHECK( sawRenderHiddenAttemptTypedArgs );
+    BOOST_CHECK( sawValidateHiddenAttemptTypedArgs );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( sawSurfaceRepairWritePolicy );
