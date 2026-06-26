@@ -134,6 +134,17 @@ AI_OBJECT_REF shapePreviewRef()
 }
 
 
+AI_OBJECT_REF circleShapePreviewRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_SHAPE_T, wxS( "preview:circle" ),
+            wxS( "{\"operation\":\"create_shape_preview\",\"shape\":\"circle\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"center\":{\"x\":400,\"y\":500},"
+                 "\"radius\":125000}" ) );
+}
+
+
 AI_OBJECT_REF zonePreviewRef( const wxString& aNet = wxS( "GND" ) )
 {
     return AI_OBJECT_REF(
@@ -275,6 +286,34 @@ BOOST_AUTO_TEST_CASE( SessionAddsShapeThroughOneCommit )
     BOOST_CHECK_EQUAL( shape->GetEnd().x, 110 );
     BOOST_CHECK_EQUAL( shape->GetEnd().y, 220 );
     BOOST_CHECK_EQUAL( shape->GetWidth(), 120000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionAddsCircleShapeThroughOneCommit )
+{
+    PCB_OPERATION_FIXTURE         fixture;
+    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
+    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+    KISURF_AI_PCB_OPERATION_EDIT_ADAPTER adapter( resolver, commit );
+    AI_EDIT_SESSION                       session( adapter );
+
+    BOOST_CHECK( session.Apply( { circleShapePreviewRef() }, AI_VALIDATION_SUMMARY() ) );
+
+    BOOST_REQUIRE_EQUAL( commit.m_Added.size(), 1 );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
+    BOOST_REQUIRE_EQUAL( fixture.m_Board.Drawings().size(), 1 );
+
+    BOARD_ITEM* drawing = fixture.m_Board.Drawings().front();
+    BOOST_REQUIRE_EQUAL( drawing->Type(), PCB_SHAPE_T );
+
+    PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( drawing );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::CIRCLE );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+    BOOST_CHECK_EQUAL( shape->GetCenter().x, 400 );
+    BOOST_CHECK_EQUAL( shape->GetCenter().y, 500 );
+    BOOST_CHECK_EQUAL( shape->GetRadius(), 125000 );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
 }
 
 

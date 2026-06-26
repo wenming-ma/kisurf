@@ -296,6 +296,45 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
     }
     else if( aItem.m_Type == wxS( "shape" ) )
     {
+        std::string shape = "segment";
+
+        if( properties.contains( "shape_type" ) && properties["shape_type"].is_string() )
+            shape = properties["shape_type"].get<std::string>();
+        else if( geometry.contains( "shape" ) && geometry["shape"].is_string() )
+            shape = geometry["shape"].get<std::string>();
+        else if( geometry.contains( "shape_type" ) && geometry["shape_type"].is_string() )
+            shape = geometry["shape_type"].get<std::string>();
+
+        const int width = properties.contains( "width" )
+                                  ? integerFieldOr( properties, "width", 100000 )
+                                  : integerFieldOr( geometry, "width", 100000 );
+
+        if( shape == "circle" )
+        {
+            std::optional<nlohmann::json> center =
+                    geometry.contains( "center" ) ? previewPoint( geometry["center"] )
+                                                  : std::nullopt;
+
+            if( !center || !geometry.contains( "radius" )
+                || !geometry["radius"].is_number_integer()
+                || geometry["radius"].get<int>() <= 0 )
+            {
+                return std::nullopt;
+            }
+
+            details = {
+                { "operation", "create_shape_preview" },
+                { "shape", shape },
+                { "layer", layerOrFallback( aItem ) },
+                { "width", width },
+                { "center", *center },
+                { "radius", geometry["radius"] }
+            };
+            type = PCB_SHAPE_T;
+            return AI_OBJECT_REF( KIID(), type, shadowItemPreviewLabel( aItem ),
+                                  fromJson( details ) );
+        }
+
         std::optional<nlohmann::json> start =
                 geometry.contains( "start" ) ? previewPoint( geometry["start"] )
                                              : std::nullopt;
@@ -306,18 +345,11 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
         if( !start || !end )
             return std::nullopt;
 
-        std::string shape = "segment";
-
-        if( geometry.contains( "shape" ) && geometry["shape"].is_string() )
-            shape = geometry["shape"].get<std::string>();
-        else if( geometry.contains( "shape_type" ) && geometry["shape_type"].is_string() )
-            shape = geometry["shape_type"].get<std::string>();
-
         details = {
             { "operation", "create_shape_preview" },
             { "shape", shape },
             { "layer", layerOrFallback( aItem ) },
-            { "width", integerFieldOr( geometry, "width", 100000 ) },
+            { "width", width },
             { "start", *start },
             { "end", *end }
         };

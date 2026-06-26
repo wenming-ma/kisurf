@@ -243,15 +243,15 @@ bool isSupportedShapeKind( const wxString& aShape )
 {
     return aShape.CmpNoCase( wxS( "segment" ) ) == 0
            || aShape.CmpNoCase( wxS( "line" ) ) == 0
-           || aShape.CmpNoCase( wxS( "rectangle" ) ) == 0;
+           || aShape.CmpNoCase( wxS( "rectangle" ) ) == 0
+           || aShape.CmpNoCase( wxS( "circle" ) ) == 0;
 }
 
 
 std::optional<AI_SUGGESTION_OPERATION> parseCreateShapePreview( const nlohmann::json& aArgs )
 {
     if( !aArgs.contains( "shape" ) || !aArgs.contains( "layer" )
-        || !aArgs.contains( "width" ) || !aArgs.contains( "start" )
-        || !aArgs.contains( "end" ) )
+        || !aArgs.contains( "width" ) )
     {
         return std::nullopt;
     }
@@ -259,15 +259,11 @@ std::optional<AI_SUGGESTION_OPERATION> parseCreateShapePreview( const nlohmann::
     wxString shape;
     wxString layerName;
     int      width = 0;
-    VECTOR2I start;
-    VECTOR2I end;
 
     if( !jsonNonEmptyStringToWxString( aArgs["shape"], shape )
         || !isSupportedShapeKind( shape )
         || !jsonNonEmptyStringToWxString( aArgs["layer"], layerName )
-        || !jsonPositiveIntegerToInt( aArgs["width"], width )
-        || !jsonPointToVector2I( aArgs["start"], start )
-        || !jsonPointToVector2I( aArgs["end"], end ) )
+        || !jsonPositiveIntegerToInt( aArgs["width"], width ) )
     {
         return std::nullopt;
     }
@@ -282,6 +278,34 @@ std::optional<AI_SUGGESTION_OPERATION> parseCreateShapePreview( const nlohmann::
     operation.m_Shape = shape;
     operation.m_LayerName = layerName;
     operation.m_Width = width;
+
+    if( shape.CmpNoCase( wxS( "circle" ) ) == 0 )
+    {
+        int      radius = 0;
+        VECTOR2I center;
+
+        if( !aArgs.contains( "center" ) || !aArgs.contains( "radius" )
+            || !jsonPointToVector2I( aArgs["center"], center )
+            || !jsonPositiveIntegerToInt( aArgs["radius"], radius ) )
+        {
+            return std::nullopt;
+        }
+
+        operation.m_Position = center;
+        operation.m_Diameter = radius;
+        return operation;
+    }
+
+    VECTOR2I start;
+    VECTOR2I end;
+
+    if( !aArgs.contains( "start" ) || !aArgs.contains( "end" )
+        || !jsonPointToVector2I( aArgs["start"], start )
+        || !jsonPointToVector2I( aArgs["end"], end ) )
+    {
+        return std::nullopt;
+    }
+
     operation.m_Start = start;
     operation.m_End = end;
     return operation;

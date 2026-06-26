@@ -773,6 +773,45 @@ BOOST_AUTO_TEST_CASE( AcceptReplayAppliesLayerSetToCreatedZone )
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptReplayCreatesCircleShape )
+{
+    BOARD board;
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "create circle shape" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"keepout-marker\",\"shape_type\":\"circle\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"geometry\":{\"center\":{\"x\":1000,\"y\":2000},"
+                 "\"radius\":350000}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK( result.m_BoardMutated );
+    BOOST_REQUIRE_EQUAL( board.Drawings().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( board.Drawings().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::CIRCLE );
+    BOOST_CHECK_EQUAL( shape->GetCenter().x, 1000 );
+    BOOST_CHECK_EQUAL( shape->GetCenter().y, 2000 );
+    BOOST_CHECK_EQUAL( shape->GetRadius(), 350000 );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+}
+
+
 BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedZoneOutline )
 {
     BOARD board;

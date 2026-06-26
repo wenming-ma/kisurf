@@ -494,6 +494,47 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardViaAndClearsBySessi
 }
 
 
+BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardCircleShape )
+{
+    PCB_PREVIEW_FIXTURE fixture;
+    KIGFX::VIEW         view;
+    KISURF_AI_PCB_SESSION_PREVIEW_SERVICE previewService( fixture.m_Board, view );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 18;
+    options.m_BoardId = wxS( "pcb-session-circle-preview" );
+    options.m_BaseHash = wxS( "hash-a" );
+    options.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    AI_EXECUTION_SESSION session( std::move( options ) );
+
+    BOOST_CHECK( session.BeginStep( wxS( "preview circle" ) ) != 0 );
+    AI_ATOMIC_EXECUTION_RESULT execution = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"circle-preview\",\"shape_type\":\"circle\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"geometry\":{\"center\":{\"x\":400,\"y\":500},"
+                 "\"radius\":125000}}" ) );
+    BOOST_REQUIRE( execution.m_Ok );
+    session.EndStep( 1 );
+
+    AI_SESSION_PREVIEW_RESULT result =
+            previewService.RenderPreview( session, wxS( "{\"mode\":\"native\"}" ) );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_RenderedItemCount, 1 );
+    BOOST_REQUIRE_EQUAL( previewService.PreviewedItems().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( previewService.PreviewedItems().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::CIRCLE );
+    BOOST_CHECK_EQUAL( shape->GetCenter().x, 400 );
+    BOOST_CHECK_EQUAL( shape->GetCenter().y, 500 );
+    BOOST_CHECK_EQUAL( shape->GetRadius(), 125000 );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+}
+
+
 BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersSeededFootprintTransform )
 {
     PCB_PREVIEW_FIXTURE fixture;

@@ -83,6 +83,9 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
     if( aShape.CmpNoCase( wxS( "rectangle" ) ) == 0 )
         return SHAPE_T::RECTANGLE;
 
+    if( aShape.CmpNoCase( wxS( "circle" ) ) == 0 )
+        return SHAPE_T::CIRCLE;
+
     return std::nullopt;
 }
 
@@ -97,8 +100,25 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const AI_SUGGESTION_OPERATION& aOperation
 
     PCB_SHAPE* shape = new PCB_SHAPE( &aBoard, *shapeType );
     shape->SetLayer( *layer );
-    shape->SetStart( aOperation.m_Start );
-    shape->SetEnd( aOperation.m_End );
+
+    if( *shapeType == SHAPE_T::CIRCLE )
+    {
+        if( aOperation.m_Diameter <= 0 )
+        {
+            delete shape;
+            return nullptr;
+        }
+
+        shape->SetStart( aOperation.m_Position );
+        shape->SetEnd( VECTOR2I( aOperation.m_Position.x + aOperation.m_Diameter,
+                                 aOperation.m_Position.y ) );
+    }
+    else
+    {
+        shape->SetStart( aOperation.m_Start );
+        shape->SetEnd( aOperation.m_End );
+    }
+
     shape->SetWidth( aOperation.m_Width );
     return shape;
 }

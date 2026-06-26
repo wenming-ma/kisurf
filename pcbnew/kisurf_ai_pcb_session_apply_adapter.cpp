@@ -313,6 +313,9 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
         return SHAPE_T::RECTANGLE;
     }
 
+    if( aShape.CmpNoCase( wxS( "circle" ) ) == 0 )
+        return SHAPE_T::CIRCLE;
+
     return std::nullopt;
 }
 
@@ -359,17 +362,43 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
             geometry.contains( "start" ) ? pointFromJson( geometry["start"] ) : std::nullopt;
     std::optional<VECTOR2I> end =
             geometry.contains( "end" ) ? pointFromJson( geometry["end"] ) : std::nullopt;
+    std::optional<VECTOR2I> center =
+            geometry.contains( "center" ) ? pointFromJson( geometry["center"] ) : std::nullopt;
+    std::optional<int> radius = intField( geometry, "radius" );
 
-    if( !shapeType || !layer || !start || !end )
+    if( !shapeType || !layer )
     {
-        aError = wxS( "CreateShape requires shape_type, layer, start, and end." );
+        aError = wxS( "CreateShape requires shape_type and layer." );
+        return nullptr;
+    }
+
+    if( *shapeType == SHAPE_T::CIRCLE )
+    {
+        if( !center || !radius || *radius <= 0 )
+        {
+            aError = wxS( "CreateShape circle requires center and positive radius." );
+            return nullptr;
+        }
+    }
+    else if( !start || !end )
+    {
+        aError = wxS( "CreateShape requires start and end for this shape type." );
         return nullptr;
     }
 
     PCB_SHAPE* shape = new PCB_SHAPE( &aBoard, *shapeType );
     shape->SetLayer( *layer );
-    shape->SetStart( *start );
-    shape->SetEnd( *end );
+
+    if( *shapeType == SHAPE_T::CIRCLE )
+    {
+        shape->SetStart( *center );
+        shape->SetEnd( VECTOR2I( center->x + *radius, center->y ) );
+    }
+    else
+    {
+        shape->SetStart( *start );
+        shape->SetEnd( *end );
+    }
 
     if( std::optional<int> width = intField( aArgs, "width" ) )
         shape->SetWidth( *width );
