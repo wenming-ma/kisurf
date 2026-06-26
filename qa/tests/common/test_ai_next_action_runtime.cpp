@@ -5737,6 +5737,32 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  != localObstacleLabels.end() );
     BOOST_CHECK( localObstacleLabels.find( "via:300,50" )
                  == localObstacleLabels.end() );
+    BOOST_REQUIRE( placementPacket.contains( "local_obstacle_summary" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["source"].get<std::string>(),
+            "local_obstacle_facts" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["locality_source"].get<std::string>(),
+            "cursor_region" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["obstacle_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["nearest_obstacle_distance"]
+                    .get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["distance_metric"]
+                    .get<std::string>(),
+            "manhattan_bbox_gap" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["kind_counts"]
+                    ["via_obstacle"].dump(),
+            "1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["local_obstacle_summary"]["kind_counts"]
+                    ["footprint_obstacle"].dump(),
+            "1" );
 
     auto* routingProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","
@@ -6399,6 +6425,25 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  != routingLocalObstacleLabels.end() );
     BOOST_CHECK( routingLocalObstacleLabels.find( "track:1000,1000->1200,1000" )
                  == routingLocalObstacleLabels.end() );
+    BOOST_REQUIRE( routingPacket.contains( "local_obstacle_summary" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["local_obstacle_summary"]["locality_source"].get<std::string>(),
+            "cursor_region" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["local_obstacle_summary"]["obstacle_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["local_obstacle_summary"]["nearest_obstacle_distance"]
+                    .get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["local_obstacle_summary"]["kind_counts"]
+                    ["routing_track_obstacle"].dump(),
+            "1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["local_obstacle_summary"]["kind_counts"]
+                    ["pad_obstacle"].dump(),
+            "1" );
 
     auto* autofillProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
             { wxS( "{\"decision_kind\":\"wait\","

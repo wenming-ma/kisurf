@@ -5088,6 +5088,83 @@ bool bboxIntersectsRegion( const nlohmann::json& aBbox,
 }
 
 
+int intervalGap( int aStartA, int aEndA, int aStartB, int aEndB )
+{
+    if( aEndA < aStartB )
+        return aStartB - aEndA;
+
+    if( aEndB < aStartA )
+        return aStartA - aEndB;
+
+    return 0;
+}
+
+
+std::optional<int> pointDistanceToRegion( const nlohmann::json& aPoint,
+                                          const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+
+    if( !jsonNumberAsInt( aPoint, "x", x )
+        || !jsonNumberAsInt( aPoint, "y", y ) )
+    {
+        return std::nullopt;
+    }
+
+    const int gapX = intervalGap( x, x, aRegion.m_Left,
+                                  aRegion.m_Left + aRegion.m_Width );
+    const int gapY = intervalGap( y, y, aRegion.m_Top,
+                                  aRegion.m_Top + aRegion.m_Height );
+
+    return gapX + gapY;
+}
+
+
+std::optional<int> bboxDistanceToRegion( const nlohmann::json& aBbox,
+                                         const LOCALITY_REGION& aRegion )
+{
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+
+    if( !jsonNumberAsInt( aBbox, "x", x )
+        || !jsonNumberAsInt( aBbox, "y", y )
+        || !jsonNumberAsInt( aBbox, "width", width )
+        || !jsonNumberAsInt( aBbox, "height", height ) )
+    {
+        return std::nullopt;
+    }
+
+    const int gapX = intervalGap( x, x + width, aRegion.m_Left,
+                                  aRegion.m_Left + aRegion.m_Width );
+    const int gapY = intervalGap( y, y + height, aRegion.m_Top,
+                                  aRegion.m_Top + aRegion.m_Height );
+
+    return gapX + gapY;
+}
+
+
+std::optional<int> factDistanceToRegion( const nlohmann::json& aFact,
+                                         const LOCALITY_REGION& aRegion )
+{
+    if( aFact.contains( "bbox" ) && aFact["bbox"].is_object() )
+    {
+        if( std::optional<int> distance =
+                    bboxDistanceToRegion( aFact["bbox"], aRegion ) )
+        {
+            return distance;
+        }
+    }
+
+    if( aFact.contains( "position" ) && aFact["position"].is_object() )
+        return pointDistanceToRegion( aFact["position"], aRegion );
+
+    return std::nullopt;
+}
+
+
 bool factIntersectsRegion( const nlohmann::json& aFact,
                            const LOCALITY_REGION& aRegion )
 {
@@ -5123,6 +5200,74 @@ nlohmann::json localObstacleFactsJson( const std::vector<AI_OBJECT_REF>& aObject
     }
 
     return facts;
+}
+
+
+nlohmann::json localObstacleSummaryJson( const nlohmann::json& aFacts,
+                                         const LOCALITY_REGION& aRegion )
+{
+    nlohmann::json summary =
+            { { "source", "local_obstacle_facts" },
+              { "obstacle_count", static_cast<int>( aFacts.size() ) },
+              { "distance_metric", "manhattan_bbox_gap" },
+              { "kind_counts", nlohmann::json::object() },
+              { "labels_sample", nlohmann::json::array() },
+              { "labels_sample_truncated", false } };
+
+    if( aRegion.m_Record.contains( "source" )
+        && aRegion.m_Record["source"].is_string() )
+    {
+        summary["locality_source"] = aRegion.m_Record["source"];
+    }
+
+    bool hasDistance = false;
+    int  nearestDistance = 0;
+    size_t labelCount = 0;
+
+    for( const nlohmann::json& fact : aFacts )
+    {
+        const std::string kind = fact.value( "kind", "unknown" );
+        int currentKindCount = 0;
+
+        if( summary["kind_counts"].contains( kind )
+            && summary["kind_counts"][kind].is_number_integer() )
+        {
+            currentKindCount =
+                    static_cast<int>(
+                            summary["kind_counts"][kind]
+                                    .get<nlohmann::json::number_integer_t>() );
+        }
+
+        summary["kind_counts"][kind] =
+                static_cast<nlohmann::json::number_integer_t>(
+                        currentKindCount + 1 );
+
+        if( fact.contains( "label" ) && fact["label"].is_string() )
+        {
+            ++labelCount;
+
+            if( summary["labels_sample"].size() < 8 )
+                summary["labels_sample"].push_back( fact["label"] );
+        }
+
+        if( std::optional<int> distance = factDistanceToRegion( fact, aRegion ) )
+        {
+            if( !hasDistance || *distance < nearestDistance )
+                nearestDistance = *distance;
+
+            hasDistance = true;
+        }
+    }
+
+    if( labelCount > summary["labels_sample"].size() )
+        summary["labels_sample_truncated"] = true;
+
+    if( hasDistance )
+        summary["nearest_obstacle_distance"] = nearestDistance;
+    else
+        summary["nearest_obstacle_distance"] = nullptr;
+
+    return summary;
 }
 
 
@@ -6002,9 +6147,13 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
     if( std::optional<LOCALITY_REGION> locality =
                 localityRegionForToolState( context.m_ToolState ) )
     {
-        packet["locality_region"] = locality->m_Record;
-        packet["local_obstacle_facts"] =
+        nlohmann::json localObstacles =
                 localObstacleFactsJson( context.m_VisibleObjects, *locality );
+
+        packet["locality_region"] = locality->m_Record;
+        packet["local_obstacle_facts"] = localObstacles;
+        packet["local_obstacle_summary"] =
+                localObstacleSummaryJson( localObstacles, *locality );
     }
 
     if( packetKind == "routing" )
