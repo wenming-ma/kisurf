@@ -6216,6 +6216,24 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK(
             routingPacket["routing_corridor_facts"].at( 0 )["cursor_is_sorting_hint"]
                     .get<bool>() );
+    BOOST_REQUIRE(
+            routingPacket["routing_corridor_facts"].at( 0 )
+                    .contains( "interaction_semantics" ) );
+    const nlohmann::json& corridorInteraction =
+            routingPacket["routing_corridor_facts"].at( 0 )
+                    ["interaction_semantics"];
+    BOOST_CHECK_EQUAL( corridorInteraction["mode"].get<std::string>(),
+                       "active_interactive_routing" );
+    BOOST_CHECK_EQUAL( corridorInteraction["planning_target"].get<std::string>(),
+                       "next_landing_from_current_route_head" );
+    BOOST_CHECK_EQUAL( corridorInteraction["route_head_source"].get<std::string>(),
+                       "mode_context.start" );
+    BOOST_CHECK_EQUAL( corridorInteraction["landing_anchor_source"].get<std::string>(),
+                       "route_anchor" );
+    BOOST_CHECK( corridorInteraction["cursor_is_sorting_hint"].get<bool>() );
+    BOOST_CHECK( corridorInteraction["manual_click_to_materialize"].get<bool>() );
+    BOOST_CHECK( corridorInteraction["manual_click_supersedes_attempt"].get<bool>() );
+    BOOST_CHECK( corridorInteraction["preview_must_be_rebased_after_click"].get<bool>() );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_corridor_facts"].at( 0 )["cursor"]["x"].get<int>(),
             260 );
