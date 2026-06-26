@@ -158,6 +158,23 @@ const nlohmann::json* findPairConstraintByLabels( const nlohmann::json& aConstra
 }
 
 
+const nlohmann::json* findGeometryRuleCoverage( const nlohmann::json& aCoverage,
+                                                const std::string& aRule,
+                                                const std::string& aGeometry )
+{
+    for( const nlohmann::json& coverage : aCoverage )
+    {
+        if( coverage["rule"].get<std::string>().find( aRule ) != std::string::npos
+            && coverage["geometry"].get<std::string>() == aGeometry )
+        {
+            return &coverage;
+        }
+    }
+
+    return nullptr;
+}
+
+
 const nlohmann::json* findComponentContainingLabel( const nlohmann::json& aComponents,
                                                     const std::string& aLabel )
 {
@@ -1421,6 +1438,24 @@ BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
                        true );
     BOOST_CHECK( ( *pairConstraint )["source_item"].contains( "bbox" ) );
     BOOST_CHECK( ( *pairConstraint )["target_item"].contains( "bbox" ) );
+
+    BOOST_CHECK_EQUAL( effective["geometry_specific_rule_coverage_truncated"].get<bool>(),
+                       false );
+    BOOST_REQUIRE_GE( effective["geometry_specific_rule_coverage"].size(), 1u );
+
+    const nlohmann::json* coverage =
+            findGeometryRuleCoverage( effective["geometry_specific_rule_coverage"],
+                                      "AI Area Clearance", "track_to_track" );
+
+    BOOST_REQUIRE( coverage );
+    BOOST_CHECK_EQUAL( ( *coverage )["constraint_type"].get<std::string>(), "clearance" );
+    BOOST_CHECK_EQUAL( ( *coverage )["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( ( *coverage )["covered"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *coverage )["source"].get<std::string>(),
+                       "DRC_ENGINE::EvalRules" );
+    BOOST_CHECK_EQUAL( ( *coverage )["value"]["min"].get<int>(), 777000 );
+    BOOST_CHECK( ( *coverage )["source_item"].contains( "bbox" ) );
+    BOOST_CHECK( ( *coverage )["target_item"].contains( "bbox" ) );
 }
 
 

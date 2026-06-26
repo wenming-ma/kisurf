@@ -1993,6 +1993,34 @@ wxString pairEffectiveConstraintJson( const BOARD& aBoard, const BOARD_CONNECTED
 }
 
 
+wxString geometryPairToken( const BOARD_CONNECTED_ITEM& aItemA,
+                            const BOARD_CONNECTED_ITEM& aItemB )
+{
+    return connectedItemKindToken( aItemA ) + wxS( "_to_" ) + connectedItemKindToken( aItemB );
+}
+
+
+wxString geometrySpecificRuleCoverageJson( const BOARD& aBoard,
+                                           const BOARD_CONNECTED_ITEM& aItemA,
+                                           const BOARD_CONNECTED_ITEM& aItemB,
+                                           PCB_LAYER_ID aLayer,
+                                           DRC_CONSTRAINT_T aType,
+                                           const DRC_CONSTRAINT& aConstraint )
+{
+    return wxString::Format(
+            wxS( "{\"rule\":%s,\"constraint_type\":%s,\"enum\":%d,"
+                 "\"geometry\":%s,\"layer\":%s,\"covered\":true,"
+                 "\"source\":\"DRC_ENGINE::EvalRules\","
+                 "\"source_item\":%s,\"target_item\":%s,\"value\":%s}" ),
+            quotedJson( aConstraint.GetName() ),
+            quotedJson( drcConstraintTypeToken( aType ) ), static_cast<int>( aType ),
+            quotedJson( geometryPairToken( aItemA, aItemB ) ),
+            quotedJson( aBoard.GetLayerName( aLayer ) ),
+            pairConstraintItemJson( aItemA ), pairConstraintItemJson( aItemB ),
+            minOptMaxJson( aConstraint.GetValue() ) );
+}
+
+
 void appendPairConstraintItem( std::vector<const BOARD_CONNECTED_ITEM*>& aItems,
                                const BOARD_CONNECTED_ITEM* aItem )
 {
@@ -2081,14 +2109,69 @@ std::vector<wxString> makePairEffectiveConstraintEntries( const BOARD& aBoard,
 }
 
 
+std::vector<wxString> makeGeometrySpecificRuleCoverageEntries( const BOARD& aBoard,
+                                                               DRC_ENGINE& aEngine,
+                                                               bool& aTruncated )
+{
+    constexpr size_t      maxCoverageSample = 32;
+    std::vector<wxString> entries;
+
+    if( !aEngine.HasGeometryDependentRules() )
+        return entries;
+
+    std::vector<const BOARD_CONNECTED_ITEM*> items = collectPairConstraintItems( aBoard );
+
+    for( size_t i = 0; i < items.size(); ++i )
+    {
+        for( size_t j = i + 1; j < items.size(); ++j )
+        {
+            const BOARD_CONNECTED_ITEM* itemA = items[i];
+            const BOARD_CONNECTED_ITEM* itemB = items[j];
+
+            if( !itemA || !itemB || itemA->GetNetCode() == itemB->GetNetCode() )
+                continue;
+
+            PCB_LAYER_ID layer = UNDEFINED_LAYER;
+
+            if( !firstCommonCopperLayer( aBoard, *itemA, *itemB, layer ) )
+                continue;
+
+            DRC_CONSTRAINT constraint =
+                    aEngine.EvalRules( CLEARANCE_CONSTRAINT, itemA, itemB, layer );
+
+            if( constraint.IsNull() || constraint.GetName().IsEmpty()
+                || !constraint.GetValue().HasMin() )
+            {
+                continue;
+            }
+
+            if( entries.size() >= maxCoverageSample )
+            {
+                aTruncated = true;
+                return entries;
+            }
+
+            entries.push_back( geometrySpecificRuleCoverageJson( aBoard, *itemA, *itemB,
+                                                                  layer,
+                                                                  CLEARANCE_CONSTRAINT,
+                                                                  constraint ) );
+        }
+    }
+
+    return entries;
+}
+
+
 wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
 {
     const BOARD_DESIGN_SETTINGS& aSettings = aBoard.GetDesignSettings();
     constexpr size_t      maxWorstConstraintSample = 32;
     std::vector<wxString> worstConstraintEntries;
     std::vector<wxString> pairConstraintEntries;
+    std::vector<wxString> geometryCoverageEntries;
     bool                  worstConstraintSampleTruncated = false;
     bool                  pairConstraintSampleTruncated = false;
+    bool                  geometryCoverageTruncated = false;
 
     if( !aSettings.m_DRCEngine )
     {
@@ -2097,7 +2180,9 @@ wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
                     "\"worst_constraints\":[],"
                     "\"worst_constraint_sample_truncated\":false,"
                     "\"pair_effective_constraints\":[],"
-                    "\"pair_effective_constraint_sample_truncated\":false}" );
+                    "\"pair_effective_constraint_sample_truncated\":false,"
+                    "\"geometry_specific_rule_coverage\":[],"
+                    "\"geometry_specific_rule_coverage_truncated\":false}" );
     }
 
     static const DRC_CONSTRAINT_T queryTypes[] = {
@@ -2133,6 +2218,9 @@ wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
     pairConstraintEntries =
             makePairEffectiveConstraintEntries( aBoard, *aSettings.m_DRCEngine,
                                                 pairConstraintSampleTruncated );
+    geometryCoverageEntries =
+            makeGeometrySpecificRuleCoverageEntries( aBoard, *aSettings.m_DRCEngine,
+                                                     geometryCoverageTruncated );
 
     return wxString::Format(
             wxS( "{\"drc_engine_present\":true,\"rules_valid\":%s,"
@@ -2140,13 +2228,17 @@ wxString makeEffectiveConstraintFactsJson( const BOARD& aBoard )
                  "\"worst_constraints\":%s,"
                  "\"worst_constraint_sample_truncated\":%s,"
                  "\"pair_effective_constraints\":%s,"
-                 "\"pair_effective_constraint_sample_truncated\":%s}" ),
+                 "\"pair_effective_constraint_sample_truncated\":%s,"
+                 "\"geometry_specific_rule_coverage\":%s,"
+                 "\"geometry_specific_rule_coverage_truncated\":%s}" ),
             boolJson( aSettings.m_DRCEngine->RulesValid() ),
             boolJson( aSettings.m_DRCEngine->HasGeometryDependentRules() ),
             jsonArray( worstConstraintEntries ),
             boolJson( worstConstraintSampleTruncated ),
             jsonArray( pairConstraintEntries ),
-            boolJson( pairConstraintSampleTruncated ) );
+            boolJson( pairConstraintSampleTruncated ),
+            jsonArray( geometryCoverageEntries ),
+            boolJson( geometryCoverageTruncated ) );
 }
 
 
