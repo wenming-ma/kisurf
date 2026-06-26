@@ -225,6 +225,8 @@ Currently implemented:
 - Successful Python mutation cells automatically produce step feedback through
   editor-native validation and preview services when the script did not request
   them explicitly, so iterative Agent work is visible before Accept.
+- Python worker cells stream structured SDK events while they are running, and
+  those events are recorded in the Agent activity timeline for inspection.
 - Python SDK composite helpers such as via rings and annular zones lower into
   typed atomic operations instead of model-facing bespoke PCB tools.
 - Model-facing tools for actions, context snapshots, workspace view, visual
@@ -283,9 +285,9 @@ Still in progress:
 - Production-level autonomous placement/routing workflows.
 - Model settings UI edge-case polish and production credential-store fallback
   handling.
-- Dedicated Python worker event streaming during a running cell and final
-  native DRC over reconstructed shadow-board state. Stale-session rebase is
-  intentionally out of the current phase; stale accept is rejected by base hash.
+- Final native DRC over reconstructed shadow-board state. Stale-session rebase
+  is intentionally out of the current phase; stale accept is rejected by base
+  hash.
 
 ## Quickstart: Agent Preview
 
