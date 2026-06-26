@@ -8636,6 +8636,88 @@ bool containsObjectFieldRecursive( const nlohmann::json& aValue,
 }
 
 
+void incrementJsonCounter( nlohmann::json& aCounts, const std::string& aKey,
+                           size_t aIncrement = 1 )
+{
+    if( aKey.empty() )
+        return;
+
+    if( !aCounts.is_object() )
+        aCounts = nlohmann::json::object();
+
+    size_t count = 0;
+
+    if( aCounts.contains( aKey ) )
+    {
+        const nlohmann::json& value = aCounts[aKey];
+
+        if( value.is_number_unsigned() )
+            count = value.get<size_t>();
+        else if( value.is_number_integer() && value.get<int64_t>() >= 0 )
+            count = static_cast<size_t>( value.get<int64_t>() );
+    }
+
+    aCounts[aKey] = count + aIncrement;
+}
+
+
+void mergeJsonCounters( nlohmann::json& aTarget, const nlohmann::json& aSource )
+{
+    if( !aSource.is_object() )
+        return;
+
+    for( auto it = aSource.begin(); it != aSource.end(); ++it )
+    {
+        if( it.value().is_number_unsigned() )
+        {
+            incrementJsonCounter( aTarget, it.key(), it.value().get<size_t>() );
+        }
+        else if( it.value().is_number_integer() && it.value().get<int64_t>() >= 0 )
+        {
+            incrementJsonCounter( aTarget, it.key(),
+                                  static_cast<size_t>(
+                                          it.value().get<int64_t>() ) );
+        }
+    }
+}
+
+
+wxString replayTraceWorkState( const nlohmann::json& aTrace )
+{
+    if( aTrace.contains( "observation_packet" )
+        && aTrace["observation_packet"].is_object()
+        && aTrace["observation_packet"].contains( "structured_facts" )
+        && aTrace["observation_packet"]["structured_facts"].is_object() )
+    {
+        const nlohmann::json& facts =
+                aTrace["observation_packet"]["structured_facts"];
+
+        if( facts.contains( "work_state_packet" )
+            && facts["work_state_packet"].is_object()
+            && facts["work_state_packet"].contains( "kind" )
+            && facts["work_state_packet"]["kind"].is_string() )
+        {
+            return fromUtf8String(
+                    facts["work_state_packet"]["kind"].get<std::string>() );
+        }
+
+        if( facts.contains( "work_state" ) && facts["work_state"].is_string() )
+            return fromUtf8String( facts["work_state"].get<std::string>() );
+    }
+
+    if( aTrace.contains( "llm_decision" )
+        && aTrace["llm_decision"].is_object()
+        && aTrace["llm_decision"].contains( "opportunity_type" )
+        && aTrace["llm_decision"]["opportunity_type"].is_string() )
+    {
+        return fromUtf8String(
+                aTrace["llm_decision"]["opportunity_type"].get<std::string>() );
+    }
+
+    return wxEmptyString;
+}
+
+
 AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 {
@@ -9099,6 +9181,9 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                 if( !aMessage.IsEmpty() )
                     summary["message"] = toUtf8String( aMessage );
 
+                if( !result.m_WorkState.IsEmpty() )
+                    summary["work_state"] = toUtf8String( result.m_WorkState );
+
                 if( aTraceEval )
                 {
                     summary["trace_terminal_state"] =
@@ -9179,6 +9264,8 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
         return finish( false, false, wxS( "missing_expected" ),
                        wxS( "Golden record expected object is required." ), nullptr );
     }
+
+    result.m_WorkState = replayTraceWorkState( golden["replay_trace"] );
 
     AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT traceEval =
             AiEvaluateNextActionReplayTraceJson(
@@ -9263,6 +9350,7 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
 {
     AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result;
     result.m_TotalRecordCount = aGoldenRecordJsons.size();
+    nlohmann::json workStateCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenRecordJsons.size(); ++i )
     {
@@ -9284,6 +9372,10 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
         }
 
         ++result.m_ValidRecordCount;
+
+        if( !record.m_WorkState.IsEmpty() )
+            incrementJsonCounter( workStateCounts,
+                                  toUtf8String( record.m_WorkState ) );
 
         if( record.m_Passed )
         {
@@ -9311,7 +9403,8 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
               { "valid_record_count", result.m_ValidRecordCount },
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
-              { "failed_record_count", result.m_FailedRecordCount } };
+              { "failed_record_count", result.m_FailedRecordCount },
+              { "work_state_counts", workStateCounts } };
 
     if( !result.m_FirstErrorCode.IsEmpty() )
     {
@@ -9322,6 +9415,7 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
                 toUtf8String( result.m_FirstFailedRecordId );
     }
 
+    result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }
@@ -9494,6 +9588,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
     result.m_TotalDatasetCount = aGoldenDatasetPaths.size();
 
     nlohmann::json datasetSummaries = nlohmann::json::array();
+    nlohmann::json workStateCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenDatasetPaths.size(); ++i )
     {
@@ -9532,6 +9627,20 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
         if( datasetSummary.is_discarded() || !datasetSummary.is_object() )
             datasetSummary = nlohmann::json::object();
 
+        nlohmann::json datasetWorkStateCounts =
+                nlohmann::json::parse( toUtf8String( dataset.m_WorkStateCountsJson ),
+                                       nullptr, false );
+
+        if( ( datasetWorkStateCounts.is_discarded()
+              || !datasetWorkStateCounts.is_object() )
+            && datasetSummary.contains( "work_state_counts" )
+            && datasetSummary["work_state_counts"].is_object() )
+        {
+            datasetWorkStateCounts = datasetSummary["work_state_counts"];
+        }
+
+        mergeJsonCounters( workStateCounts, datasetWorkStateCounts );
+
         datasetSummary["dataset_path"] = toUtf8String( datasetPath );
         datasetSummaries.push_back( datasetSummary );
     }
@@ -9564,6 +9673,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
               { "failed_record_count", result.m_FailedRecordCount },
               { "dataset_pass_rate", result.m_DatasetPassRate },
               { "record_pass_rate", result.m_RecordPassRate },
+              { "work_state_counts", workStateCounts },
               { "datasets", datasetSummaries } };
 
     if( !result.m_FirstErrorCode.IsEmpty() )
@@ -9575,6 +9685,7 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
                 toUtf8String( result.m_FirstFailedDatasetPath );
     }
 
+    result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }

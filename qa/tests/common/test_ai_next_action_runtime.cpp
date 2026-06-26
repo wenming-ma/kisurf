@@ -7311,6 +7311,12 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 3 );
     BOOST_CHECK_EQUAL( evaluation.m_DatasetPassRate, 1.0 );
     BOOST_CHECK_EQUAL( evaluation.m_RecordPassRate, 1.0 );
+    BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
+            wxS( "\"placement\":1" ) ) );
+    BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
+            wxS( "\"routing\":1" ) ) );
+    BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
+            wxS( "\"structured_surface\":1" ) ) );
 
     nlohmann::json summary =
             nlohmann::json::parse( evaluation.m_SummaryJson.ToStdString() );
@@ -7318,6 +7324,9 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_REQUIRE( summary.is_object() );
     BOOST_CHECK_EQUAL( summary["dataset_pass_rate"].get<double>(), 1.0 );
     BOOST_CHECK_EQUAL( summary["record_pass_rate"].get<double>(), 1.0 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
             wxS( "\"total_dataset_count\":3" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
