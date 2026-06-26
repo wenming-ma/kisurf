@@ -1,0 +1,134 @@
+{
+  "schema": {
+    "name": "kisurf.next_action.golden_dataset",
+    "version": 1
+  },
+  "id": "next-action-validation-issue-inner-loop-smoke",
+  "records": [
+    {
+      "schema": {
+        "name": "kisurf.next_action.golden_trace",
+        "version": 1
+      },
+      "id": "placement-validation-issue-inner-loop-smoke",
+      "replay_trace": {
+        "schema": {
+          "name": "kisurf.next_action.replay_trace",
+          "version": 1
+        },
+        "runtime": "next_action",
+        "runtime_step_id": 5,
+        "terminal_state": "published",
+        "semantic_event": {
+          "slot_id": "placement/current-via",
+          "kind": "tool_state_changed"
+        },
+        "observation_packet": {
+          "structured_facts": {
+            "work_state_packet": {
+              "kind": "placement",
+              "interaction_semantics": {
+                "planning_target": {
+                  "kind": "place_current_item"
+                },
+                "materialization": "manual_click_or_accept"
+              }
+            }
+          }
+        },
+        "llm_decision": {
+          "decision_kind": "attempt",
+          "opportunity_type": "placement",
+          "reason_code": "likely_helpful"
+        },
+        "tool_results": {
+          "decision": [
+            {
+              "tool_name": "placement_generate_via_pattern_candidates",
+              "result": {
+                "candidate_count": 1
+              }
+            }
+          ],
+          "review": [
+            {
+              "tool_name": "preview_gate_feedback",
+              "result": {
+                "preview_gate_result": {
+                  "allowed": true,
+                  "reasons": [
+                    "render_validation_fresh"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "llm_review_decision": {
+          "decision_kind": "publish",
+          "reason_code": "review_passed"
+        },
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "hidden_attempt_journal": {
+              "operations": [
+                {
+                  "kind": "pcb.create_via",
+                  "alias": "VIA1"
+                }
+              ]
+            },
+            "render_outputs": {
+              "visual_frame_id": "frame-placement-validation-issue-1"
+            },
+            "validation_facts": {
+              "accept_validation_sufficient": true,
+              "preview_state_exact": true,
+              "issues": [
+                {
+                  "kind": "clearance",
+                  "severity": "warning",
+                  "blocking": false
+                },
+                {
+                  "kind": "courtyard_overlap",
+                  "severity": "error",
+                  "blocking": false
+                }
+              ]
+            }
+          }
+        ],
+        "publish_decision": {
+          "preview_gate_result": {
+            "allowed": true,
+            "reasons": []
+          }
+        },
+        "published_suggestion_id": 1
+      },
+      "expected": {
+        "terminal_state": "published",
+        "published": true,
+        "work_state": "placement",
+        "min_hidden_operation_count": 1,
+        "min_decision_tool_result_count": 1,
+        "min_review_tool_result_count": 1,
+        "min_preview_gate_feedback_count": 1,
+        "min_preview_gate_feedback_reason_counts": {
+          "render_validation_fresh": 1
+        },
+        "min_validation_issue_count": 2,
+        "min_validation_issue_kind_counts": {
+          "clearance": 1,
+          "courtyard_overlap": 1
+        },
+        "min_validation_issue_severity_counts": {
+          "warning": 1,
+          "error": 1
+        }
+      }
+    }
+  ]
+}
