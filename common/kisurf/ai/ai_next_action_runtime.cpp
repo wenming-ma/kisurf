@@ -3890,6 +3890,7 @@ nlohmann::json routingReachabilityFactsJson(
                             && aActiveNetSummary["name"].is_string()
                     ? aActiveNetSummary["name"].get<std::string>()
                     : std::string();
+    std::vector<nlohmann::json> rankedFacts;
 
     for( const nlohmann::json& edge :
          aActiveNetSummary["component_graph_edges"] )
@@ -3934,10 +3935,57 @@ nlohmann::json routingReachabilityFactsJson(
             }
         }
 
-        facts.push_back( std::move( fact ) );
+        rankedFacts.push_back( std::move( fact ) );
 
-        if( facts.size() >= 16 )
+        if( rankedFacts.size() >= 16 )
             break;
+    }
+
+    auto factVisible =
+            []( const nlohmann::json& aFact ) -> bool
+            {
+                return aFact.contains( "visible" ) && aFact["visible"].is_boolean()
+                       && aFact["visible"].get<bool>();
+            };
+
+    auto estimatedLength =
+            []( const nlohmann::json& aFact ) -> int
+            {
+                if( !aFact.contains( "estimated_manhattan_length" )
+                    || !aFact["estimated_manhattan_length"].is_number() )
+                {
+                    return 2147483647;
+                }
+
+                return aFact["estimated_manhattan_length"].get<int>();
+            };
+
+    std::stable_sort( rankedFacts.begin(), rankedFacts.end(),
+                      [&]( const nlohmann::json& aLeft,
+                           const nlohmann::json& aRight )
+                      {
+                          const bool leftVisible = factVisible( aLeft );
+                          const bool rightVisible = factVisible( aRight );
+
+                          if( leftVisible != rightVisible )
+                              return leftVisible;
+
+                          return estimatedLength( aLeft ) < estimatedLength( aRight );
+                      } );
+
+    for( size_t ii = 0; ii < rankedFacts.size(); ++ii )
+    {
+        nlohmann::json fact = std::move( rankedFacts[ii] );
+        fact["priority_rank"] = static_cast<int>( ii + 1 );
+
+        if( factVisible( fact ) )
+            fact["priority_reason"] = "visible_remaining_connection";
+        else if( estimatedLength( fact ) != 2147483647 )
+            fact["priority_reason"] = "shorter_estimated_connection";
+        else
+            fact["priority_reason"] = "component_graph_order";
+
+        facts.push_back( std::move( fact ) );
     }
 
     return facts;
