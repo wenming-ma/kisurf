@@ -2518,6 +2518,84 @@ public:
 };
 
 
+class RENDER_GATE_REPAIR_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "render gate repair next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"reason_code\":\"render_gate_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            bool hasGateFeedback = false;
+            bool hasRender = false;
+
+            for( const AI_TOOL_CALL_RECORD& result : aRequest.m_ToolResults )
+            {
+                if( result.m_ToolName == wxS( "preview_gate_feedback" )
+                    && result.m_ResultJson.Contains(
+                               wxS( "render_gate_failed" ) ) )
+                {
+                    hasGateFeedback = true;
+                }
+
+                if( result.m_ToolName == wxS( "render_hidden_attempt" ) )
+                    hasRender = true;
+            }
+
+            if( hasGateFeedback && !hasRender )
+            {
+                response.m_Body =
+                        wxS( "Gate feedback requires render repair evidence." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_after_render_gate" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( hasRender )
+            {
+                response.m_Body = publishReview();
+                return response;
+            }
+
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"publish\","
+                         "\"reason_code\":\"render_gate_is_repairable\","
+                         "\"repairable_gate_failures\":[\"render_gate_failed\"],"
+                         "\"review_basis\":{\"render_valid\":true,"
+                         "\"validation_passed\":true,"
+                         "\"budget_within_limits\":true,"
+                         "\"self_review_passed\":true}}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 bool previewGateFeedbackHasReason( const wxString& aFeedbackJson,
                                    const std::string& aReason )
 {
@@ -2990,6 +3068,40 @@ public:
 
     int                      m_RenderCount = 0;
     std::vector<std::string> m_RenderArgs;
+};
+
+
+class FIRST_FAILING_THEN_PASSING_SESSION_PREVIEW_SERVICE :
+        public AI_SESSION_PREVIEW_SERVICE
+{
+public:
+    AI_SESSION_PREVIEW_RESULT RenderPreview(
+            const AI_EXECUTION_SESSION& aSession,
+            const wxString& aRenderArgs ) override
+    {
+        wxUnusedVar( aSession );
+        wxUnusedVar( aRenderArgs );
+        ++m_RenderCount;
+
+        AI_SESSION_PREVIEW_RESULT result;
+        result.m_Ok = m_RenderCount > 1;
+        result.m_PreviewId = 1200 + m_RenderCount;
+        result.m_RenderedItemCount = result.m_Ok ? 1 : 0;
+        result.m_ResultJson =
+                result.m_Ok
+                        ? wxS( "{\"status\":\"preview_rendered\","
+                               "\"render_valid\":true,"
+                               "\"native_preview\":true}" )
+                        : wxS( "{\"status\":\"render_failed\","
+                               "\"render_valid\":false,"
+                               "\"native_preview\":true,"
+                               "\"message\":\"temporary render failure\"}" );
+        return result;
+    }
+
+    void ClearPreview( uint64_t ) override {}
+
+    int m_RenderCount = 0;
 };
 
 
@@ -7955,6 +8067,47 @@ BOOST_AUTO_TEST_CASE( RuntimeFeedsRepairableValidationGateFailureBackIntoReviewL
     BOOST_CHECK_EQUAL(
             publishRequest.m_ToolResults.at( 1 ).m_ToolCallId,
             wxString( wxS( "call_validate_after_validation_gate" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+    BOOST_CHECK_EQUAL( runtime.Suggestions().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeFeedsRepairableRenderGateFailureBackIntoReviewLoop )
+{
+    auto* provider = new RENDER_GATE_REPAIR_NEXT_ACTION_PROVIDER();
+
+    PASSING_SESSION_VALIDATION_SERVICE                 validationService;
+    FIRST_FAILING_THEN_PASSING_SESSION_PREVIEW_SERVICE previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+    BOOST_CHECK_EQUAL( previewService.m_RenderCount, 2 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 0 ).m_ToolName,
+                       wxString( wxS( "preview_gate_feedback" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.at( 0 ).m_ResultJson.Contains(
+            wxS( "render_gate_failed" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 1 ).m_ToolName,
+                       wxString( wxS( "render_hidden_attempt" ) ) );
+    BOOST_CHECK_EQUAL(
+            publishRequest.m_ToolResults.at( 1 ).m_ToolCallId,
+            wxString( wxS( "call_render_after_render_gate" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
