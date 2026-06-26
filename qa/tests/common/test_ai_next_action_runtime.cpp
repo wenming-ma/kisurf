@@ -5453,6 +5453,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             placementPacket["placement_anchors"].at( 0 )["position"]["x"].get<int>(),
             220 );
+    BOOST_REQUIRE(
+            placementPacket["placement_anchors"].at( 0 ).contains( "provenance" ) );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_anchors"].at( 0 )["provenance"]["source"]
+                    .get<std::string>(),
+            "context_anchor" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_anchors"].at( 0 )["provenance"]["editor_kind"]
+                    .get<std::string>(),
+            "pcb" );
+    BOOST_CHECK(
+            placementPacket["placement_anchors"].at( 0 )["provenance"]["has_position"]
+                    .get<bool>() );
+    BOOST_CHECK(
+            !placementPacket["placement_anchors"].at( 0 )["provenance"]
+                     ["details_present"].get<bool>() );
     BOOST_REQUIRE( placementPacket.contains( "placement_candidate_facts" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_candidate_facts"].size(), 1 );
     BOOST_CHECK_EQUAL(
@@ -6111,6 +6127,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             routingPacket["route_anchors"].at( 1 )["position"]["x"].get<int>(),
             320 );
+    BOOST_REQUIRE(
+            routingPacket["route_anchors"].at( 1 ).contains( "provenance" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["route_anchors"].at( 1 )["provenance"]["source"]
+                    .get<std::string>(),
+            "context_anchor" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["route_anchors"].at( 1 )["provenance"]["editor_kind"]
+                    .get<std::string>(),
+            "pcb" );
+    BOOST_CHECK(
+            routingPacket["route_anchors"].at( 1 )["provenance"]["has_position"]
+                    .get<bool>() );
+    BOOST_CHECK(
+            !routingPacket["route_anchors"].at( 1 )["provenance"]["details_present"]
+                     .get<bool>() );
     BOOST_REQUIRE( routingPacket.contains( "routing_corridor_facts" ) );
     BOOST_REQUIRE_EQUAL( routingPacket["routing_corridor_facts"].size(), 1 );
     BOOST_CHECK_EQUAL(

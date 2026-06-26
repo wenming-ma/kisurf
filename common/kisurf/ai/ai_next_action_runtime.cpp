@@ -3480,14 +3480,24 @@ nlohmann::json anchorRecordJson( const AI_CONTEXT_ANCHOR& aAnchor )
               { "summary", toUtf8String( aAnchor.m_Summary ) },
               { "position", anchorPositionJson( aAnchor ) },
               { "layer", aAnchor.m_Layer },
-              { "confidence", aAnchor.m_Confidence } };
+              { "confidence", aAnchor.m_Confidence },
+              { "provenance",
+                { { "source", "context_anchor" },
+                  { "editor_kind", editorKindJsonName( aAnchor.m_EditorKind ) },
+                  { "has_position", aAnchor.m_HasPosition },
+                  { "details_present", !aAnchor.m_DetailsJson.IsEmpty() } } } };
 
     if( !aAnchor.m_DetailsJson.IsEmpty() )
     {
         nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
 
         if( details.is_object() )
+        {
+            if( details.contains( "source" ) && details["source"].is_string() )
+                record["provenance"]["details_source"] = details["source"];
+
             record["details"] = std::move( details );
+        }
     }
 
     return record;
