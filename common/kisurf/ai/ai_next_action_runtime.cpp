@@ -8700,6 +8700,18 @@ size_t jsonCounterValue( const nlohmann::json& aCounts,
 }
 
 
+nlohmann::json parseJsonObjectOrEmpty( const wxString& aJson )
+{
+    nlohmann::json parsed =
+            nlohmann::json::parse( toUtf8String( aJson ), nullptr, false );
+
+    if( parsed.is_discarded() || !parsed.is_object() )
+        return nlohmann::json::object();
+
+    return parsed;
+}
+
+
 wxString replayTraceWorkState( const nlohmann::json& aTrace )
 {
     if( aTrace.contains( "observation_packet" )
@@ -9386,6 +9398,19 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                             aTraceEval->m_PreviewGateFeedbackCount;
                     summary["trace_preview_gate_allowed"] =
                             aTraceEval->m_PreviewGateAllowed;
+                    summary["trace_accept_gate_result_count"] =
+                            aTraceEval->m_AcceptGateResultCount;
+                    summary["trace_accept_gate_reason_counts"] =
+                            parseJsonObjectOrEmpty(
+                                    aTraceEval->m_AcceptGateReasonCountsJson );
+                    summary["trace_validation_issue_count"] =
+                            aTraceEval->m_ValidationIssueCount;
+                    summary["trace_validation_issue_kind_counts"] =
+                            parseJsonObjectOrEmpty(
+                                    aTraceEval->m_ValidationIssueKindCountsJson );
+                    summary["trace_validation_issue_severity_counts"] =
+                            parseJsonObjectOrEmpty(
+                                    aTraceEval->m_ValidationIssueSeverityCountsJson );
                 }
 
                 result.m_SummaryJson = fromUtf8String( summary.dump() );
@@ -9671,6 +9696,9 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
     result.m_TotalRecordCount = aGoldenRecordJsons.size();
     nlohmann::json workStateCounts = nlohmann::json::object();
     nlohmann::json errorCodeCounts = nlohmann::json::object();
+    nlohmann::json traceAcceptGateReasonCounts = nlohmann::json::object();
+    nlohmann::json traceValidationIssueKindCounts = nlohmann::json::object();
+    nlohmann::json traceValidationIssueSeverityCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenRecordJsons.size(); ++i )
     {
@@ -9696,6 +9724,52 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
         }
 
         ++result.m_ValidRecordCount;
+
+        nlohmann::json recordSummary =
+                parseJsonObjectOrEmpty( record.m_SummaryJson );
+
+        result.m_TraceBudgetToolRoundCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_tool_round_count" );
+        result.m_TraceBudgetMutationCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_mutation_count" );
+        result.m_TraceBudgetRenderCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_render_count" );
+        result.m_TraceBudgetValidationCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_validation_count" );
+        result.m_TraceBudgetCreatedObjectCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_created_object_count" );
+        result.m_TraceBudgetTouchedObjectCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_budget_touched_object_count" );
+        result.m_TraceAcceptGateResultCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_accept_gate_result_count" );
+        result.m_TraceValidationIssueCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_validation_issue_count" );
+
+        if( recordSummary.contains( "trace_accept_gate_reason_counts" ) )
+            mergeJsonCounters(
+                    traceAcceptGateReasonCounts,
+                    recordSummary["trace_accept_gate_reason_counts"] );
+
+        if( recordSummary.contains( "trace_validation_issue_kind_counts" ) )
+            mergeJsonCounters(
+                    traceValidationIssueKindCounts,
+                    recordSummary["trace_validation_issue_kind_counts"] );
+
+        if( recordSummary.contains(
+                    "trace_validation_issue_severity_counts" ) )
+        {
+            mergeJsonCounters(
+                    traceValidationIssueSeverityCounts,
+                    recordSummary["trace_validation_issue_severity_counts"] );
+        }
 
         if( !record.m_WorkState.IsEmpty() )
             incrementJsonCounter( workStateCounts,
@@ -9732,6 +9806,28 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
+              { "trace_budget_tool_round_count",
+                result.m_TraceBudgetToolRoundCount },
+              { "trace_budget_mutation_count",
+                result.m_TraceBudgetMutationCount },
+              { "trace_budget_render_count",
+                result.m_TraceBudgetRenderCount },
+              { "trace_budget_validation_count",
+                result.m_TraceBudgetValidationCount },
+              { "trace_budget_created_object_count",
+                result.m_TraceBudgetCreatedObjectCount },
+              { "trace_budget_touched_object_count",
+                result.m_TraceBudgetTouchedObjectCount },
+              { "trace_accept_gate_result_count",
+                result.m_TraceAcceptGateResultCount },
+              { "trace_accept_gate_reason_counts",
+                traceAcceptGateReasonCounts },
+              { "trace_validation_issue_count",
+                result.m_TraceValidationIssueCount },
+              { "trace_validation_issue_kind_counts",
+                traceValidationIssueKindCounts },
+              { "trace_validation_issue_severity_counts",
+                traceValidationIssueSeverityCounts },
               { "work_state_counts", workStateCounts },
               { "error_code_counts", errorCodeCounts } };
 
@@ -9746,6 +9842,12 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
 
     result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
     result.m_ErrorCodeCountsJson = fromUtf8String( errorCodeCounts.dump() );
+    result.m_TraceAcceptGateReasonCountsJson =
+            fromUtf8String( traceAcceptGateReasonCounts.dump() );
+    result.m_TraceValidationIssueKindCountsJson =
+            fromUtf8String( traceValidationIssueKindCounts.dump() );
+    result.m_TraceValidationIssueSeverityCountsJson =
+            fromUtf8String( traceValidationIssueSeverityCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }
@@ -9930,6 +10032,9 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
     nlohmann::json datasetSummaries = nlohmann::json::array();
     nlohmann::json workStateCounts = nlohmann::json::object();
     nlohmann::json errorCodeCounts = nlohmann::json::object();
+    nlohmann::json traceAcceptGateReasonCounts = nlohmann::json::object();
+    nlohmann::json traceValidationIssueKindCounts = nlohmann::json::object();
+    nlohmann::json traceValidationIssueSeverityCounts = nlohmann::json::object();
 
     for( size_t i = 0; i < aGoldenDatasetPaths.size(); ++i )
     {
@@ -9943,6 +10048,22 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
         result.m_InvalidRecordCount += dataset.m_InvalidRecordCount;
         result.m_PassedRecordCount += dataset.m_PassedRecordCount;
         result.m_FailedRecordCount += dataset.m_FailedRecordCount;
+        result.m_TraceBudgetToolRoundCount +=
+                dataset.m_TraceBudgetToolRoundCount;
+        result.m_TraceBudgetMutationCount +=
+                dataset.m_TraceBudgetMutationCount;
+        result.m_TraceBudgetRenderCount +=
+                dataset.m_TraceBudgetRenderCount;
+        result.m_TraceBudgetValidationCount +=
+                dataset.m_TraceBudgetValidationCount;
+        result.m_TraceBudgetCreatedObjectCount +=
+                dataset.m_TraceBudgetCreatedObjectCount;
+        result.m_TraceBudgetTouchedObjectCount +=
+                dataset.m_TraceBudgetTouchedObjectCount;
+        result.m_TraceAcceptGateResultCount +=
+                dataset.m_TraceAcceptGateResultCount;
+        result.m_TraceValidationIssueCount +=
+                dataset.m_TraceValidationIssueCount;
 
         if( dataset.m_Valid )
             ++result.m_ValidDatasetCount;
@@ -9981,6 +10102,53 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
         }
 
         mergeJsonCounters( workStateCounts, datasetWorkStateCounts );
+
+        nlohmann::json datasetTraceAcceptGateReasonCounts =
+                parseJsonObjectOrEmpty(
+                        dataset.m_TraceAcceptGateReasonCountsJson );
+
+        if( datasetTraceAcceptGateReasonCounts.empty()
+            && datasetSummary.contains( "trace_accept_gate_reason_counts" )
+            && datasetSummary["trace_accept_gate_reason_counts"].is_object() )
+        {
+            datasetTraceAcceptGateReasonCounts =
+                    datasetSummary["trace_accept_gate_reason_counts"];
+        }
+
+        mergeJsonCounters( traceAcceptGateReasonCounts,
+                           datasetTraceAcceptGateReasonCounts );
+
+        nlohmann::json datasetTraceValidationIssueKindCounts =
+                parseJsonObjectOrEmpty(
+                        dataset.m_TraceValidationIssueKindCountsJson );
+
+        if( datasetTraceValidationIssueKindCounts.empty()
+            && datasetSummary.contains(
+                    "trace_validation_issue_kind_counts" )
+            && datasetSummary["trace_validation_issue_kind_counts"].is_object() )
+        {
+            datasetTraceValidationIssueKindCounts =
+                    datasetSummary["trace_validation_issue_kind_counts"];
+        }
+
+        mergeJsonCounters( traceValidationIssueKindCounts,
+                           datasetTraceValidationIssueKindCounts );
+
+        nlohmann::json datasetTraceValidationIssueSeverityCounts =
+                parseJsonObjectOrEmpty(
+                        dataset.m_TraceValidationIssueSeverityCountsJson );
+
+        if( datasetTraceValidationIssueSeverityCounts.empty()
+            && datasetSummary.contains(
+                    "trace_validation_issue_severity_counts" )
+            && datasetSummary["trace_validation_issue_severity_counts"].is_object() )
+        {
+            datasetTraceValidationIssueSeverityCounts =
+                    datasetSummary["trace_validation_issue_severity_counts"];
+        }
+
+        mergeJsonCounters( traceValidationIssueSeverityCounts,
+                           datasetTraceValidationIssueSeverityCounts );
 
         nlohmann::json datasetErrorCodeCounts =
                 nlohmann::json::parse( toUtf8String( dataset.m_ErrorCodeCountsJson ),
@@ -10036,6 +10204,28 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
+              { "trace_budget_tool_round_count",
+                result.m_TraceBudgetToolRoundCount },
+              { "trace_budget_mutation_count",
+                result.m_TraceBudgetMutationCount },
+              { "trace_budget_render_count",
+                result.m_TraceBudgetRenderCount },
+              { "trace_budget_validation_count",
+                result.m_TraceBudgetValidationCount },
+              { "trace_budget_created_object_count",
+                result.m_TraceBudgetCreatedObjectCount },
+              { "trace_budget_touched_object_count",
+                result.m_TraceBudgetTouchedObjectCount },
+              { "trace_accept_gate_result_count",
+                result.m_TraceAcceptGateResultCount },
+              { "trace_accept_gate_reason_counts",
+                traceAcceptGateReasonCounts },
+              { "trace_validation_issue_count",
+                result.m_TraceValidationIssueCount },
+              { "trace_validation_issue_kind_counts",
+                traceValidationIssueKindCounts },
+              { "trace_validation_issue_severity_counts",
+                traceValidationIssueSeverityCounts },
               { "dataset_pass_rate", result.m_DatasetPassRate },
               { "record_pass_rate", result.m_RecordPassRate },
               { "work_state_counts", workStateCounts },
@@ -10053,6 +10243,12 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
 
     result.m_WorkStateCountsJson = fromUtf8String( workStateCounts.dump() );
     result.m_ErrorCodeCountsJson = fromUtf8String( errorCodeCounts.dump() );
+    result.m_TraceAcceptGateReasonCountsJson =
+            fromUtf8String( traceAcceptGateReasonCounts.dump() );
+    result.m_TraceValidationIssueKindCountsJson =
+            fromUtf8String( traceValidationIssueKindCounts.dump() );
+    result.m_TraceValidationIssueSeverityCountsJson =
+            fromUtf8String( traceValidationIssueSeverityCounts.dump() );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }

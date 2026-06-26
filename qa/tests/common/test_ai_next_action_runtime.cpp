@@ -7222,6 +7222,10 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksAcceptGateMetrics )
 
     BOOST_CHECK( passEvaluation.m_Valid );
     BOOST_CHECK( passEvaluation.m_Passed );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_accept_gate_result_count\":1" ) ) );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_accept_gate_reason_counts\":{\"context_drift\":1}" ) ) );
 
     nlohmann::json failing = passing;
     failing["id"] = "placement-via-accept-context-drift-too-high";
@@ -7354,6 +7358,84 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationReportsExpectationMismatch )
     BOOST_CHECK( !evaluation.m_Passed );
     BOOST_CHECK_EQUAL( evaluation.m_ErrorCode,
                        wxString( wxS( "terminal_state_mismatch" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetEvaluationAggregatesTraceQualityMetrics )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    trace["attempts"].at( 0 )["validation_facts"]["issues"] =
+            nlohmann::json::array(
+                    { { { "kind", "clearance" },
+                        { "severity", "warning" },
+                        { "blocking", false } } } );
+    trace["publish_decision"]["accept_gate_result"] =
+            { { "allowed", false },
+              { "reasons", nlohmann::json::array( { "context_drift" } ) } };
+
+    nlohmann::json record =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-quality-metrics" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "min_budget_mutation_count", 1 },
+                  { "min_budget_render_count", 1 },
+                  { "min_budget_validation_count", 1 },
+                  { "min_accept_gate_result_count", 1 },
+                  { "min_accept_gate_reason_counts",
+                    { { "context_drift", 1 } } } } } };
+
+    wxArrayString dataset;
+    dataset.Add( wxString::FromUTF8( record.dump().c_str() ) );
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayGoldenDataset( dataset );
+
+    BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_REQUIRE( evaluation.m_Passed );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( evaluation.m_SummaryJson.ToStdString() );
+
+    BOOST_REQUIRE( summary.is_object() );
+    BOOST_CHECK_EQUAL( summary["trace_budget_mutation_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_render_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_validation_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_accept_gate_result_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_accept_gate_reason_counts"]["context_drift"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL( summary["trace_validation_issue_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_kind_counts"]["clearance"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_severity_counts"]["warning"].get<int>(),
+            1 );
 }
 
 
@@ -7622,6 +7704,16 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_tool_round_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_mutation_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_render_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_validation_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_created_object_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_budget_touched_object_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_accept_gate_result_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_accept_gate_reason_counts"]["context_drift"].get<int>(),
+            1 );
     BOOST_REQUIRE( summary["error_code_counts"].is_object() );
     BOOST_CHECK( summary["error_code_counts"].empty() );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
