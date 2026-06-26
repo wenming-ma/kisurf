@@ -11714,6 +11714,8 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
                  "observation should start a hidden attempt. Return JSON only." );
     request.m_ResponseFormatJson = wxS( "{\"type\":\"json_object\"}" );
     request.m_ToolCatalogJson = m_Tools.CallableToolCatalogJson();
+    request.m_MaxToolRounds =
+            attemptPolicyForWorkState( aObservation.m_Kind ).m_MaxToolRounds;
     request.m_DisableDefaultTools = true;
 
     AI_PROVIDER_RESPONSE response =
