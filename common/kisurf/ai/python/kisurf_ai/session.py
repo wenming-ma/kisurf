@@ -152,6 +152,7 @@ class KiSurfSession:
     def apply_surface_patch(self, *, surface_id: str, patch: dict[str, Any],
                             table_id: str = "", target_scope: Any = None,
                             alias: str = "",
+                            write_policy: str = "",
                             expected_surface_revision: Any = None,
                             expected_schema_version: Any = None,
                             expected_selection_fingerprint: Any = None,
@@ -164,6 +165,7 @@ class KiSurfSession:
         _set_optional(args, "table_id", table_id)
         _set_optional(args, "target_scope", target_scope)
         _set_optional(args, "alias", alias)
+        _set_optional(args, "write_policy", write_policy)
         _set_optional(args, "expected_surface_revision", expected_surface_revision)
         _set_optional(args, "expected_schema_version", expected_schema_version)
         _set_optional(args, "expected_selection_fingerprint",

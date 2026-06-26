@@ -295,6 +295,34 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
         self.assertEqual(operation["arguments"]["expected_overlap_set"],
                          ["row.power", "row.gpio"])
 
+    def test_surface_patch_helper_emits_explicit_write_policy(self):
+        session = KiSurfSession()
+
+        session.apply_surface_patch(
+            surface_id="board_setup.clearance",
+            patch={
+                "kind": "SurfacePatch",
+                "operations": [
+                    {
+                        "op": "set_cell",
+                        "row_id": "row.power",
+                        "column_id": "class",
+                        "value": "Power",
+                    }
+                ],
+            },
+            write_policy="allow_overwrite",
+            alias="surface_patch_overwrite_class",
+        )
+
+        result = session.to_result()
+
+        self.assertEqual(len(result["operations"]), 1)
+        operation = result["operations"][0]
+        self.assertEqual(operation["kind"], "surface.apply_patch")
+        self.assertEqual(operation["arguments"]["write_policy"], "allow_overwrite")
+        self.assertEqual(operation["arguments"]["alias"], "surface_patch_overwrite_class")
+
     def test_worker_maps_surface_patch_to_protobuf_operation_kind(self):
         request = session_pb2.WorkerRequest(protocol="kisurf.ai.session.v1")
         request.run_cell.session.id = 42
