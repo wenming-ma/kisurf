@@ -3969,7 +3969,8 @@ nlohmann::json routingEndpointSweptBBoxJson(
 
 
 nlohmann::json routingProgressFactsJson(
-        const nlohmann::json& aActiveNetSummary )
+        const nlohmann::json& aActiveNetSummary,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
 {
     if( !aActiveNetSummary.is_object()
         || !aActiveNetSummary.contains( "component_graph_edges" )
@@ -4059,6 +4060,56 @@ nlohmann::json routingProgressFactsJson(
         && routedViaCount >= 0 )
     {
         facts["routed_via_count"] = routedViaCount;
+    }
+
+    if( aActiveNetSummary.contains( "routed_layer_lengths" )
+        && aActiveNetSummary["routed_layer_lengths"].is_array() )
+    {
+        bool truncated = false;
+        facts["routed_layer_lengths"] =
+                cappedJsonArray( aActiveNetSummary["routed_layer_lengths"],
+                                 16, truncated );
+
+        if( truncated )
+            facts["routed_layer_lengths_truncated"] = true;
+
+        const nlohmann::json modeContext =
+                objectFromJsonText( aToolState.m_ModeContextJson );
+
+        if( modeContext.contains( "layer" ) && modeContext["layer"].is_string() )
+        {
+            const std::string activeLayer =
+                    modeContext["layer"].get<std::string>();
+            facts["active_layer"] = activeLayer;
+
+            for( const nlohmann::json& layerFact :
+                 facts["routed_layer_lengths"] )
+            {
+                if( !layerFact.is_object()
+                    || !layerFact.contains( "layer" )
+                    || !layerFact["layer"].is_string()
+                    || layerFact["layer"].get<std::string>() != activeLayer )
+                {
+                    continue;
+                }
+
+                if( layerFact.contains( "routed_track_length" )
+                    && !layerFact["routed_track_length"].is_null() )
+                {
+                    facts["active_layer_routed_track_length"] =
+                            layerFact["routed_track_length"];
+                }
+
+                if( layerFact.contains( "routed_track_segment_count" )
+                    && !layerFact["routed_track_segment_count"].is_null() )
+                {
+                    facts["active_layer_routed_track_segment_count"] =
+                            layerFact["routed_track_segment_count"];
+                }
+
+                break;
+            }
+        }
     }
 
     return facts;
@@ -5667,7 +5718,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["connectivity_summary"] = std::move( connectivity );
 
     nlohmann::json activeNet = activeNetSummaryJson( context );
-    nlohmann::json routingProgress = routingProgressFactsJson( activeNet );
+    nlohmann::json routingProgress =
+            routingProgressFactsJson( activeNet, context.m_ToolState );
     nlohmann::json routingReachability =
             routingReachabilityFactsJson( activeNet, context.m_ToolState,
                                           context.m_VisibleObjects );

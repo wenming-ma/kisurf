@@ -5571,6 +5571,11 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"net_facts\":[{\"code\":1,\"name\":\"GND\","
                  "\"routed_track_length\":780,\"routed_track_segment_count\":3,"
                  "\"routed_via_count\":2,"
+                 "\"routed_layer_lengths\":[{\"layer\":\"F.Cu\","
+                 "\"routed_track_length\":780,"
+                 "\"routed_track_segment_count\":3},"
+                 "{\"layer\":\"B.Cu\",\"routed_track_length\":120,"
+                 "\"routed_track_segment_count\":1}],"
                  "\"netclass\":{\"name\":\"Default\",\"clearance\":90000,"
                  "\"track_width\":150000,\"via_diameter\":450000,"
                  "\"via_drill\":250000},"
@@ -5706,6 +5711,30 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             routingPacket["routing_progress_facts"]["routed_via_count"].get<int>(),
             2 );
+    BOOST_REQUIRE( routingPacket["routing_progress_facts"].contains(
+            "routed_layer_lengths" ) );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].size(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].at( 0 )
+                    ["layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].at( 0 )
+                    ["routed_track_length"].get<int>(),
+            780 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["active_layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["active_layer_routed_track_length"].get<int>(),
+            780 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["active_layer_routed_track_segment_count"].get<int>(),
+            3 );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_progress_facts"]["estimated_total_work_length"]
                     .get<int>(),

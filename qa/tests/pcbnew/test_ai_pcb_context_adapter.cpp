@@ -577,6 +577,18 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
     BOOST_CHECK_EQUAL( ( *sigFact )["routed_track_length"].get<int>(), 100000 );
     BOOST_CHECK_EQUAL( ( *sigFact )["routed_track_segment_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( ( *sigFact )["routed_via_count"].get<int>(), 1 );
+    BOOST_REQUIRE( sigFact->contains( "routed_layer_lengths" ) );
+    BOOST_REQUIRE_EQUAL( ( *sigFact )["routed_layer_lengths"].size(), 1u );
+    BOOST_CHECK_EQUAL(
+            ( *sigFact )["routed_layer_lengths"][0]["layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            ( *sigFact )["routed_layer_lengths"][0]["routed_track_length"].get<int>(),
+            100000 );
+    BOOST_CHECK_EQUAL(
+            ( *sigFact )["routed_layer_lengths"][0]
+                    ["routed_track_segment_count"].get<int>(),
+            1 );
 
     nlohmann::json topology = ( *sigFact )["topology"];
     BOOST_CHECK_EQUAL( topology["component_count"].get<int>(), 2 );
