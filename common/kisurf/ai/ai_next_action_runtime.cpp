@@ -680,6 +680,53 @@ bool reviewBasisAllowsPreviewPublish( const wxString& aReviewJson )
 }
 
 
+bool reviewProviderToolResultsBlockPreviewPublish( const wxString& aReviewJson )
+{
+    nlohmann::json review =
+            nlohmann::json::parse( toUtf8String( aReviewJson ), nullptr, false );
+
+    if( review.is_discarded() || !review.is_object()
+        || !review.contains( "provider_tool_results" )
+        || !review["provider_tool_results"].is_array() )
+    {
+        return false;
+    }
+
+    for( const nlohmann::json& toolRecord : review["provider_tool_results"] )
+    {
+        if( !toolRecord.is_object() )
+            continue;
+
+        if( toolRecord.contains( "allowed" ) && toolRecord["allowed"].is_boolean()
+            && !toolRecord["allowed"].get<bool>() )
+        {
+            return true;
+        }
+
+        if( toolRecord.contains( "executed" ) && toolRecord["executed"].is_boolean()
+            && !toolRecord["executed"].get<bool>() )
+        {
+            return true;
+        }
+
+        if( toolRecord.contains( "error_code" )
+            && toolRecord["error_code"].is_string()
+            && !toolRecord["error_code"].get<std::string>().empty() )
+        {
+            return true;
+        }
+
+        if( toolRecord.contains( "result" )
+            && operationResultBlocksPreviewPublish( toolRecord["result"] ) )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
 void appendGateReason( AI_NEXT_ACTION_GATE_RESULT& aGate, const wxString& aReason )
 {
     aGate.m_Reasons.push_back( aReason );
@@ -12088,6 +12135,10 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
 
     if( !reviewBasisAllowsPreviewPublish( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult, wxS( "review_basis_failed" ) );
+
+    if( reviewProviderToolResultsBlockPreviewPublish( aReview.m_RawJson ) )
+        appendGateReason( publish.m_GateResult,
+                          wxS( "provider_tool_result_failed" ) );
 
     if( !reviewHiddenMutationRenderFreshnessSatisfied( aReview.m_RawJson ) )
         appendGateReason( publish.m_GateResult,
