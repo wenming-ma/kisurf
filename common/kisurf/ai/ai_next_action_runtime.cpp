@@ -2916,6 +2916,7 @@ struct ATTEMPT_POLICY_SIGNALS
 {
     size_t m_RecentRejectHistoryCount = 0;
     size_t m_ContextChurnHistoryCount = 0;
+    size_t m_LatencyOverBudgetHistoryCount = 0;
 };
 
 
@@ -2946,7 +2947,8 @@ ATTEMPT_BUDGET_POLICY adjustedAttemptPolicyForWorkState(
     ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState( aWorkState );
 
     if( aSignals.m_RecentRejectHistoryCount > 0
-        || aSignals.m_ContextChurnHistoryCount > 0 )
+        || aSignals.m_ContextChurnHistoryCount > 0
+        || aSignals.m_LatencyOverBudgetHistoryCount > 0 )
     {
         policy.m_MaxAttempts = std::min<size_t>( policy.m_MaxAttempts, 1 );
     }
@@ -3000,6 +3002,12 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
         adjustments.push_back( "context_churn_history" );
     }
 
+    if( aSignals.m_LatencyOverBudgetHistoryCount > 0
+        && policy.m_MaxAttempts < basePolicy.m_MaxAttempts )
+    {
+        adjustments.push_back( "latency_over_budget_history" );
+    }
+
     return { { "work_state", toUtf8String( aWorkState ) },
              { "max_attempts", policy.m_MaxAttempts },
              { "max_tool_rounds", policy.m_MaxToolRounds },
@@ -3015,6 +3023,8 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
              { "base_max_wall_time_ms", basePolicy.m_MaxWallTimeMs },
              { "reject_history_count", aSignals.m_RecentRejectHistoryCount },
              { "context_churn_count", aSignals.m_ContextChurnHistoryCount },
+             { "latency_over_budget_count",
+               aSignals.m_LatencyOverBudgetHistoryCount },
              { "adjustments", std::move( adjustments ) },
              { "policy_owner", "native_runtime" } };
 }
@@ -3046,6 +3056,7 @@ wxString budgetPolicyWorkStateForCandidate(
 
 ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
         const std::vector<AI_SUGGESTION_RECORD>& aSuggestions,
+        const std::vector<AI_NEXT_ACTION_ATTEMPT_RECORD>& aAttempts,
         const wxString& aWorkState )
 {
     ATTEMPT_POLICY_SIGNALS signals;
@@ -3070,6 +3081,21 @@ ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
         {
             ++signals.m_ContextChurnHistoryCount;
         }
+    }
+
+    for( const AI_NEXT_ACTION_ATTEMPT_RECORD& attempt : aAttempts )
+    {
+        const wxString attemptWorkState =
+                budgetPolicyWorkStateForCandidate( attempt.m_Candidate );
+
+        if( normalizedAttemptPolicyFamily( attemptWorkState ) != targetFamily )
+            continue;
+
+        const ATTEMPT_BUDGET_POLICY policy =
+                attemptPolicyForWorkState( attemptWorkState );
+
+        if( attempt.m_BudgetCounters.m_WallTimeMs > policy.m_MaxWallTimeMs )
+            ++signals.m_LatencyOverBudgetHistoryCount;
     }
 
     return signals;
@@ -10242,7 +10268,8 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     const size_t firstCandidateIndex =
             explicitCandidateSelected ? *decision.m_SelectedCandidateIndex : 0;
     const ATTEMPT_POLICY_SIGNALS policySignals =
-            attemptPolicySignalsForWorkState( m_Suggestions, observation.m_Kind );
+            attemptPolicySignalsForWorkState( m_Suggestions, m_Attempts,
+                                              observation.m_Kind );
     const size_t attemptLimit = explicitCandidateSelected
                                         ? 1
                                         : attemptLimitForWorkState( observation.m_Kind,
@@ -10915,7 +10942,8 @@ AI_OBSERVATION_PACKET AI_NEXT_ACTION_RUNTIME::buildObservationPacket(
     packet.m_Activity = aEvent.m_Activity;
 
     const ATTEMPT_POLICY_SIGNALS policySignals =
-            attemptPolicySignalsForWorkState( m_Suggestions, aEvent.m_Kind );
+            attemptPolicySignalsForWorkState( m_Suggestions, m_Attempts,
+                                              aEvent.m_Kind );
 
     nlohmann::json facts =
             { { "slot_id", toUtf8String( aEvent.m_SlotId ) },
