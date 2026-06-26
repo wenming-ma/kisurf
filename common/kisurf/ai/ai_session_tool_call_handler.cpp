@@ -3375,9 +3375,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         }
 
         std::string forbiddenPath;
-        if( findForbiddenSessionRuntimeCapability(
-                    arguments["arguments"], std::string( "arguments" ),
-                    forbiddenPath ) )
+        if( findForbiddenSessionRuntimeCapability( arguments, std::string(),
+                                                   forbiddenPath ) )
         {
             return deniedResult(
                     aRequest, aToolCall, wxS( "forbidden_runtime_capability" ),

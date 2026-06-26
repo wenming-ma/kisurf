@@ -1130,6 +1130,27 @@ BOOST_AUTO_TEST_CASE( DirectAtomicOperationRejectsRawBoardAccessBeforeMutation )
 }
 
 
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationRejectsTopLevelDirectPublishBeforeMutation )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"direct_publish\":true,"
+                           "\"arguments\":{\"alias\":\"top-level-publish-via\","
+                           "\"net\":\"GND\",\"position\":{\"x\":25,\"y\":50}}}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "forbidden_runtime_capability" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"forbidden_field\":\"direct_publish\"" ) ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunCellRejectsChangedSelectionRevisionBeforePythonWorkerRuns )
 {
     AI_PYTHON_CELL_RESULT workerResult;
