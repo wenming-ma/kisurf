@@ -4403,6 +4403,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptTool = false;
     bool sawAtomicRunTool = false;
     bool sawAtomicRunCreateViaKind = false;
+    bool sawAtomicRunOperationContracts = false;
     bool sawRepairTool = false;
     bool sawPlacementFootprintTransformTool = false;
     bool sawPlacementFootprintTransformRequiredPoints = false;
@@ -4598,6 +4599,32 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 {
                     sawAtomicRunCreateViaKind = true;
                 }
+            }
+
+            if( function["parameters"].contains( "$defs" )
+                && function["parameters"]["$defs"].contains( "operation_contracts" ) )
+            {
+                const nlohmann::json& contracts =
+                        function["parameters"]["$defs"]["operation_contracts"];
+                sawAtomicRunOperationContracts =
+                        contracts.contains( "pcb.create_via" )
+                        && contracts["pcb.create_via"]["required"].dump().find(
+                                   "position" ) != std::string::npos
+                        && contracts.contains( "pcb.create_track_segment" )
+                        && contracts["pcb.create_track_segment"]["properties"]
+                                   .contains( "width" )
+                        && contracts.contains( "pcb.move_items" )
+                        && contracts["pcb.move_items"]["properties"].contains(
+                                   "target_positions" )
+                        && contracts.contains( "surface.apply_patch" )
+                        && contracts["surface.apply_patch"]["required"].dump().find(
+                                   "surface_id" ) != std::string::npos
+                        && contracts["surface.apply_patch"]["required"].dump().find(
+                                   "patch" ) != std::string::npos
+                        && contracts["surface.apply_patch"]["properties"]
+                                   ["expected_surface_revision"].is_object()
+                        && contracts["surface.apply_patch"]["properties"]
+                                   ["expected_schema_version"].is_object();
             }
         }
 
@@ -5164,6 +5191,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptTool );
     BOOST_CHECK( sawAtomicRunTool );
     BOOST_CHECK( sawAtomicRunCreateViaKind );
+    BOOST_CHECK( sawAtomicRunOperationContracts );
     BOOST_CHECK( sawRepairTool );
     BOOST_CHECK( sawPlacementFootprintTransformTool );
     BOOST_CHECK( sawPlacementFootprintTransformRequiredPoints );

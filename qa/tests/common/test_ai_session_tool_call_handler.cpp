@@ -512,6 +512,28 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                      != atomicOps.end() );
     }
 
+    BOOST_REQUIRE( catalogTool( "kisurf_run_atomic_operation" ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_atomic_operation" )
+                           ->contains( "operation_contracts" ) );
+    const nlohmann::json& operationContracts =
+            ( *catalogTool( "kisurf_run_atomic_operation" ) )["operation_contracts"];
+    BOOST_REQUIRE( operationContracts.contains( "pcb.create_via" ) );
+    BOOST_REQUIRE( operationContracts.contains( "pcb.create_track_segment" ) );
+    BOOST_REQUIRE( operationContracts.contains( "pcb.move_items" ) );
+    BOOST_REQUIRE( operationContracts.contains( "surface.apply_patch" ) );
+    BOOST_CHECK( operationContracts["pcb.create_via"]["required"].dump().find(
+                         "position" ) != std::string::npos );
+    BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
+                         .contains( "width" ) );
+    BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
+            "target_positions" ) );
+    BOOST_CHECK( operationContracts["surface.apply_patch"]["required"].dump().find(
+                         "surface_id" ) != std::string::npos );
+    BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
+                         ["expected_surface_revision"].is_object() );
+    BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
+                         ["expected_schema_version"].is_object() );
+
     BOOST_REQUIRE( catalogTool( "kisurf_query_items" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "layer",
                                                                   std::string() ),

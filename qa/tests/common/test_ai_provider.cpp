@@ -587,6 +587,38 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      "pcb.create_via" ) != std::string::npos );
                 BOOST_CHECK( atomicParameters["properties"]["kind"]["enum"].dump().find(
                                      "surface.apply_patch" ) != std::string::npos );
+                BOOST_REQUIRE( atomicParameters.contains( "$defs" ) );
+                BOOST_REQUIRE( atomicParameters["$defs"].contains( "operation_contracts" ) );
+                const nlohmann::json& operationContracts =
+                        atomicParameters["$defs"]["operation_contracts"];
+                BOOST_REQUIRE( operationContracts.contains( "pcb.create_via" ) );
+                BOOST_REQUIRE( operationContracts.contains( "pcb.create_track_segment" ) );
+                BOOST_REQUIRE( operationContracts.contains( "pcb.move_items" ) );
+                BOOST_REQUIRE( operationContracts.contains( "surface.apply_patch" ) );
+                BOOST_CHECK( operationContracts["pcb.create_via"]["required"].dump().find(
+                                     "position" ) != std::string::npos );
+                BOOST_CHECK( operationContracts["pcb.create_via"]["properties"].contains(
+                        "layer_pair" ) );
+                BOOST_CHECK( operationContracts["pcb.create_track_segment"]["required"]
+                                     .dump()
+                                     .find( "start" )
+                             != std::string::npos );
+                BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
+                                     .contains( "width" ) );
+                BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
+                        "target_positions" ) );
+                BOOST_CHECK( operationContracts["surface.apply_patch"]["required"]
+                                     .dump()
+                                     .find( "surface_id" )
+                             != std::string::npos );
+                BOOST_CHECK( operationContracts["surface.apply_patch"]["required"]
+                                     .dump()
+                                     .find( "patch" )
+                             != std::string::npos );
+                BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
+                                     ["expected_surface_revision"].is_object() );
+                BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
+                                     ["expected_schema_version"].is_object() );
                 BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& rollbackParameters =
                         toolByName["kisurf_rollback_to"]["function"]["parameters"];
