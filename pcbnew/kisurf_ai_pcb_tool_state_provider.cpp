@@ -15,7 +15,9 @@
 #include <board_design_settings.h>
 #include <footprint.h>
 #include <json_common.h>
+#include <layer_pairs.h>
 #include <lset.h>
+#include <pcb_base_edit_frame.h>
 #include <pcb_track.h>
 #include <pcb_base_frame.h>
 #include <project/net_settings.h>
@@ -351,6 +353,36 @@ void addViaSizes( nlohmann::json& aJson, const BOARD_DESIGN_SETTINGS& aSettings 
 }
 
 
+nlohmann::json currentLayerPairJson( const BOARD& aBoard, TOOL_MANAGER* aToolManager )
+{
+    LAYER_PAIR pair( F_Cu, B_Cu );
+
+    if( aToolManager )
+    {
+        if( PCB_BASE_EDIT_FRAME* frame =
+                    dynamic_cast<PCB_BASE_EDIT_FRAME*>( aToolManager->GetToolHolder() ) )
+        {
+            if( LAYER_PAIR_SETTINGS* settings = frame->GetLayerPairSettings() )
+                pair = settings->GetCurrentLayerPair();
+        }
+    }
+
+    wxString start = boardLayerName( &aBoard, pair.GetLayerA() );
+    wxString end = boardLayerName( &aBoard, pair.GetLayerB() );
+
+    if( start.IsEmpty() )
+        start = boardLayerName( &aBoard, F_Cu );
+
+    if( end.IsEmpty() )
+        end = boardLayerName( &aBoard, B_Cu );
+
+    return nlohmann::json{
+        { "start", toUtf8String( start ) },
+        { "end", toUtf8String( end ) }
+    };
+}
+
+
 nlohmann::json buildSharedContextJson( const BOARD& aBoard, PCB_LAYER_ID aActiveLayer )
 {
     const BOARD_DESIGN_SETTINGS& settings = aBoard.GetDesignSettings();
@@ -445,9 +477,11 @@ nlohmann::json buildModeContextJson( const AI_TOOL_STATE_SNAPSHOT& aSnapshot, co
     case AI_TOOL_STATE_KIND::PlacingVia:
         modeContext = {
             { "mode", "placing_via" },
-            { "layer", toUtf8String( activeLayerName ) }
+            { "layer", toUtf8String( activeLayerName ) },
+            { "net", "" }
         };
         addViaSizes( modeContext, settings );
+        modeContext["layer_pair"] = currentLayerPairJson( aBoard, aToolManager );
         addCursorIfPresent( modeContext, aSnapshot );
         break;
 
