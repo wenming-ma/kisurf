@@ -5744,16 +5744,107 @@ nlohmann::json candidateGenerationTraceJson(
 }
 
 
+nlohmann::json stableFingerprintJson( const nlohmann::json& aValue )
+{
+    if( aValue.is_array() )
+    {
+        nlohmann::json normalized = nlohmann::json::array();
+
+        for( const nlohmann::json& item : aValue )
+            normalized.push_back( stableFingerprintJson( item ) );
+
+        return normalized;
+    }
+
+    if( !aValue.is_object() )
+        return aValue;
+
+    const bool looksLikeSessionHandle =
+            aValue.contains( "session_id" ) && aValue.contains( "handle_id" )
+            && aValue.contains( "generation" );
+
+    if( looksLikeSessionHandle )
+    {
+        if( aValue.contains( "alias" ) && aValue["alias"].is_string() )
+        {
+            return { { "handle_alias", aValue["alias"] } };
+        }
+
+        if( aValue.contains( "status" ) && aValue["status"].is_string() )
+        {
+            return { { "handle_status", aValue["status"] } };
+        }
+
+        return { { "handle", "session_handle" } };
+    }
+
+    nlohmann::json normalized = nlohmann::json::object();
+
+    for( auto it = aValue.begin(); it != aValue.end(); ++it )
+        normalized[it.key()] = stableFingerprintJson( it.value() );
+
+    return normalized;
+}
+
+
+wxString stableObjectFingerprintMaterial( const AI_OBJECT_REF& aObject )
+{
+    nlohmann::json details =
+            nlohmann::json::parse( toUtf8String( aObject.m_DetailsJson ),
+                                   nullptr, false );
+
+    if( !details.is_discarded() && details.is_object()
+        && details.value( "source", std::string() )
+                   == "next_action_attempt_journal" )
+    {
+        nlohmann::json stable =
+                { { "source", "next_action_attempt_journal" },
+                  { "type", static_cast<int>( aObject.m_Type ) },
+                  { "kind", details.value( "kind", std::string() ) },
+                  { "arguments",
+                    stableFingerprintJson(
+                            details.value( "arguments",
+                                           nlohmann::json::object() ) ) } };
+
+        if( details.contains( "merged_from_tool" ) )
+            stable["merged_from_tool"] = details["merged_from_tool"];
+
+        return fromUtf8String( stable.dump() );
+    }
+
+    wxString material;
+    material << static_cast<int>( aObject.m_Type )
+             << wxS( ":" ) << aObject.m_Label
+             << wxS( ":" ) << aObject.m_DetailsJson;
+    return material;
+}
+
+
 wxString suggestionFingerprint( const AI_SUGGESTION_RECORD& aSuggestion,
                                 const AI_NEXT_ACTION_CONTEXT_VERSION& aVersion )
 {
-    if( !aSuggestion.m_Fingerprint.IsEmpty() )
-        return aSuggestion.m_Fingerprint;
+    wxString material;
+    material << aVersion.AsJsonText()
+             << wxS( "|title=" ) << aSuggestion.m_Title
+             << wxS( "|arguments=" ) << aSuggestion.m_ArgumentsJson
+             << wxS( "|preview_objects=" ) << aSuggestion.m_PreviewObjects.size();
+
+    for( const AI_OBJECT_REF& object : aSuggestion.m_PreviewObjects )
+    {
+        material << wxS( "|preview:" )
+                 << stableObjectFingerprintMaterial( object );
+    }
+
+    material << wxS( "|edit_objects=" ) << aSuggestion.m_EditObjects.size();
+
+    for( const AI_OBJECT_REF& object : aSuggestion.m_EditObjects )
+    {
+        material << wxS( "|edit:" )
+                 << stableObjectFingerprintMaterial( object );
+    }
 
     wxString fingerprint;
-    fingerprint << wxS( "next-action|" ) << aVersion.AsJsonText()
-                << wxS( "|" ) << aSuggestion.m_Title
-                << wxS( "|" ) << aSuggestion.m_ArgumentsJson;
+    fingerprint << wxS( "next-action|" ) << fnv1a64Fingerprint( material );
     return fingerprint;
 }
 
@@ -7253,6 +7344,126 @@ wxString sessionJournalJson( const AI_EXECUTION_SESSION& aSession,
               { "operations", operations } };
 
     return fromUtf8String( payload.dump() );
+}
+
+
+KICAD_T editObjectTypeForJournalOperation( const std::string& aKind )
+{
+    const AI_SESSION_OPERATION_KIND kind = sessionOperationKindFromId( aKind );
+
+    switch( kind )
+    {
+    case AI_SESSION_OPERATION_KIND::CreateVia:
+        return PCB_VIA_T;
+
+    case AI_SESSION_OPERATION_KIND::CreateTrackSegment:
+    case AI_SESSION_OPERATION_KIND::CreateTrackPolyline:
+        return PCB_TRACE_T;
+
+    case AI_SESSION_OPERATION_KIND::CreateZone:
+    case AI_SESSION_OPERATION_KIND::RefillZones:
+        return PCB_ZONE_T;
+
+    case AI_SESSION_OPERATION_KIND::CreateShape:
+        return PCB_SHAPE_T;
+
+    default:
+        return TYPE_NOT_INIT;
+    }
+}
+
+
+wxString editObjectLabelForJournalOperation( const nlohmann::json& aOperation,
+                                             const nlohmann::json& aArguments,
+                                             size_t aFallbackIndex )
+{
+    const std::string kind = aOperation.value( "kind", std::string( "unknown" ) );
+    const uint64_t operationId = unsignedField( aOperation, "operation_id",
+                                                aFallbackIndex + 1 );
+
+    if( aArguments.is_object() && aArguments.contains( "alias" )
+        && aArguments["alias"].is_string() )
+    {
+        return fromUtf8String( "nextaction:" + kind + ":"
+                               + aArguments["alias"].get<std::string>() );
+    }
+
+    return fromUtf8String( "nextaction:" + kind + ":"
+                           + std::to_string( operationId ) );
+}
+
+
+std::vector<AI_OBJECT_REF> editObjectsFromAttemptJournal(
+        const wxString& aJournalJson )
+{
+    std::vector<AI_OBJECT_REF> editObjects;
+    nlohmann::json             journal = parseObjectBody( aJournalJson );
+
+    if( !journal.is_object() || !journal.contains( "operations" )
+        || !journal["operations"].is_array() )
+    {
+        return editObjects;
+    }
+
+    size_t fallbackIndex = 0;
+
+    for( const nlohmann::json& operation : journal["operations"] )
+    {
+        if( !operation.is_object()
+            || !operation.value( "is_mutation", false )
+            || !operation.contains( "kind" )
+            || !operation["kind"].is_string() )
+        {
+            continue;
+        }
+
+        const std::string kind = operation["kind"].get<std::string>();
+
+        if( sessionOperationKindFromId( kind ) == AI_SESSION_OPERATION_KIND::Unknown )
+            continue;
+
+        nlohmann::json arguments =
+                operation.contains( "arguments" ) && operation["arguments"].is_object()
+                        ? operation["arguments"]
+                        : nlohmann::json::object();
+
+        nlohmann::json details =
+                { { "source", "next_action_attempt_journal" },
+                  { "kind", kind },
+                  { "arguments", arguments },
+                  { "operation_id", unsignedField( operation, "operation_id",
+                                                   fallbackIndex + 1 ) },
+                  { "step_id", unsignedField( operation, "step_id", 0 ) },
+                  { "before_epoch", unsignedField( operation, "before_epoch", 0 ) },
+                  { "after_epoch", unsignedField( operation, "after_epoch", 0 ) } };
+
+        for( const char* key : { "merged_from_tool", "merged_from_tool_call_id" } )
+        {
+            if( operation.contains( key ) )
+                details[key] = operation[key];
+        }
+
+        if( operation.contains( "resolved_handles" ) )
+            details["resolved_handles"] = operation["resolved_handles"];
+
+        if( operation.contains( "created_handles" ) )
+            details["created_handles"] = operation["created_handles"];
+
+        if( operation.contains( "result" ) )
+            details["result"] = operation["result"];
+
+        if( operation.contains( "warnings" ) )
+            details["warnings"] = operation["warnings"];
+
+        editObjects.emplace_back(
+                KIID(), editObjectTypeForJournalOperation( kind ),
+                editObjectLabelForJournalOperation( operation, arguments,
+                                                    fallbackIndex ),
+                fromUtf8String( details.dump() ) );
+        ++fallbackIndex;
+    }
+
+    return editObjects;
 }
 
 
@@ -12319,6 +12530,16 @@ AI_SUGGESTION_RECORD AI_NEXT_ACTION_RUNTIME::publishAttempt(
     suggestion.m_Status = AI_SUGGESTION_STATUS::Pending;
     suggestion.m_ContextVersion = aStep.m_ContextVersion.m_ContextVersion;
     suggestion.m_PreviewOnly = false;
+
+    std::vector<AI_OBJECT_REF> journalEditObjects =
+            editObjectsFromAttemptJournal( aAttempt.m_JournalJson );
+
+    if( !journalEditObjects.empty() )
+    {
+        suggestion.m_PreviewObjects = journalEditObjects;
+        suggestion.m_EditObjects = std::move( journalEditObjects );
+    }
+
     suggestion.m_Fingerprint = suggestionFingerprint( suggestion, aStep.m_ContextVersion );
 
     nlohmann::json attemptProvenance =

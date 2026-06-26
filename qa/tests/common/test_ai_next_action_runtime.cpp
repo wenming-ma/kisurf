@@ -64,8 +64,8 @@ public:
 
     void ShowObject( uint64_t aPreviewId, const AI_OBJECT_REF& aObject ) override
     {
-        wxUnusedVar( aObject );
         m_ObjectPreviewIds.push_back( aPreviewId );
+        m_Objects.push_back( aObject );
     }
 
     void ShowOperation( uint64_t aPreviewId,
@@ -92,6 +92,7 @@ public:
     std::vector<uint64_t>                m_OperationPreviewIds;
     std::vector<uint64_t>                m_OverlayPreviewIds;
     std::vector<uint64_t>                m_ClearIds;
+    std::vector<AI_OBJECT_REF>           m_Objects;
     std::vector<AI_PREVIEW_ITEM_OVERLAY> m_Overlays;
 };
 
@@ -1481,6 +1482,135 @@ public:
 
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER :
+        public AI_PROVIDER
+{
+public:
+    explicit PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER(
+            std::vector<std::pair<int, int>> aDeltas =
+                    { { 250000, -100000 } } ) :
+            m_Deltas( std::move( aDeltas ) )
+    {
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title =
+                wxS( "placement repair move items validate publish next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            m_CurrentEpisodeIndex =
+                    m_Deltas.empty()
+                            ? 0
+                            : std::min( m_EpisodeCount, m_Deltas.size() - 1 );
+            ++m_EpisodeCount;
+
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"placement_move_accept_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need placement via before move repair." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_repair_subject" );
+                call.m_ToolName = wxS( "placement_repair_via" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"position\":{\"x\":1800000,\"y\":2600000},"
+                             "\"net\":\"GND\","
+                             "\"diameter\":600000,"
+                             "\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"placement_repair_move_subject\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need move repair facts." );
+
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
+                        nullptr, false );
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_placement_move_repair" );
+                call.m_ToolName = wxS( "placement_repair_move_items" );
+                const std::pair<int, int> delta =
+                        m_Deltas.empty()
+                                ? std::make_pair( 250000, -100000 )
+                                : m_Deltas.at( std::min( m_CurrentEpisodeIndex,
+                                                         m_Deltas.size() - 1 ) );
+                call.m_ArgumentsJson = wxString::Format(
+                        wxS( "{\"handles\":[%s],"
+                             "\"delta\":{\"x\":%d,\"y\":%d},"
+                             "\"alias\":\"placement_move_delta\"}" ),
+                        wxString::FromUTF8( handle.dump().c_str() ),
+                        delta.first, delta.second );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need rendered move repair facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_render_placement_move_repair" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 3 )
+            {
+                response.m_Body = wxS( "Need accept-grade validation facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_placement_move_repair" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{\"level\":\"drc_lite\"}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+    std::vector<std::pair<int, int>> m_Deltas;
+    size_t                           m_EpisodeCount = 0;
+    size_t                           m_CurrentEpisodeIndex = 0;
 };
 
 
@@ -7979,6 +8109,160 @@ BOOST_AUTO_TEST_CASE( RuntimePlacementRepairMoveItemsToolLowersAndFeedsRender )
             wxS( "\"x\":2050000" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"y\":2500000" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeAcceptUsesFinalPlacementRepairAttemptJournal )
+{
+    auto* provider =
+            new PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( trigger );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( runtime.CanAccept( suggestion->m_Id ) );
+    BOOST_REQUIRE_GE( suggestion->m_EditObjects.size(), 2 );
+
+    bool sawMoveEdit = false;
+
+    for( const AI_OBJECT_REF& editObject : suggestion->m_EditObjects )
+    {
+        if( editObject.m_DetailsJson.Contains( wxS( "\"kind\":\"pcb.move_items\"" ) )
+            && editObject.m_DetailsJson.Contains(
+                    wxS( "\"merged_from_tool\":\"placement.repair_move_items\"" ) )
+            && editObject.m_DetailsJson.Contains(
+                    wxS( "\"alias\":\"placement_move_delta\"" ) ) )
+        {
+            sawMoveEdit = true;
+        }
+    }
+
+    BOOST_CHECK( sawMoveEdit );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+
+    BOOST_CHECK( runtime.Accept( suggestion->m_Id, edit,
+                                 makeDependencyContext( trigger ) ) );
+
+    bool appliedMoveEdit = false;
+
+    for( const AI_OBJECT_REF& appliedObject : editAdapter.m_AppliedObjects )
+    {
+        if( appliedObject.m_DetailsJson.Contains(
+                    wxS( "\"kind\":\"pcb.move_items\"" ) )
+            && appliedObject.m_DetailsJson.Contains(
+                    wxS( "\"merged_from_tool\":\"placement.repair_move_items\"" ) ) )
+        {
+            appliedMoveEdit = true;
+        }
+    }
+
+    BOOST_CHECK( appliedMoveEdit );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePreviewUsesFinalPlacementRepairAttemptJournal )
+{
+    auto* provider =
+            new PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RUNTIME_PREVIEW_RECORDING_ADAPTER adapter;
+    AI_PREVIEW_MANAGER                previewManager( adapter );
+
+    BOOST_REQUIRE( runtime.BeginPreview( suggestion->m_Id, previewManager ) );
+
+    bool previewedMoveEdit = false;
+
+    for( const AI_OBJECT_REF& object : adapter.m_Objects )
+    {
+        if( object.m_DetailsJson.Contains( wxS( "\"kind\":\"pcb.move_items\"" ) )
+            && object.m_DetailsJson.Contains(
+                    wxS( "\"merged_from_tool\":\"placement.repair_move_items\"" ) ) )
+        {
+            previewedMoveEdit = true;
+        }
+    }
+
+    BOOST_CHECK( previewedMoveEdit );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectedPlacementRepairFingerprintUsesFinalJournal )
+{
+    auto* provider =
+            new PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER(
+                    { { 250000, -100000 }, { 500000, -100000 } } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( first.has_value() );
+    const wxString firstFingerprint = first->m_Fingerprint;
+    BOOST_REQUIRE( runtime.Reject( first->m_Id ) );
+    std::this_thread::sleep_for( std::chrono::milliseconds( 550 ) );
+
+    std::optional<AI_SUGGESTION_RECORD> second =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( second.has_value() );
+    BOOST_CHECK_NE( second->m_Fingerprint, firstFingerprint );
+    BOOST_CHECK( second->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"x\":500000" ) ) );
+    BOOST_CHECK( runtime.CanAccept( second->m_Id ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectedIdenticalPlacementRepairFingerprintStaysSilent )
+{
+    auto* provider =
+            new PLACEMENT_REPAIR_MOVE_ITEMS_VALIDATE_PUBLISH_NEXT_ACTION_PROVIDER(
+                    { { 250000, -100000 }, { 250000, -100000 } } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( first.has_value() );
+    const wxString firstFingerprint = first->m_Fingerprint;
+    BOOST_REQUIRE( runtime.Reject( first->m_Id ) );
+    std::this_thread::sleep_for( std::chrono::milliseconds( 550 ) );
+
+    std::optional<AI_SUGGESTION_RECORD> second =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !second.has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Suggestions().size(), 1 );
+    BOOST_CHECK_EQUAL( runtime.Suggestions().front().m_Fingerprint,
+                       firstFingerprint );
+    BOOST_CHECK( runtime.Suggestions().front().m_Status
+                 == AI_SUGGESTION_STATUS::Rejected );
 }
 
 
