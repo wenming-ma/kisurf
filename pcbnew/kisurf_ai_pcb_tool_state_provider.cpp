@@ -202,17 +202,27 @@ nlohmann::json pointJson( const VECTOR2I& aPoint )
 nlohmann::json boxJson( const BOX2D& aBox )
 {
     const VECTOR2D center = aBox.Centre();
+    const int      x = static_cast<int>( aBox.GetX() );
+    const int      y = static_cast<int>( aBox.GetY() );
+    const int      width = static_cast<int>( aBox.GetWidth() );
+    const int      height = static_cast<int>( aBox.GetHeight() );
+    const int      right = static_cast<int>( aBox.GetX() + aBox.GetWidth() );
+    const int      bottom = static_cast<int>( aBox.GetY() + aBox.GetHeight() );
 
     return nlohmann::json{
-        { "x", static_cast<int>( aBox.GetX() ) },
-        { "y", static_cast<int>( aBox.GetY() ) },
-        { "width", static_cast<int>( aBox.GetWidth() ) },
-        { "height", static_cast<int>( aBox.GetHeight() ) },
+        { "x", x },
+        { "y", y },
+        { "width", width },
+        { "height", height },
+        { "right", right },
+        { "bottom", bottom },
         { "center",
           {
                   { "x", static_cast<int>( center.x ) },
                   { "y", static_cast<int>( center.y ) },
           } },
+        { "top_left", { { "x", x }, { "y", y } } },
+        { "bottom_right", { { "x", right }, { "y", bottom } } },
     };
 }
 
@@ -251,7 +261,10 @@ void addViewportIfPresent( nlohmann::json& aJson, TOOL_MANAGER* aToolManager )
         return;
 
     nlohmann::json viewport = boxJson( view->GetViewport() );
+    const VECTOR2I& screenSize = view->GetScreenPixelSize();
+    viewport["source"] = "KIGFX::VIEW::GetViewport";
     viewport["zoom"] = view->GetScale();
+    viewport["screen_size"] = { { "width", screenSize.x }, { "height", screenSize.y } };
     aJson["viewport"] = std::move( viewport );
 }
 
