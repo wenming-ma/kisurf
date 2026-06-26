@@ -1470,12 +1470,17 @@ std::vector<wxString> makeNetUnconnectedEdgeEntries(
                 if( aConnectivity->HasNetNameForNetCode( aNetCode ) )
                     netName = aConnectivity->GetNetNameForNetCode( aNetCode );
 
+                const std::shared_ptr<const CN_ANCHOR> sourceNode = aEdge.GetSourceNode();
+                const std::shared_ptr<const CN_ANCHOR> targetNode = aEdge.GetTargetNode();
+
                 edgeEntries.push_back( wxString::Format(
                         wxS( "{\"net_code\":%d,\"net_name\":%s,\"visible\":%s,"
+                             "\"estimated_manhattan_length\":%d,"
                              "\"source\":%s,\"target\":%s}" ),
                         aNetCode, quotedJson( netName ), boolJson( aEdge.IsVisible() ),
-                        connectivityEndpointJson( aEdge.GetSourceNode() ),
-                        connectivityEndpointJson( aEdge.GetTargetNode() ) ) );
+                        anchorManhattanLength( sourceNode, targetNode ),
+                        connectivityEndpointJson( sourceNode ),
+                        connectivityEndpointJson( targetNode ) ) );
 
                 return true;
             } );
@@ -1528,9 +1533,11 @@ std::vector<wxString> makeRatsnestComponentEdgeEntries(
 
                 edgeEntries.push_back( wxString::Format(
                         wxS( "{\"net_code\":%d,\"visible\":%s,"
+                             "\"estimated_manhattan_length\":%d,"
                              "\"source_component\":%d,\"target_component\":%d,"
                              "\"source\":%s,\"target\":%s}" ),
                         aNetCode, boolJson( aEdge.IsVisible() ),
+                        anchorManhattanLength( sourceNode, targetNode ),
                         componentIndexForAnchor( sourceNode, aItemToComponent ),
                         componentIndexForAnchor( targetNode, aItemToComponent ),
                         connectivityEndpointJson( sourceNode ), connectivityEndpointJson( targetNode ) ) );
@@ -2004,8 +2011,10 @@ wxString makeConnectivitySummaryJson( const BOARD& aBoard )
 
                 edgeEntries.push_back( wxString::Format(
                         wxS( "{\"net_code\":%d,\"net_name\":%s,\"visible\":%s,"
+                             "\"estimated_manhattan_length\":%d,"
                              "\"source\":%s,\"target\":%s}" ),
                         netCode, quotedJson( netName ), boolJson( aEdge.IsVisible() ),
+                        anchorManhattanLength( sourceNode, targetNode ),
                         endpointJson( sourceNode ), endpointJson( targetNode ) ) );
 
                 return true;

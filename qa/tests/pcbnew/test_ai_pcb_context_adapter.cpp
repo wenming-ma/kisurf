@@ -495,6 +495,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
 
     BOOST_CHECK( endpointXs == std::set<int>( { 0, 100000 } ) );
     BOOST_CHECK( endpointYs == std::set<int>( { 0 } ) );
+    BOOST_CHECK_EQUAL( edge["estimated_manhattan_length"].get<int>(), 100000 );
     BOOST_CHECK_EQUAL( connectivity["unconnected_edge_sample_truncated"].get<bool>(), false );
 
     const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
@@ -522,6 +523,9 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityObservationFacts )
     BOOST_REQUIRE_EQUAL( topology["unconnected_edges"].size(), 1u );
     BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_code"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( topology["unconnected_edges"][0]["net_name"].get<std::string>(), "/SIG" );
+    BOOST_CHECK_EQUAL(
+            topology["unconnected_edges"][0]["estimated_manhattan_length"].get<int>(),
+            100000 );
     BOOST_CHECK_EQUAL( topology["unconnected_edge_sample_truncated"].get<bool>(), false );
 }
 
@@ -582,6 +586,10 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
     BOOST_CHECK_NE(
             topology["ratsnest_component_edges"][0]["source_component"].get<int>(),
             topology["ratsnest_component_edges"][0]["target_component"].get<int>() );
+    BOOST_CHECK_EQUAL(
+            topology["ratsnest_component_edges"][0]["estimated_manhattan_length"]
+                    .get<int>(),
+            200000 );
     BOOST_CHECK_EQUAL(
             topology["ratsnest_component_edge_sample_truncated"].get<bool>(), false );
 
