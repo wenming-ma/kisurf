@@ -364,6 +364,25 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
                                   fromJson( details ) );
         }
 
+        if( shape == "polygon" || shape == "poly" )
+        {
+            std::optional<nlohmann::json> points = previewPoints( geometry );
+
+            if( !points || points->size() < 3 )
+                return std::nullopt;
+
+            details = {
+                { "operation", "create_shape_preview" },
+                { "shape", shape },
+                { "layer", layerOrFallback( aItem ) },
+                { "width", width },
+                { "points", *points }
+            };
+            type = PCB_SHAPE_T;
+            return AI_OBJECT_REF( KIID(), type, shadowItemPreviewLabel( aItem ),
+                                  fromJson( details ) );
+        }
+
         std::optional<nlohmann::json> start =
                 geometry.contains( "start" ) ? previewPoint( geometry["start"] )
                                              : std::nullopt;

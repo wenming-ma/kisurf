@@ -245,7 +245,9 @@ bool isSupportedShapeKind( const wxString& aShape )
            || aShape.CmpNoCase( wxS( "line" ) ) == 0
            || aShape.CmpNoCase( wxS( "rectangle" ) ) == 0
            || aShape.CmpNoCase( wxS( "circle" ) ) == 0
-           || aShape.CmpNoCase( wxS( "arc" ) ) == 0;
+           || aShape.CmpNoCase( wxS( "arc" ) ) == 0
+           || aShape.CmpNoCase( wxS( "polygon" ) ) == 0
+           || aShape.CmpNoCase( wxS( "poly" ) ) == 0;
 }
 
 
@@ -315,6 +317,20 @@ std::optional<AI_SUGGESTION_OPERATION> parseCreateShapePreview( const nlohmann::
         operation.m_Start = start;
         operation.m_Position = mid;
         operation.m_End = end;
+        return operation;
+    }
+
+    if( shape.CmpNoCase( wxS( "polygon" ) ) == 0 || shape.CmpNoCase( wxS( "poly" ) ) == 0 )
+    {
+        if( !aArgs.contains( "points" ) )
+            return std::nullopt;
+
+        std::optional<std::vector<VECTOR2I>> points = jsonPointsToVector( aArgs["points"] );
+
+        if( !points )
+            return std::nullopt;
+
+        operation.m_Points = std::move( *points );
         return operation;
     }
 

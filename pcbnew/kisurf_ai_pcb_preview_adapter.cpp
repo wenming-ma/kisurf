@@ -469,6 +469,12 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
     if( aShape.CmpNoCase( wxS( "arc" ) ) == 0 )
         return SHAPE_T::ARC;
 
+    if( aShape.CmpNoCase( wxS( "polygon" ) ) == 0
+        || aShape.CmpNoCase( wxS( "poly" ) ) == 0 )
+    {
+        return SHAPE_T::POLY;
+    }
+
     return std::nullopt;
 }
 
@@ -502,6 +508,16 @@ BOARD_ITEM* buildSyntheticShapePreview( BOARD& aBoard,
     {
         shape->SetArcGeometry( aOperation.m_Start, aOperation.m_Position,
                                aOperation.m_End );
+    }
+    else if( *shapeType == SHAPE_T::POLY )
+    {
+        if( aOperation.m_Points.size() < 3 )
+        {
+            delete shape;
+            return nullptr;
+        }
+
+        shape->SetPolyPoints( aOperation.m_Points );
     }
     else
     {

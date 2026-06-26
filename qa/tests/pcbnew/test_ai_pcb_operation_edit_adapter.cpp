@@ -158,6 +158,17 @@ AI_OBJECT_REF arcShapePreviewRef()
 }
 
 
+AI_OBJECT_REF polygonShapePreviewRef()
+{
+    return AI_OBJECT_REF(
+            KIID(), PCB_SHAPE_T, wxS( "preview:polygon" ),
+            wxS( "{\"operation\":\"create_shape_preview\",\"shape\":\"polygon\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"points\":[{\"x\":0,\"y\":0},{\"x\":100,\"y\":0},"
+                 "{\"x\":100,\"y\":100},{\"x\":0,\"y\":100}]}" ) );
+}
+
+
 AI_OBJECT_REF zonePreviewRef( const wxString& aNet = wxS( "GND" ) )
 {
     return AI_OBJECT_REF(
@@ -359,6 +370,35 @@ BOOST_AUTO_TEST_CASE( SessionAddsArcShapeThroughOneCommit )
     BOOST_CHECK_EQUAL( shape->GetEnd().x, 0 );
     BOOST_CHECK_EQUAL( shape->GetEnd().y, 0 );
     BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionAddsPolygonShapeThroughOneCommit )
+{
+    PCB_OPERATION_FIXTURE         fixture;
+    KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
+    PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
+    KISURF_AI_PCB_OPERATION_EDIT_ADAPTER adapter( resolver, commit );
+    AI_EDIT_SESSION                       session( adapter );
+
+    BOOST_CHECK( session.Apply( { polygonShapePreviewRef() }, AI_VALIDATION_SUMMARY() ) );
+
+    BOOST_REQUIRE_EQUAL( commit.m_Added.size(), 1 );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
+    BOOST_REQUIRE_EQUAL( fixture.m_Board.Drawings().size(), 1 );
+
+    BOARD_ITEM* drawing = fixture.m_Board.Drawings().front();
+    BOOST_REQUIRE_EQUAL( drawing->Type(), PCB_SHAPE_T );
+
+    PCB_SHAPE* shape = static_cast<PCB_SHAPE*>( drawing );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::POLY );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+    BOOST_REQUIRE_EQUAL( shape->GetPolyShape().OutlineCount(), 1 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).PointCount(), 4 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).x, 100 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).y, 100 );
 }
 
 

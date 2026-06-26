@@ -147,6 +147,27 @@ BOOST_AUTO_TEST_CASE( ParsesCreateArcShapePreviewOperation )
 }
 
 
+BOOST_AUTO_TEST_CASE( ParsesCreatePolygonShapePreviewOperation )
+{
+    const wxString payload = wxS(
+            "{\"operation\":\"create_shape_preview\",\"shape\":\"polygon\","
+            "\"layer\":\"F.SilkS\",\"width\":50000,"
+            "\"points\":[{\"x\":0,\"y\":0},{\"x\":100,\"y\":0},"
+            "{\"x\":100,\"y\":100},{\"x\":0,\"y\":100}]}" );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation = ParseAiSuggestionOperation( payload );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsCreateShapePreview() );
+    BOOST_CHECK_EQUAL( operation->m_Shape, wxString( wxS( "polygon" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_LayerName, wxString( wxS( "F.SilkS" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_Width, 50000 );
+    BOOST_REQUIRE_EQUAL( operation->m_Points.size(), 4 );
+    BOOST_CHECK_EQUAL( operation->m_Points[2].x, 100 );
+    BOOST_CHECK_EQUAL( operation->m_Points[2].y, 100 );
+}
+
+
 BOOST_AUTO_TEST_CASE( ParsesCreateCopperZonePreviewOperation )
 {
     const wxString payload = wxS(

@@ -319,6 +319,12 @@ std::optional<SHAPE_T> shapeTypeFromName( const wxString& aShape )
     if( aShape.CmpNoCase( wxS( "arc" ) ) == 0 )
         return SHAPE_T::ARC;
 
+    if( aShape.CmpNoCase( wxS( "polygon" ) ) == 0
+        || aShape.CmpNoCase( wxS( "poly" ) ) == 0 )
+    {
+        return SHAPE_T::POLY;
+    }
+
     return std::nullopt;
 }
 
@@ -348,6 +354,9 @@ std::optional<ZONE_FILL_MODE> zoneFillModeFromName( const wxString& aFillMode )
 }
 
 
+std::vector<VECTOR2I> pointsFromJsonArray( const nlohmann::json& aPoints );
+
+
 BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aError )
 {
     const nlohmann::json geometry =
@@ -370,6 +379,9 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
     std::optional<VECTOR2I> center =
             geometry.contains( "center" ) ? pointFromJson( geometry["center"] ) : std::nullopt;
     std::optional<int> radius = intField( geometry, "radius" );
+    std::vector<VECTOR2I> points =
+            geometry.contains( "points" ) ? pointsFromJsonArray( geometry["points"] )
+                                          : std::vector<VECTOR2I>();
 
     if( !shapeType || !layer )
     {
@@ -393,6 +405,14 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
             return nullptr;
         }
     }
+    else if( *shapeType == SHAPE_T::POLY )
+    {
+        if( points.size() < 3 )
+        {
+            aError = wxS( "CreateShape polygon requires at least three points." );
+            return nullptr;
+        }
+    }
     else if( !start || !end )
     {
         aError = wxS( "CreateShape requires start and end for this shape type." );
@@ -410,6 +430,10 @@ BOARD_ITEM* buildShape( BOARD& aBoard, const nlohmann::json& aArgs, wxString& aE
     else if( *shapeType == SHAPE_T::ARC )
     {
         shape->SetArcGeometry( *start, *mid, *end );
+    }
+    else if( *shapeType == SHAPE_T::POLY )
+    {
+        shape->SetPolyPoints( points );
     }
     else
     {

@@ -858,6 +858,48 @@ BOOST_AUTO_TEST_CASE( AcceptReplayCreatesArcShape )
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptReplayCreatesPolygonShape )
+{
+    BOARD board;
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "create polygon shape" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"poly-marker\",\"shape_type\":\"polygon\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,\"fill\":true,"
+                 "\"geometry\":{\"points\":[{\"x\":0,\"y\":0},"
+                 "{\"x\":100,\"y\":0},{\"x\":100,\"y\":100},"
+                 "{\"x\":0,\"y\":100}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK( result.m_BoardMutated );
+    BOOST_REQUIRE_EQUAL( board.Drawings().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( board.Drawings().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::POLY );
+    BOOST_CHECK_EQUAL( shape->GetWidth(), 50000 );
+    BOOST_CHECK_EQUAL( shape->GetLayer(), F_SilkS );
+    BOOST_CHECK( shape->IsSolidFill() );
+    BOOST_REQUIRE_EQUAL( shape->GetPolyShape().OutlineCount(), 1 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).PointCount(), 4 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).x, 100 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).y, 100 );
+}
+
+
 BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedZoneOutline )
 {
     BOARD board;
