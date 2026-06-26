@@ -212,6 +212,16 @@ nlohmann::json catalogBoxSchema( const char* aDescription )
 }
 
 
+nlohmann::json catalogOperationScopeSchema( const char* aDescription )
+{
+    return { { "type", "string" },
+             { "description", aDescription },
+             { "enum",
+               nlohmann::json::array(
+                       { "session", "affected_area", "selection", "region" } ) } };
+}
+
+
 nlohmann::json catalogGeometryPatchSchema()
 {
     nlohmann::json schema = { { "type", "object" },
@@ -462,12 +472,15 @@ nlohmann::json sessionAtomicOperationContractsJson()
           { { "type", "object" },
             { "additionalProperties", true },
             { "properties",
-              { { "scope", { { "description", "Connectivity rebuild scope." } } } } } } },
+              { { "scope",
+                  catalogOperationScopeSchema(
+                          "Connectivity rebuild scope." ) } } } } },
         { "pcb.run_validation",
           { { "type", "object" },
             { "additionalProperties", true },
             { "properties",
-              { { "scope", { { "description", "Validation scope." } } },
+              { { "scope",
+                  catalogOperationScopeSchema( "Validation scope." ) },
                 { "level",
                   { { "type", "string" },
                     { "enum",

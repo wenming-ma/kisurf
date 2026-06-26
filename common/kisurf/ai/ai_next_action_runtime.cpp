@@ -11605,6 +11605,19 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto operationScopeSchema =
+                        []( const char* aDescription )
+                        {
+                            return nlohmann::json{
+                                { "type", "string" },
+                                { "description", aDescription },
+                                { "enum",
+                                  nlohmann::json::array(
+                                          { "session", "affected_area",
+                                            "selection", "region" } ) }
+                            };
+                        };
+
                 auto atomicOperationContracts =
                         [&]()
                         {
@@ -11823,15 +11836,15 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                     { "additionalProperties", true },
                                     { "properties",
                                       { { "scope",
-                                          { { "description",
-                                              "Connectivity rebuild scope." } } } } } } },
+                                          operationScopeSchema(
+                                                  "Connectivity rebuild scope." ) } } } } },
                                 { "pcb.run_validation",
                                   { { "type", "object" },
                                     { "additionalProperties", true },
                                     { "properties",
                                       { { "scope",
-                                          { { "description",
-                                              "Validation scope." } } },
+                                          operationScopeSchema(
+                                                  "Validation scope." ) },
                                         { "level",
                                           { { "type", "string" },
                                             { "enum",

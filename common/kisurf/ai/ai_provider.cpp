@@ -291,6 +291,16 @@ nlohmann::json internalBoxSchema( const char* aDescription )
 }
 
 
+nlohmann::json operationScopeSchema( const char* aDescription )
+{
+    return { { "type", "string" },
+             { "description", aDescription },
+             { "enum",
+               nlohmann::json::array(
+                       { "session", "affected_area", "selection", "region" } ) } };
+}
+
+
 nlohmann::json geometryPatchSchema()
 {
     nlohmann::json schema = { { "type", "object" },
@@ -580,17 +590,13 @@ nlohmann::json atomicOperationContractSchemas()
             { "additionalProperties", true },
             { "properties",
               { { "scope",
-                  { { "description", "Connectivity rebuild scope." },
-                    { "additionalProperties", true },
-                    { "type", "object" } } } } } } },
+                  operationScopeSchema( "Connectivity rebuild scope." ) } } } } },
         { "pcb.run_validation",
           { { "type", "object" },
             { "additionalProperties", true },
             { "properties",
               { { "scope",
-                  { { "description", "Validation scope." },
-                    { "additionalProperties", true },
-                    { "type", "object" } } },
+                  operationScopeSchema( "Validation scope." ) },
                 { "level",
                   { { "type", "string" },
                     { "enum",

@@ -91,6 +91,28 @@ bool boxSchemaSupportsCanonicalForms( const nlohmann::json& aSchema )
 
     return sawOriginSizeBox && sawMinMaxBox;
 }
+
+
+bool stringEnumContainsAll( const nlohmann::json& aSchema,
+                            std::initializer_list<const char*> aValues )
+{
+    if( !aSchema.is_object() || aSchema.value( "type", std::string() ) != "string"
+        || !aSchema.contains( "enum" ) || !aSchema["enum"].is_array() )
+    {
+        return false;
+    }
+
+    for( const char* value : aValues )
+    {
+        if( std::find( aSchema["enum"].begin(), aSchema["enum"].end(), value )
+            == aSchema["enum"].end() )
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNativeProvider )
@@ -744,6 +766,24 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( boxSchemaSupportsCanonicalForms(
                         operationContracts["pcb.refill_zones"]["properties"]
                                           ["affected_area"] ) );
+                BOOST_REQUIRE( operationContracts.contains(
+                        "pcb.rebuild_connectivity" ) );
+                BOOST_REQUIRE( operationContracts["pcb.rebuild_connectivity"]
+                                       ["properties"]
+                                               .contains( "scope" ) );
+                BOOST_CHECK( stringEnumContainsAll(
+                        operationContracts["pcb.rebuild_connectivity"]["properties"]
+                                          ["scope"],
+                        { "session", "affected_area", "selection", "region" } ) );
+                BOOST_REQUIRE( operationContracts.contains( "pcb.run_validation" ) );
+                BOOST_REQUIRE( operationContracts["pcb.run_validation"]["properties"]
+                                       .contains( "scope" ) );
+                BOOST_CHECK( stringEnumContainsAll(
+                        operationContracts["pcb.run_validation"]["properties"]["scope"],
+                        { "session", "affected_area", "selection", "region" } ) );
+                BOOST_CHECK( stringEnumContainsAll(
+                        operationContracts["pcb.run_validation"]["properties"]["level"],
+                        { "geometry", "drc_lite", "full_drc" } ) );
                 BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& rollbackParameters =
                         toolByName["kisurf_rollback_to"]["function"]["parameters"];

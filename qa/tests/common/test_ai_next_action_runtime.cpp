@@ -4436,6 +4436,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRepairSurfacePatchKind = false;
     bool sawRepairAffectedAreaContract = false;
     bool sawAtomicRunAffectedAreaContract = false;
+    bool sawScriptMaintenanceScopeContract = false;
+    bool sawRepairMaintenanceScopeContract = false;
+    bool sawAtomicRunMaintenanceScopeContract = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
     bool sawPlacementOrientationRepairRequiredFacts = false;
@@ -4537,6 +4540,60 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 }
 
                 return sawOriginSizeBox && sawMinMaxBox;
+            };
+
+    auto stringEnumContainsAll =
+            []( const nlohmann::json& aSchema,
+                std::initializer_list<const char*> aValues )
+            {
+                if( !aSchema.is_object()
+                    || aSchema.value( "type", std::string() ) != "string"
+                    || !aSchema.contains( "enum" )
+                    || !aSchema["enum"].is_array() )
+                {
+                    return false;
+                }
+
+                for( const char* value : aValues )
+                {
+                    if( std::find( aSchema["enum"].begin(),
+                                   aSchema["enum"].end(), value )
+                        == aSchema["enum"].end() )
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            };
+
+    auto contractsDeclareMaintenanceScopes =
+            [&]( const nlohmann::json& aContracts )
+            {
+                return aContracts.contains( "pcb.rebuild_connectivity" )
+                       && aContracts["pcb.rebuild_connectivity"].contains(
+                                  "properties" )
+                       && aContracts["pcb.rebuild_connectivity"]["properties"]
+                                  .contains( "scope" )
+                       && stringEnumContainsAll(
+                                  aContracts["pcb.rebuild_connectivity"]
+                                            ["properties"]["scope"],
+                                  { "session", "affected_area", "selection",
+                                    "region" } )
+                       && aContracts.contains( "pcb.run_validation" )
+                       && aContracts["pcb.run_validation"].contains(
+                                  "properties" )
+                       && aContracts["pcb.run_validation"]["properties"]
+                                  .contains( "scope" )
+                       && stringEnumContainsAll(
+                                  aContracts["pcb.run_validation"]["properties"]
+                                            ["scope"],
+                                  { "session", "affected_area", "selection",
+                                    "region" } )
+                       && stringEnumContainsAll(
+                                  aContracts["pcb.run_validation"]["properties"]
+                                            ["level"],
+                                  { "geometry", "drc_lite", "full_drc" } );
             };
 
     auto handleSchemaRequiresHandleId =
@@ -4684,6 +4741,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                         && boxSchemaSupportsCanonicalForms(
                                    contracts["pcb.refill_zones"]["properties"]
                                             ["affected_area"] );
+
+                sawAtomicRunMaintenanceScopeContract =
+                        contractsDeclareMaintenanceScopes( contracts );
             }
         }
 
@@ -4725,10 +4785,18 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                                             ["affected_area"] );
 
                 if( functionName == "script_run_bounded_plan" )
+                {
                     sawScriptAffectedAreaContract = hasAffectedAreaContract;
+                    sawScriptMaintenanceScopeContract =
+                            contractsDeclareMaintenanceScopes( contracts );
+                }
 
                 if( functionName == "repair_apply_bounded_plan" )
+                {
                     sawRepairAffectedAreaContract = hasAffectedAreaContract;
+                    sawRepairMaintenanceScopeContract =
+                            contractsDeclareMaintenanceScopes( contracts );
+                }
             }
 
             if( functionName == "script_run_bounded_plan"
@@ -5443,6 +5511,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawRepairAffectedAreaContract );
     BOOST_CHECK( sawAtomicRunAffectedAreaContract );
+    BOOST_CHECK( sawScriptMaintenanceScopeContract );
+    BOOST_CHECK( sawRepairMaintenanceScopeContract );
+    BOOST_CHECK( sawAtomicRunMaintenanceScopeContract );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
     BOOST_CHECK( sawPlacementOrientationRepairRequiredFacts );
