@@ -4856,6 +4856,9 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     placementTrigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
             wxS( "{\"cursor_region\":{\"x\":140,\"y\":80,"
                  "\"width\":100,\"height\":100},"
+                 "\"net\":\"GND\",\"diameter\":600000,"
+                 "\"drill\":300000,"
+                 "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
                  "\"viewport\":{\"center\":{\"x\":180,\"y\":80},"
                  "\"zoom\":3.0,\"width\":600,\"height\":400}}" );
     placementTrigger.m_ContextSnapshot.m_Anchors.push_back(
@@ -4977,6 +4980,32 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_candidate_facts"].at( 0 )["placeable_kind"]
                     .get<std::string>(),
             "via" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["name"].get<std::string>(),
+            "placement.repair_via" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["position"]["x"]
+                    .get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["diameter"].get<int>(),
+            600000 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["drill"].get<int>(),
+            300000 );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["layer_pair"]["start"]
+                    .get<std::string>(),
+            "F.Cu" );
     BOOST_CHECK_EQUAL(
             placementPacket["placement_candidate_facts"].at( 0 )
                     ["suggested_render_region"]["source"].get<std::string>(),

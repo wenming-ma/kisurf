@@ -5220,6 +5220,29 @@ nlohmann::json placementCandidateFactJson(
         }
     }
 
+    nlohmann::json modeContext = objectFromJsonText( aToolState.m_ModeContextJson );
+
+    if( fact.value( "placeable_kind", std::string() ) == "via"
+        && modeContext.contains( "net" )
+        && modeContext["net"].is_string()
+        && modeContext.contains( "diameter" )
+        && modeContext["diameter"].is_number_integer()
+        && modeContext.contains( "drill" )
+        && modeContext["drill"].is_number_integer()
+        && modeContext.contains( "layer_pair" )
+        && modeContext["layer_pair"].is_object() )
+    {
+        fact["suggested_tool_call"] =
+                { { "name", "placement.repair_via" },
+                  { "purpose", "hidden_attempt_repair_hint" },
+                  { "arguments",
+                    { { "position", fact["candidate_position"] },
+                      { "net", modeContext["net"] },
+                      { "diameter", modeContext["diameter"] },
+                      { "drill", modeContext["drill"] },
+                      { "layer_pair", modeContext["layer_pair"] } } } };
+    }
+
     nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
 
     if( details.is_object() )
