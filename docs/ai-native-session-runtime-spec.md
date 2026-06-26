@@ -495,8 +495,13 @@ Implemented in the current C++ common layer:
   `session.step(...)`, atomic helpers such as `create_via(...)` and
   `create_track_polyline(...)`, mutation helpers, validation/refill requests,
   query/observe/render-preview requests, checkpoint/rollback control requests,
-  and composite helpers such as `create_via_ring(...)` that lower into atomic
-  operations rather than becoming model-facing tools.
+  structured-surface helpers such as `apply_surface_patch(...)`, and composite
+  helpers such as `create_via_ring(...)` that lower into atomic operations
+  rather than becoming model-facing tools. `apply_surface_patch(...)` accepts
+  the same guard metadata used by the C++ runtime, including surface revision,
+  schema version, selection fingerprint, overlap set, and explicit
+  `write_policy` when the script needs to request a non-default overwrite
+  mode.
 - `common/kisurf/ai/python/pyproject.toml` makes the Python SDK installable as
   `kisurf-ai-session-sdk` and exposes `kisurf-ai-worker` as a console script
   entry point. The development build uses the source-tree SDK path when it
@@ -698,6 +703,13 @@ The SDK may expose composite helpers such as:
 - `stitch_zone(...)`
 
 Each helper must lower to atomic operation records and enter the journal.
+
+For structured surfaces, Python emits `surface.apply_patch` operations through
+`session.apply_surface_patch(...)`. The helper must forward guard fields and an
+explicit `write_policy` without interpreting them in Python. Omitted
+`write_policy` remains a runtime policy decision; explicit values such as
+`allow_overwrite` are preserved in the operation journal for validation,
+preview, and accept replay.
 
 ## Preview And Observation Flow
 
