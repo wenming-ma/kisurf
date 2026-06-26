@@ -6641,14 +6641,25 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE( routingPacket.contains( "local_obstacle_facts" ) );
 
     std::set<std::string> routingLocalObstacleLabels;
+    bool sawRoutingPadIdentity = false;
 
     for( const nlohmann::json& fact : routingPacket["local_obstacle_facts"] )
+    {
         routingLocalObstacleLabels.insert( fact["label"].get<std::string>() );
+
+        if( fact.value( "kind", "" ) == "pad_obstacle"
+            && fact.value( "footprint_reference", "" ) == "U4"
+            && fact.value( "pad_number", "" ) == "1" )
+        {
+            sawRoutingPadIdentity = true;
+        }
+    }
 
     BOOST_CHECK( routingLocalObstacleLabels.find( "track:180,210->300,210" )
                  != routingLocalObstacleLabels.end() );
     BOOST_CHECK( routingLocalObstacleLabels.find( "pad:U4.1" )
                  != routingLocalObstacleLabels.end() );
+    BOOST_CHECK( sawRoutingPadIdentity );
     BOOST_CHECK( routingLocalObstacleLabels.find( "track:1000,1000->1200,1000" )
                  == routingLocalObstacleLabels.end() );
     BOOST_REQUIRE( routingPacket.contains( "local_obstacle_summary" ) );
