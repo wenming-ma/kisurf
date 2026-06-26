@@ -86,6 +86,15 @@ wxString boolJson( bool aValue )
 }
 
 
+wxString intJsonOrNull( bool aHasValue, int aValue )
+{
+    if( aHasValue )
+        return wxString::Format( wxS( "%d" ), aValue );
+
+    return wxS( "null" );
+}
+
+
 wxString jsonArray( const std::vector<wxString>& aEntries )
 {
     wxString result;
@@ -2841,6 +2850,12 @@ wxString makePlacementFactsJson( const BOARD& aBoard )
     std::vector<FOOTPRINT_COURTYARD_FACT> courtyardFootprints;
     std::vector<wxString>                 pairEntries;
     size_t                                footprintCount = 0;
+    size_t                                pairCount = 0;
+    size_t                                overlapCount = 0;
+    int                                   minSpacing = 0;
+    int                                   minNonOverlappingSpacing = 0;
+    bool                                  hasPair = false;
+    bool                                  hasNonOverlappingPair = false;
     bool                                  pairSampleTruncated = false;
 
     for( FOOTPRINT* footprint : aBoard.Footprints() )
@@ -2870,26 +2885,52 @@ wxString makePlacementFactsJson( const BOARD& aBoard )
             if( !a.m_Footprint || !b.m_Footprint || a.m_Layer != b.m_Layer )
                 continue;
 
-            if( pairEntries.size() >= maxCourtyardPairSample )
+            const int  spacing = bboxSpacing( a.m_BBox, b.m_BBox );
+            const bool overlaps = bboxOverlapsWithArea( a.m_BBox, b.m_BBox );
+
+            ++pairCount;
+
+            if( !hasPair || spacing < minSpacing )
+                minSpacing = spacing;
+
+            hasPair = true;
+
+            if( overlaps )
             {
-                pairSampleTruncated = true;
-                break;
+                ++overlapCount;
+            }
+            else
+            {
+                if( !hasNonOverlappingPair || spacing < minNonOverlappingSpacing )
+                    minNonOverlappingSpacing = spacing;
+
+                hasNonOverlappingPair = true;
             }
 
-            pairEntries.push_back( courtyardPairJson( *a.m_Footprint, a.m_BBox,
-                                                       *b.m_Footprint, b.m_BBox,
-                                                       a.m_Layer ) );
+            if( pairEntries.size() < maxCourtyardPairSample )
+            {
+                pairEntries.push_back( courtyardPairJson( *a.m_Footprint, a.m_BBox,
+                                                           *b.m_Footprint, b.m_BBox,
+                                                           a.m_Layer ) );
+            }
+            else
+            {
+                pairSampleTruncated = true;
+            }
         }
-
-        if( pairSampleTruncated )
-            break;
     }
 
     return wxString::Format(
             wxS( "{\"source\":\"board\",\"footprint_count\":%zu,"
                  "\"footprints_with_courtyard_count\":%zu,"
+                 "\"courtyard_pair_count\":%zu,\"courtyard_overlap_count\":%zu,"
+                 "\"minimum_courtyard_bbox_spacing\":%s,"
+                 "\"minimum_non_overlapping_courtyard_bbox_spacing\":%s,"
                  "\"courtyard_pairs\":%s,\"courtyard_pair_sample_truncated\":%s}" ),
-            footprintCount, courtyardFootprints.size(), jsonArray( pairEntries ),
+            footprintCount, courtyardFootprints.size(), pairCount, overlapCount,
+            intJsonOrNull( hasPair, minSpacing ),
+            intJsonOrNull( hasNonOverlappingPair, minNonOverlappingSpacing ),
+            jsonArray( pairEntries ),
             boolJson( pairSampleTruncated ) );
 }
 

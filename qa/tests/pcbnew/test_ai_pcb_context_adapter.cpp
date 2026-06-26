@@ -1907,6 +1907,12 @@ BOOST_AUTO_TEST_CASE( AdapterAddsPlacementCourtyardPairFacts )
 
     BOOST_CHECK_EQUAL( placementFacts["footprint_count"].get<int>(), 3 );
     BOOST_CHECK_EQUAL( placementFacts["footprints_with_courtyard_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( placementFacts["courtyard_pair_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( placementFacts["courtyard_overlap_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( placementFacts["minimum_courtyard_bbox_spacing"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL( placementFacts["minimum_non_overlapping_courtyard_bbox_spacing"].get<int>(),
+                       bboxSpacingForTest( u1->GetCourtyard( F_CrtYd ).BBox(),
+                                           u2->GetCourtyard( F_CrtYd ).BBox() ) );
     BOOST_CHECK_EQUAL( placementFacts["courtyard_pair_sample_truncated"].get<bool>(), false );
     BOOST_REQUIRE_GE( placementFacts["courtyard_pairs"].size(), 3u );
 

@@ -3829,6 +3829,12 @@ nlohmann::json placementContextFactsJson( const AI_CONTEXT_SNAPSHOT& aContext )
     copyJsonFieldIfPresent( summary, placementFacts, "footprint_count" );
     copyJsonFieldIfPresent( summary, placementFacts,
                             "footprints_with_courtyard_count" );
+    copyJsonFieldIfPresent( summary, placementFacts, "courtyard_pair_count" );
+    copyJsonFieldIfPresent( summary, placementFacts, "courtyard_overlap_count" );
+    copyJsonFieldIfPresent( summary, placementFacts,
+                            "minimum_courtyard_bbox_spacing" );
+    copyJsonFieldIfPresent( summary, placementFacts,
+                            "minimum_non_overlapping_courtyard_bbox_spacing" );
     copyJsonFieldIfPresent( summary, placementFacts,
                             "courtyard_pair_sample_truncated" );
 
