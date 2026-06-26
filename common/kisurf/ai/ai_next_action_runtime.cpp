@@ -9105,6 +9105,12 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                     summary["trace_hidden_operation_count"] =
                             aTraceEval->m_HiddenOperationCount;
                     summary["trace_attempt_count"] = aTraceEval->m_AttemptCount;
+                    summary["trace_decision_tool_result_count"] =
+                            aTraceEval->m_DecisionToolResultCount;
+                    summary["trace_review_tool_result_count"] =
+                            aTraceEval->m_ReviewToolResultCount;
+                    summary["trace_preview_gate_feedback_count"] =
+                            aTraceEval->m_PreviewGateFeedbackCount;
                     summary["trace_preview_gate_allowed"] =
                             aTraceEval->m_PreviewGateAllowed;
                 }
@@ -9210,6 +9216,39 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
         return finish( true, false,
                        wxS( "hidden_operation_count_below_minimum" ),
                        wxS( "Replay hidden operation count is below expected minimum." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "min_decision_tool_result_count" )
+        && expected["min_decision_tool_result_count"].is_number_unsigned()
+        && traceEval.m_DecisionToolResultCount
+           < expected["min_decision_tool_result_count"].get<size_t>() )
+    {
+        return finish( true, false,
+                       wxS( "decision_tool_result_count_below_minimum" ),
+                       wxS( "Replay decision tool result count is below expected minimum." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "min_review_tool_result_count" )
+        && expected["min_review_tool_result_count"].is_number_unsigned()
+        && traceEval.m_ReviewToolResultCount
+           < expected["min_review_tool_result_count"].get<size_t>() )
+    {
+        return finish( true, false,
+                       wxS( "review_tool_result_count_below_minimum" ),
+                       wxS( "Replay review tool result count is below expected minimum." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "min_preview_gate_feedback_count" )
+        && expected["min_preview_gate_feedback_count"].is_number_unsigned()
+        && traceEval.m_PreviewGateFeedbackCount
+           < expected["min_preview_gate_feedback_count"].get<size_t>() )
+    {
+        return finish( true, false,
+                       wxS( "preview_gate_feedback_count_below_minimum" ),
+                       wxS( "Replay preview gate feedback count is below expected minimum." ),
                        &traceEval );
     }
 
