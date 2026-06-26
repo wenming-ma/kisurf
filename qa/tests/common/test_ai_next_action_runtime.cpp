@@ -4997,6 +4997,28 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_candidate_facts"].at( 0 )
                     ["suggested_render_region"]["bbox"]["width"].get<int>(),
             100 );
+    BOOST_REQUIRE(
+            placementPacket["placement_candidate_facts"].at( 0 )
+                    .contains( "candidate_obstacle_facts" ) );
+
+    std::set<std::string> placementCandidateObstacleLabels;
+
+    for( const nlohmann::json& fact : placementPacket["placement_candidate_facts"]
+                                              .at( 0 )["candidate_obstacle_facts"] )
+    {
+        placementCandidateObstacleLabels.insert( fact["label"].get<std::string>() );
+    }
+
+    BOOST_CHECK( placementCandidateObstacleLabels.find( "via:200,50" )
+                 != placementCandidateObstacleLabels.end() );
+    BOOST_CHECK( placementCandidateObstacleLabels.find( "footprint:U1" )
+                 != placementCandidateObstacleLabels.end() );
+    BOOST_CHECK( placementCandidateObstacleLabels.find( "keepout:J1" )
+                 != placementCandidateObstacleLabels.end() );
+    BOOST_CHECK( placementCandidateObstacleLabels.find( "via:100,50" )
+                 == placementCandidateObstacleLabels.end() );
+    BOOST_CHECK( placementCandidateObstacleLabels.find( "via:300,50" )
+                 == placementCandidateObstacleLabels.end() );
     BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 5 );
     BOOST_CHECK_EQUAL(
