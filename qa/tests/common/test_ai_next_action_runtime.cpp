@@ -7493,6 +7493,8 @@ BOOST_AUTO_TEST_CASE( RuntimeLowersSurfacePatchPlanIntoHiddenAttemptJournal )
             wxS( "\"patch_operation_count\":2" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains(
             wxS( "\"surface_patch_fill_class\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"direct_publish\":false" ) ) );
 
@@ -7502,6 +7504,7 @@ BOOST_AUTO_TEST_CASE( RuntimeLowersSurfacePatchPlanIntoHiddenAttemptJournal )
     BOOST_CHECK( journal.Contains( wxS( "\"kind\":\"surface.apply_patch\"" ) ) );
     BOOST_CHECK( journal.Contains( wxS( "\"surface_patch_fill_class\"" ) ) );
     BOOST_CHECK( journal.Contains( wxS( "\"patch_operation_count\":2" ) ) );
+    BOOST_CHECK( journal.Contains( wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
     BOOST_CHECK( journal.Contains(
             wxS( "\"merged_from_tool_call_id\":\"call_surface_patch\"" ) ) );
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
