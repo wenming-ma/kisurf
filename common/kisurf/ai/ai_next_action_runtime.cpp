@@ -4097,6 +4097,22 @@ nlohmann::json routingReachabilityFactsJson(
                               { "purpose", "hidden_attempt_repair_hint" },
                               { "arguments", toolArgs } };
                 }
+
+                if( modeContext.contains( "layer" )
+                    && modeContext["layer"].is_string() )
+                {
+                    const std::string activeLayer =
+                            modeContext["layer"].get<std::string>();
+                    fact["layer_reachability"] =
+                            { { "source", "mode_context.layer" },
+                              { "active_layer", activeLayer },
+                              { "candidate_layer", activeLayer },
+                              { "layer_known", true },
+                              { "requires_layer_switch", false },
+                              { "via_required", false },
+                              { "strategy", "current_layer_first_hint" },
+                              { "review_required", true } };
+                }
             }
 
             fact["suggested_render_region"] =

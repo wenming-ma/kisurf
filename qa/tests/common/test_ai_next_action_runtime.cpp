@@ -5610,6 +5610,24 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_reachability_facts"].at( 0 )
                     ["suggested_tool_call"]["arguments"]["width"].get<int>(),
             30 );
+    BOOST_REQUIRE(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    .contains( "layer_reachability" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["layer_reachability"]["source"].get<std::string>(),
+            "mode_context.layer" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["layer_reachability"]["active_layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["layer_reachability"]["candidate_layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK(
+            !routingPacket["routing_reachability_facts"].at( 0 )
+                     ["layer_reachability"]["requires_layer_switch"].get<bool>() );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_reachability_facts"].at( 0 )
                     ["suggested_render_region"]["source"].get<std::string>(),
