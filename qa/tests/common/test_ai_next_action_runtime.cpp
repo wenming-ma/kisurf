@@ -4502,10 +4502,25 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"surface_repair\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"raw_board_access\":false" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"direct_publish\":false" ) ) );
-    BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"runtime_gate\"" ) ) );
-    BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"publish_gated\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"publication_policy\"" ) ) );
+    BOOST_CHECK( catalog.Contains( wxS( "\"runtime_gate_owned\":true" ) ) );
     BOOST_CHECK( catalog.Contains(
-            wxS( "\"requires_review_decision\":\"publish\"" ) ) );
+            wxS( "\"required_review_decision\":\"publish\"" ) ) );
+    BOOST_CHECK( !catalog.Contains( wxS( "\"name\":\"publish.preview\"" ) ) );
+
+    bool sawPublicationPolicy = false;
+    for( const nlohmann::json& entry : catalogJson )
+    {
+        if( entry.is_object() && entry.contains( "publication_policy" ) )
+        {
+            sawPublicationPolicy = true;
+            BOOST_CHECK( !entry.contains( "name" ) );
+            BOOST_CHECK( !entry.contains( "namespace" ) );
+            BOOST_CHECK( !entry.contains( "layer" ) );
+        }
+    }
+    BOOST_CHECK( sawPublicationPolicy );
+
     BOOST_CHECK( !catalog.Contains( wxS( "\"can_publish\":true" ) ) );
     BOOST_CHECK( !catalog.Contains( wxS( "\"name\":\"candidate.generate\"" ) ) );
     BOOST_CHECK( !catalog.Contains(
@@ -7342,7 +7357,11 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
             wxS( "dependency_fingerprint" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
-            wxS( "publish.preview" ) ) );
+            wxS( "publication_policy" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "\"publish_is_callable_tool\":false" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "\"name\":\"publish.preview\"" ) ) );
     BOOST_CHECK( !provider->m_Requests.at( 0 ).m_ToolCatalogJson.Contains(
             wxS( "publish.preview" ) ) );
     BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(

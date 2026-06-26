@@ -11632,12 +11632,11 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "requires_lowering_to",
                   nlohmann::json::array( { "atomic", "integrated" } ) },
                 { "max_steps", 32 } },
-              { { "name", "publish.preview" },
-                { "layer", "runtime_gate" },
-                { "role", "runtime_publication_gate" },
-                { "side_effect", "publish_gated" },
-                { "can_publish", false },
-                { "requires_review_decision", "publish" } } } );
+              { { "publication_policy",
+                  { { "runtime_gate_owned", true },
+                    { "required_review_decision", "publish" },
+                    { "publish_is_callable_tool", false },
+                    { "publish_path", "review_decision_then_runtime_promotion" } } } } } );
 
     auto namespaceForTool =
             []( const std::string& aName )
@@ -11665,7 +11664,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
 
     for( nlohmann::json& tool : tools )
     {
-        if( tool.is_object() )
+        if( tool.is_object() && tool.contains( "name" ) )
             tool["namespace"] = namespaceForTool(
                     tool.value( "name", std::string() ) );
     }
