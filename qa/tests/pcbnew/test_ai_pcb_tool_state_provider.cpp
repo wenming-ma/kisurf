@@ -273,6 +273,11 @@ BOOST_AUTO_TEST_CASE( ViaModeContextIncludesBoardViaSizesAndCursor )
     BOOST_CHECK_EQUAL( shared["via_drill"].get<int>(), 330000 );
     BOOST_CHECK_EQUAL( mode["diameter"].get<int>(), 700000 );
     BOOST_CHECK_EQUAL( mode["drill"].get<int>(), 330000 );
+    BOOST_REQUIRE( mode.contains( "net" ) );
+    BOOST_CHECK_EQUAL( mode["net"].get<std::string>(), "" );
+    BOOST_REQUIRE( mode.contains( "layer_pair" ) );
+    BOOST_CHECK_EQUAL( mode["layer_pair"]["start"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( mode["layer_pair"]["end"].get<std::string>(), "B.Cu" );
     BOOST_CHECK_EQUAL( mode["cursor"]["x"].get<int>(), 71 );
     BOOST_CHECK_EQUAL( mode["cursor"]["y"].get<int>(), 82 );
 }
