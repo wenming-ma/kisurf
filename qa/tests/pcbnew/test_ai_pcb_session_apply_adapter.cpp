@@ -900,6 +900,138 @@ BOOST_AUTO_TEST_CASE( AcceptReplayCreatesPolygonShape )
 }
 
 
+BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedCircleShape )
+{
+    BOARD board;
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "reshape circle shape" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"circle-marker\",\"shape_type\":\"circle\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"geometry\":{\"center\":{\"x\":10,\"y\":20},\"radius\":30}}" ) )
+                           .m_Ok );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::UpdateItemGeometry,
+            wxS( "{\"handle\":\"circle-marker\","
+                 "\"geometry_patch\":{\"center\":{\"x\":40,\"y\":50},\"radius\":60}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_REQUIRE_EQUAL( board.Drawings().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( board.Drawings().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::CIRCLE );
+    BOOST_CHECK_EQUAL( shape->GetStart().x, 40 );
+    BOOST_CHECK_EQUAL( shape->GetStart().y, 50 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().x, 100 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().y, 50 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedArcShape )
+{
+    BOARD board;
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "reshape arc shape" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"arc-marker\",\"shape_type\":\"arc\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,"
+                 "\"geometry\":{\"start\":{\"x\":0,\"y\":0},"
+                 "\"mid\":{\"x\":50,\"y\":100},\"end\":{\"x\":100,\"y\":0}}}" ) )
+                           .m_Ok );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::UpdateItemGeometry,
+            wxS( "{\"handle\":\"arc-marker\","
+                 "\"geometry_patch\":{\"start\":{\"x\":10,\"y\":0},"
+                 "\"mid\":{\"x\":60,\"y\":120},\"end\":{\"x\":110,\"y\":0}}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_REQUIRE_EQUAL( board.Drawings().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( board.Drawings().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::ARC );
+    BOOST_CHECK( shape->EndsSwapped() );
+    BOOST_CHECK_EQUAL( shape->GetStart().x, 110 );
+    BOOST_CHECK_EQUAL( shape->GetStart().y, 0 );
+    BOOST_CHECK_EQUAL( shape->GetArcMid().x, 60 );
+    BOOST_CHECK_LE( std::abs( shape->GetArcMid().y - 120 ), 1 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().x, 10 );
+    BOOST_CHECK_EQUAL( shape->GetEnd().y, 0 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedPolygonShape )
+{
+    BOARD board;
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "reshape polygon shape" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateShape,
+            wxS( "{\"alias\":\"poly-marker\",\"shape_type\":\"polygon\","
+                 "\"layer\":\"F.SilkS\",\"width\":50000,\"fill\":true,"
+                 "\"geometry\":{\"points\":[{\"x\":0,\"y\":0},"
+                 "{\"x\":100,\"y\":0},{\"x\":100,\"y\":100},"
+                 "{\"x\":0,\"y\":100}]}}" ) )
+                           .m_Ok );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::UpdateItemGeometry,
+            wxS( "{\"handle\":\"poly-marker\","
+                 "\"geometry_patch\":{\"points\":[{\"x\":0,\"y\":0},"
+                 "{\"x\":200,\"y\":0},{\"x\":200,\"y\":150},"
+                 "{\"x\":0,\"y\":150}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_REQUIRE_EQUAL( board.Drawings().size(), 1 );
+
+    PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( board.Drawings().front() );
+    BOOST_REQUIRE( shape );
+    BOOST_CHECK( shape->GetShape() == SHAPE_T::POLY );
+    BOOST_REQUIRE_EQUAL( shape->GetPolyShape().OutlineCount(), 1 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).PointCount(), 4 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).x, 200 );
+    BOOST_CHECK_EQUAL( shape->GetPolyShape().Outline( 0 ).CPoint( 2 ).y, 150 );
+}
+
+
 BOOST_AUTO_TEST_CASE( AcceptReplayAppliesGeometryPatchToCreatedZoneOutline )
 {
     BOARD board;

@@ -722,30 +722,92 @@ bool updateItemGeometry( BOARD_ITEM& aItem, const nlohmann::json& aPatch,
 
     if( PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( &aItem ) )
     {
-        if( aPatch.contains( "start" ) )
+        if( shape->GetShape() == SHAPE_T::CIRCLE
+            && ( aPatch.contains( "center" ) || aPatch.contains( "radius" ) ) )
         {
-            std::optional<VECTOR2I> start = pointFromJson( aPatch["start"] );
+            std::optional<VECTOR2I> center =
+                    aPatch.contains( "center" ) ? pointFromJson( aPatch["center"] )
+                                                 : std::optional<VECTOR2I>( shape->GetStart() );
+            std::optional<int> radius =
+                    aPatch.contains( "radius" ) ? intField( aPatch, "radius" )
+                                                : std::optional<int>( shape->GetRadius() );
 
-            if( !start )
+            if( !center )
             {
-                aError = wxS( "Shape geometry patch has an invalid start." );
+                aError = wxS( "Circle geometry patch has an invalid center." );
                 return false;
             }
 
-            shape->SetStart( *start );
+            if( !radius || *radius <= 0 )
+            {
+                aError = wxS( "Circle geometry patch has an invalid radius." );
+                return false;
+            }
+
+            shape->SetStart( *center );
+            shape->SetEnd( VECTOR2I( center->x + *radius, center->y ) );
         }
-
-        if( aPatch.contains( "end" ) )
+        else if( shape->GetShape() == SHAPE_T::ARC
+                 && ( aPatch.contains( "start" ) || aPatch.contains( "mid" )
+                      || aPatch.contains( "end" ) ) )
         {
-            std::optional<VECTOR2I> end = pointFromJson( aPatch["end"] );
+            std::optional<VECTOR2I> start =
+                    aPatch.contains( "start" ) ? pointFromJson( aPatch["start"] )
+                                               : std::optional<VECTOR2I>( shape->GetStart() );
+            std::optional<VECTOR2I> mid =
+                    aPatch.contains( "mid" ) ? pointFromJson( aPatch["mid"] )
+                                             : std::optional<VECTOR2I>( shape->GetArcMid() );
+            std::optional<VECTOR2I> end =
+                    aPatch.contains( "end" ) ? pointFromJson( aPatch["end"] )
+                                             : std::optional<VECTOR2I>( shape->GetEnd() );
 
-            if( !end )
+            if( !start || !mid || !end )
             {
-                aError = wxS( "Shape geometry patch has an invalid end." );
+                aError = wxS( "Arc geometry patch requires valid start, mid, and end." );
                 return false;
             }
 
-            shape->SetEnd( *end );
+            shape->SetArcGeometry( *start, *mid, *end );
+        }
+        else if( shape->GetShape() == SHAPE_T::POLY && aPatch.contains( "points" ) )
+        {
+            std::vector<VECTOR2I> points = pointsFromJsonArray( aPatch["points"] );
+
+            if( points.size() < 3 )
+            {
+                aError = wxS( "Polygon geometry patch requires at least three points." );
+                return false;
+            }
+
+            shape->SetPolyPoints( points );
+        }
+        else
+        {
+            if( aPatch.contains( "start" ) )
+            {
+                std::optional<VECTOR2I> start = pointFromJson( aPatch["start"] );
+
+                if( !start )
+                {
+                    aError = wxS( "Shape geometry patch has an invalid start." );
+                    return false;
+                }
+
+                shape->SetStart( *start );
+            }
+
+            if( aPatch.contains( "end" ) )
+            {
+                std::optional<VECTOR2I> end = pointFromJson( aPatch["end"] );
+
+                if( !end )
+                {
+                    aError = wxS( "Shape geometry patch has an invalid end." );
+                    return false;
+                }
+
+                shape->SetEnd( *end );
+            }
         }
 
         if( std::optional<int> width = intField( aPatch, "width" ) )
