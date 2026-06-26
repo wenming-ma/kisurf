@@ -4674,9 +4674,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptZoneOutlineContract = false;
     bool sawScriptTypedPropsContract = false;
     bool sawScriptAffectedAreaContract = false;
+    bool sawScriptSurfacePatchFillOpsContract = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawRepairAffectedAreaContract = false;
+    bool sawRepairSurfacePatchFillOpsContract = false;
     bool sawAtomicRunAffectedAreaContract = false;
+    bool sawAtomicRunSurfacePatchFillOpsContract = false;
     bool sawScriptMaintenanceScopeContract = false;
     bool sawRepairMaintenanceScopeContract = false;
     bool sawAtomicRunMaintenanceScopeContract = false;
@@ -4689,6 +4692,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawSurfaceRepairRequiredPatch = false;
     bool sawSurfaceRepairExpectedMetadata = false;
     bool sawSurfaceRepairWritePolicy = false;
+    bool sawSurfaceRepairPatchFillOpsContract = false;
     bool sawPlacementRepairPointSchema = false;
     bool sawPlacementMoveDeltaPointSchema = false;
     bool sawRoutingRepairSegmentPointSchema = false;
@@ -4808,6 +4812,52 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 }
 
                 return true;
+            };
+
+    auto surfacePatchSchemaDeclaresFillOps =
+            [&]( const nlohmann::json& aPatchSchema )
+            {
+                if( !aPatchSchema.is_object()
+                    || aPatchSchema.value( "type", std::string() ) != "object"
+                    || !aPatchSchema.contains( "properties" )
+                    || !aPatchSchema["properties"].contains( "operations" ) )
+                {
+                    return false;
+                }
+
+                const nlohmann::json& operations =
+                        aPatchSchema["properties"]["operations"];
+
+                if( !operations.is_object()
+                    || operations.value( "type", std::string() ) != "array"
+                    || !operations.contains( "items" )
+                    || !operations["items"].contains( "properties" )
+                    || !operations["items"]["properties"].contains( "op" ) )
+                {
+                    return false;
+                }
+
+                const nlohmann::json& opSchema =
+                        operations["items"]["properties"]["op"];
+
+                if( !stringEnumContainsAll(
+                            opSchema,
+                            { "set_cell", "fill_row", "fill_column",
+                              "fill_range", "set_field", "set_property" } ) )
+                {
+                    return false;
+                }
+
+                const nlohmann::json& opProperties =
+                        operations["items"]["properties"];
+
+                return opProperties.contains( "row_id" )
+                       && opProperties.contains( "column_id" )
+                       && opProperties.contains( "field_id" )
+                       && opProperties.contains( "property_id" )
+                       && opProperties.contains( "value" )
+                       && opProperties.contains( "values" )
+                       && opProperties.contains( "cells" );
             };
 
     auto contractsDeclareMaintenanceScopes =
@@ -4976,6 +5026,17 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                         && contracts["surface.apply_patch"]["properties"]
                                    ["expected_schema_version"].is_object();
 
+                if( contracts.contains( "surface.apply_patch" )
+                    && contracts["surface.apply_patch"].contains( "properties" )
+                    && contracts["surface.apply_patch"]["properties"].contains(
+                               "patch" ) )
+                {
+                    sawAtomicRunSurfacePatchFillOpsContract =
+                            surfacePatchSchemaDeclaresFillOps(
+                                    contracts["surface.apply_patch"]["properties"]
+                                             ["patch"] );
+                }
+
                 sawAtomicRunAffectedAreaContract =
                         contracts.contains( "pcb.refill_zones" )
                         && contracts["pcb.refill_zones"].contains( "properties" )
@@ -5079,6 +5140,18 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     sawScriptAffectedAreaContract = hasAffectedAreaContract;
                     sawScriptMaintenanceScopeContract =
                             contractsDeclareMaintenanceScopes( contracts );
+
+                    if( contracts.contains( "surface.apply_patch" )
+                        && contracts["surface.apply_patch"].contains(
+                                   "properties" )
+                        && contracts["surface.apply_patch"]["properties"]
+                                   .contains( "patch" ) )
+                    {
+                        sawScriptSurfacePatchFillOpsContract =
+                                surfacePatchSchemaDeclaresFillOps(
+                                        contracts["surface.apply_patch"]
+                                                 ["properties"]["patch"] );
+                    }
                 }
 
                 if( functionName == "repair_apply_bounded_plan" )
@@ -5086,6 +5159,18 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                     sawRepairAffectedAreaContract = hasAffectedAreaContract;
                     sawRepairMaintenanceScopeContract =
                             contractsDeclareMaintenanceScopes( contracts );
+
+                    if( contracts.contains( "surface.apply_patch" )
+                        && contracts["surface.apply_patch"].contains(
+                                   "properties" )
+                        && contracts["surface.apply_patch"]["properties"]
+                                   .contains( "patch" ) )
+                    {
+                        sawRepairSurfacePatchFillOpsContract =
+                                surfacePatchSchemaDeclaresFillOps(
+                                        contracts["surface.apply_patch"]
+                                                 ["properties"]["patch"] );
+                    }
                 }
             }
 
@@ -5764,6 +5849,11 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                 }
             }
 
+            sawSurfaceRepairPatchFillOpsContract =
+                    properties.contains( "patch" )
+                    && surfacePatchSchemaDeclaresFillOps(
+                               properties["patch"] );
+
         }
     }
 
@@ -5798,9 +5888,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptZoneOutlineContract );
     BOOST_CHECK( sawScriptTypedPropsContract );
     BOOST_CHECK( sawScriptAffectedAreaContract );
+    BOOST_CHECK( sawScriptSurfacePatchFillOpsContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawRepairAffectedAreaContract );
+    BOOST_CHECK( sawRepairSurfacePatchFillOpsContract );
     BOOST_CHECK( sawAtomicRunAffectedAreaContract );
+    BOOST_CHECK( sawAtomicRunSurfacePatchFillOpsContract );
     BOOST_CHECK( sawScriptMaintenanceScopeContract );
     BOOST_CHECK( sawRepairMaintenanceScopeContract );
     BOOST_CHECK( sawAtomicRunMaintenanceScopeContract );
@@ -5832,6 +5925,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( sawSurfaceRepairWritePolicy );
+    BOOST_CHECK( sawSurfaceRepairPatchFillOpsContract );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(

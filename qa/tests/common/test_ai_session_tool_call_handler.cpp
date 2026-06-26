@@ -144,6 +144,50 @@ bool stringEnumContainsAll( const nlohmann::json& aSchema,
 }
 
 
+bool surfacePatchSchemaDeclaresFillOps( const nlohmann::json& aPatchSchema )
+{
+    if( !aPatchSchema.is_object() || aPatchSchema.value( "type", std::string() ) != "object"
+        || !aPatchSchema.contains( "properties" )
+        || !aPatchSchema["properties"].contains( "operations" ) )
+    {
+        return false;
+    }
+
+    const nlohmann::json& operations =
+            aPatchSchema["properties"]["operations"];
+
+    if( !operations.is_object() || operations.value( "type", std::string() ) != "array"
+        || !operations.contains( "items" )
+        || !operations["items"].contains( "properties" )
+        || !operations["items"]["properties"].contains( "op" ) )
+    {
+        return false;
+    }
+
+    const nlohmann::json& opSchema =
+            operations["items"]["properties"]["op"];
+
+    if( !stringEnumContainsAll(
+                opSchema,
+                { "set_cell", "fill_row", "fill_column", "fill_range",
+                  "set_field", "set_property" } ) )
+    {
+        return false;
+    }
+
+    const nlohmann::json& opProperties =
+            operations["items"]["properties"];
+
+    return opProperties.contains( "row_id" )
+           && opProperties.contains( "column_id" )
+           && opProperties.contains( "field_id" )
+           && opProperties.contains( "property_id" )
+           && opProperties.contains( "value" )
+           && opProperties.contains( "values" )
+           && opProperties.contains( "cells" );
+}
+
+
 bool queryFilterSchemaSupportsShadowFilters( const nlohmann::json& aSchema )
 {
     if( !aSchema.is_object() || aSchema.value( "type", std::string() ) != "object"
@@ -747,6 +791,10 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                  != zoneOutlinePointsContract["items"]["required"].end() );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["required"].dump().find(
                          "surface_id" ) != std::string::npos );
+    BOOST_REQUIRE( operationContracts["surface.apply_patch"]["properties"].contains(
+            "patch" ) );
+    BOOST_CHECK( surfacePatchSchemaDeclaresFillOps(
+            operationContracts["surface.apply_patch"]["properties"]["patch"] ) );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
                          ["expected_surface_revision"].is_object() );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]

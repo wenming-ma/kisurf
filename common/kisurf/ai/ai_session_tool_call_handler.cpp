@@ -209,6 +209,86 @@ nlohmann::json catalogPointArraySchema( const char* aDescription, int aMinItems 
 }
 
 
+nlohmann::json catalogSurfacePatchSchema()
+{
+    nlohmann::json valueSchema =
+            { { "description",
+                "Scalar or structured value to write into the target surface." } };
+
+    nlohmann::json rangeCellSchema =
+            { { "type", "object" },
+              { "additionalProperties", false },
+              { "properties",
+                { { "table_id", { { "type", "string" } } },
+                  { "row_id", { { "type", "string" } } },
+                  { "column_id", { { "type", "string" } } },
+                  { "value", valueSchema } } },
+              { "required",
+                nlohmann::json::array( { "row_id", "column_id", "value" } ) } };
+
+    nlohmann::json operationSchema =
+            { { "type", "object" },
+              { "additionalProperties", false },
+              { "properties",
+                { { "op",
+                    { { "type", "string" },
+                      { "enum",
+                        nlohmann::json::array(
+                                { "set_cell", "fill_row", "fill_column",
+                                  "fill_range", "set_field",
+                                  "set_property" } ) },
+                      { "description",
+                        "Typed SurfacePatch operation. fill_row/fill_column/"
+                        "fill_range lower to cell writes; set_property lowers "
+                        "to a field write." } } },
+                  { "table_id", { { "type", "string" } } },
+                  { "row_id", { { "type", "string" } } },
+                  { "column_id", { { "type", "string" } } },
+                  { "field_id", { { "type", "string" } } },
+                  { "property_id", { { "type", "string" } } },
+                  { "value", valueSchema },
+                  { "values",
+                    { { "type", "object" },
+                      { "description",
+                        "fill_row maps column_id to value; fill_column maps "
+                        "row_id to value." },
+                      { "additionalProperties", true } } },
+                  { "cells",
+                    { { "type", "array" },
+                      { "description",
+                        "fill_range cell writes with row_id, column_id, and value." },
+                      { "items", rangeCellSchema },
+                      { "minItems", 1 } } } } },
+              { "required", nlohmann::json::array( { "op" } ) } };
+
+    return { { "type", "object" },
+             { "additionalProperties", true },
+             { "properties",
+               { { "kind",
+                   { { "type", "string" },
+                     { "enum", nlohmann::json::array( { "SurfacePatch" } ) } } },
+                 { "operations",
+                   { { "type", "array" },
+                     { "description",
+                       "Ordered typed SurfacePatch operations to apply." },
+                     { "items", operationSchema },
+                     { "minItems", 1 } } },
+                 { "ops",
+                   { { "type", "array" },
+                     { "description",
+                       "Alias for operations; use operations for new calls." },
+                     { "items", operationSchema },
+                     { "minItems", 1 } } },
+                 { "changes",
+                   { { "type", "array" },
+                     { "description",
+                       "Alias for operations; use operations for new calls." },
+                     { "items", operationSchema },
+                     { "minItems", 1 } } } } },
+             { "required", nlohmann::json::array( { "operations" } ) } };
+}
+
+
 nlohmann::json catalogBoxSchema( const char* aDescription )
 {
     return { { "description", aDescription },
@@ -600,7 +680,7 @@ nlohmann::json sessionAtomicOperationContractsJson()
                 { "table_id", { { "type", "string" } } },
                 { "target_scope",
                   { { "type", "object" }, { "additionalProperties", true } } },
-                { "patch", { { "type", "object" }, { "additionalProperties", true } } },
+                { "patch", catalogSurfacePatchSchema() },
                 { "write_policy",
                   { { "type", "string" },
                     { "enum",

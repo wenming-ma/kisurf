@@ -12086,6 +12086,102 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto surfacePatchSchema =
+                        []()
+                        {
+                            nlohmann::json valueSchema =
+                                    { { "description",
+                                        "Scalar or structured value to write into the target surface." } };
+
+                            nlohmann::json rangeCellSchema =
+                                    { { "type", "object" },
+                                      { "additionalProperties", false },
+                                      { "properties",
+                                        { { "table_id", { { "type", "string" } } },
+                                          { "row_id", { { "type", "string" } } },
+                                          { "column_id", { { "type", "string" } } },
+                                          { "value", valueSchema } } },
+                                      { "required",
+                                        nlohmann::json::array(
+                                                { "row_id", "column_id",
+                                                  "value" } ) } };
+
+                            nlohmann::json operationSchema =
+                                    { { "type", "object" },
+                                      { "additionalProperties", false },
+                                      { "properties",
+                                        { { "op",
+                                            { { "type", "string" },
+                                              { "enum",
+                                                nlohmann::json::array(
+                                                        { "set_cell",
+                                                          "fill_row",
+                                                          "fill_column",
+                                                          "fill_range",
+                                                          "set_field",
+                                                          "set_property" } ) },
+                                              { "description",
+                                                "Typed SurfacePatch operation. "
+                                                "fill_row/fill_column/fill_range "
+                                                "lower to cell writes; set_property "
+                                                "lowers to a field write." } } },
+                                          { "table_id", { { "type", "string" } } },
+                                          { "row_id", { { "type", "string" } } },
+                                          { "column_id", { { "type", "string" } } },
+                                          { "field_id", { { "type", "string" } } },
+                                          { "property_id", { { "type", "string" } } },
+                                          { "value", valueSchema },
+                                          { "values",
+                                            { { "type", "object" },
+                                              { "description",
+                                                "fill_row maps column_id to value; "
+                                                "fill_column maps row_id to value." },
+                                              { "additionalProperties", true } } },
+                                          { "cells",
+                                            { { "type", "array" },
+                                              { "description",
+                                                "fill_range cell writes with row_id, "
+                                                "column_id, and value." },
+                                              { "items", rangeCellSchema },
+                                              { "minItems", 1 } } } } },
+                                      { "required",
+                                        nlohmann::json::array( { "op" } ) } };
+
+                            return nlohmann::json{
+                                { "type", "object" },
+                                { "additionalProperties", true },
+                                { "properties",
+                                  { { "kind",
+                                      { { "type", "string" },
+                                        { "enum",
+                                          nlohmann::json::array(
+                                                  { "SurfacePatch" } ) } } },
+                                    { "operations",
+                                      { { "type", "array" },
+                                        { "description",
+                                          "Ordered typed SurfacePatch operations "
+                                          "to apply." },
+                                        { "items", operationSchema },
+                                        { "minItems", 1 } } },
+                                    { "ops",
+                                      { { "type", "array" },
+                                        { "description",
+                                          "Alias for operations; use operations "
+                                          "for new calls." },
+                                        { "items", operationSchema },
+                                        { "minItems", 1 } } },
+                                    { "changes",
+                                      { { "type", "array" },
+                                        { "description",
+                                          "Alias for operations; use operations "
+                                          "for new calls." },
+                                        { "items", operationSchema },
+                                        { "minItems", 1 } } } } },
+                                { "required",
+                                  nlohmann::json::array( { "operations" } ) }
+                            };
+                        };
+
                 auto boxSchema =
                         [&]( const char* aDescription )
                         {
@@ -12391,9 +12487,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                         { "target_scope",
                                           { { "type", "object" },
                                             { "additionalProperties", true } } },
-                                        { "patch",
-                                          { { "type", "object" },
-                                            { "additionalProperties", true } } },
+                                        { "patch", surfacePatchSchema() },
                                         { "write_policy",
                                           { { "type", "string" },
                                             { "enum",
@@ -12878,10 +12972,10 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 "Optional normalized scope chosen by the model, "
                                 "for example a row, column, cell range, or panel field." } };
                     parameters["properties"]["patch"] =
-                            { { "type", "object" },
-                              { "description",
-                                "SurfacePatch object. It must contain operations, "
-                                "ops, or changes describing typed surface edits." } };
+                            surfacePatchSchema();
+                    parameters["properties"]["patch"]["description"] =
+                            "SurfacePatch object. It must contain operations, "
+                            "ops, or changes describing typed surface edits.";
                     parameters["properties"]["write_policy"] =
                             { { "type", "string" },
                               { "enum",
