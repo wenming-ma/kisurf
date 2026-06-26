@@ -174,6 +174,8 @@ BOOST_AUTO_TEST_CASE( RoutingModeContextIncludesViewportAndCursorRegion )
     const VECTOR2D  actualCenter = actualViewport.Centre();
 
     BOOST_REQUIRE( mode.contains( "viewport" ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["source"].get<std::string>(),
+                       "KIGFX::VIEW::GetViewport" );
     BOOST_CHECK_EQUAL( mode["viewport"]["x"].get<int>(),
                        static_cast<int>( actualViewport.GetX() ) );
     BOOST_CHECK_EQUAL( mode["viewport"]["y"].get<int>(),
@@ -186,6 +188,22 @@ BOOST_AUTO_TEST_CASE( RoutingModeContextIncludesViewportAndCursorRegion )
                        static_cast<int>( actualCenter.x ) );
     BOOST_CHECK_EQUAL( mode["viewport"]["center"]["y"].get<int>(),
                        static_cast<int>( actualCenter.y ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["right"].get<int>(),
+                       static_cast<int>( actualViewport.GetX() + actualViewport.GetWidth() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["bottom"].get<int>(),
+                       static_cast<int>( actualViewport.GetY() + actualViewport.GetHeight() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["top_left"]["x"].get<int>(),
+                       static_cast<int>( actualViewport.GetX() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["top_left"]["y"].get<int>(),
+                       static_cast<int>( actualViewport.GetY() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["bottom_right"]["x"].get<int>(),
+                       static_cast<int>( actualViewport.GetX() + actualViewport.GetWidth() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["bottom_right"]["y"].get<int>(),
+                       static_cast<int>( actualViewport.GetY() + actualViewport.GetHeight() ) );
+    BOOST_CHECK_EQUAL( mode["viewport"]["screen_size"]["width"].get<int>(),
+                       view.GetScreenPixelSize().x );
+    BOOST_CHECK_EQUAL( mode["viewport"]["screen_size"]["height"].get<int>(),
+                       view.GetScreenPixelSize().y );
 
     BOOST_REQUIRE( mode.contains( "cursor_region" ) );
     BOOST_CHECK_EQUAL( mode["cursor_region"]["x"].get<int>(), 2500 );
