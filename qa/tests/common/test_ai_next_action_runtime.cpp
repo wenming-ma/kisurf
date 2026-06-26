@@ -11060,6 +11060,43 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsAcceptWhenCurrentContextDrifted )
             wxS( "\"allowed\":false" ) ) );
     BOOST_CHECK( stored->m_RuntimeProvenanceJson.Contains(
             wxS( "\"context_drift\"" ) ) );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    BOOST_REQUIRE( trace["publish_decision"].contains( "accept_gate_result" ) );
+    BOOST_CHECK(
+            !trace["publish_decision"]["accept_gate_result"]["allowed"].get<bool>() );
+    BOOST_REQUIRE(
+            trace["publish_decision"]["accept_gate_result"]["reasons"].is_array() );
+    BOOST_CHECK_EQUAL(
+            trace["publish_decision"]["accept_gate_result"]["reasons"].at( 0 )
+                    .get<std::string>(),
+            "context_drift" );
+
+    AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceJson( traces.front().m_ReplayJson );
+
+    BOOST_REQUIRE( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_AcceptGateResultCount, 1 );
+    BOOST_CHECK( evaluation.m_AcceptGateReasonCountsJson.Contains(
+            wxS( "\"context_drift\":1" ) ) );
+
+    wxArrayString batchInput;
+    batchInput.Add( traces.front().m_ReplayJson );
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT batch =
+            AiEvaluateNextActionReplayTraceBatch( batchInput );
+
+    BOOST_REQUIRE( batch.m_Valid );
+    BOOST_CHECK_EQUAL( batch.m_AcceptGateResultCount, 1 );
+    BOOST_CHECK( batch.m_AcceptGateReasonCountsJson.Contains(
+            wxS( "\"context_drift\":1" ) ) );
 }
 
 
