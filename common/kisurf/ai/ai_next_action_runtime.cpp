@@ -4016,6 +4016,40 @@ nlohmann::json routingReachabilityFactsJson(
                     if( fact.contains( "from_endpoint" ) )
                         fact["suggested_landing_endpoint"] = fact["from_endpoint"];
                 }
+
+                if( fact.contains( "suggested_landing_endpoint" )
+                    && fact["suggested_landing_endpoint"].is_object()
+                    && fact["suggested_landing_endpoint"].contains( "position" )
+                    && fact["suggested_landing_endpoint"]["position"].is_object() )
+                {
+                    nlohmann::json toolArgs =
+                            { { "current_position", modeContext["start"] },
+                              { "target_position",
+                                fact["suggested_landing_endpoint"]["position"] } };
+
+                    if( !activeNet.empty() )
+                        toolArgs["net"] = activeNet;
+                    else if( modeContext.contains( "net" )
+                             && modeContext["net"].is_string() )
+                        toolArgs["net"] = modeContext["net"];
+
+                    if( modeContext.contains( "layer" )
+                        && modeContext["layer"].is_string() )
+                    {
+                        toolArgs["layer"] = modeContext["layer"];
+                    }
+
+                    if( modeContext.contains( "width" )
+                        && modeContext["width"].is_number() )
+                    {
+                        toolArgs["width"] = modeContext["width"];
+                    }
+
+                    fact["suggested_tool_call"] =
+                            { { "name", "routing.repair_segment" },
+                              { "purpose", "hidden_attempt_repair_hint" },
+                              { "arguments", toolArgs } };
+                }
             }
 
             fact["suggested_render_region"] =
