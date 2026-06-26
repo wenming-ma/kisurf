@@ -4762,6 +4762,25 @@ nlohmann::json pointRecordJson( int aX, int aY )
 }
 
 
+nlohmann::json pointPairBoundingBoxJson( int aX1, int aY1, int aX2, int aY2 )
+{
+    const int left = std::min( aX1, aX2 );
+    const int top = std::min( aY1, aY2 );
+    const int right = std::max( aX1, aX2 );
+    const int bottom = std::max( aY1, aY2 );
+    const int width = right - left;
+    const int height = bottom - top;
+
+    return { { "x", left },
+             { "y", top },
+             { "width", width },
+             { "height", height },
+             { "right", right },
+             { "bottom", bottom },
+             { "center", pointRecordJson( left + width / 2, top + height / 2 ) } };
+}
+
+
 nlohmann::json placementCandidateFactJson(
         const AI_CONTEXT_ANCHOR& aAnchor,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
@@ -4880,6 +4899,9 @@ nlohmann::json routingCorridorFactJson(
               { "anchor_label", toUtf8String( aAnchor.m_Label ) },
               { "start", pointRecordJson( aStartX, aStartY ) },
               { "end", pointRecordJson( aAnchor.m_Position.x, aAnchor.m_Position.y ) },
+              { "corridor_bbox",
+                pointPairBoundingBoxJson( aStartX, aStartY, aAnchor.m_Position.x,
+                                          aAnchor.m_Position.y ) },
               { "dx", dx },
               { "dy", dy },
               { "abs_dx", absDx },
