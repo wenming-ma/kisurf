@@ -5857,6 +5857,35 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_progress_facts"]
                     ["active_layer_routed_track_segment_count"].get<int>(),
             3 );
+    BOOST_REQUIRE( routingPacket.contains(
+            "routing_layer_reachability_facts" ) );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["routing_layer_reachability_facts"].size(), 1 );
+    const nlohmann::json& activeLayerReachability =
+            routingPacket["routing_layer_reachability_facts"].at( 0 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["source"].get<std::string>(),
+            "active_net_summary.component_graph_edges+mode_context.layer" );
+    BOOST_CHECK_EQUAL( activeLayerReachability["layer"].get<std::string>(),
+                       "F.Cu" );
+    BOOST_CHECK( activeLayerReachability["active_layer"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["candidate_edge_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["visible_candidate_edge_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["estimated_manhattan_length"].get<int>(), 520 );
+    BOOST_CHECK(
+            !activeLayerReachability["requires_layer_switch"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["via_transition_count_estimate"].get<int>(), 0 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["routed_track_length"].get<int>(), 780 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["routed_track_segment_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL(
+            activeLayerReachability["cost_model"].get<std::string>(),
+            "heuristic_manhattan_active_layer" );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_progress_facts"]["estimated_total_work_length"]
                     .get<int>(),
