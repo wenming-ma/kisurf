@@ -5609,7 +5609,15 @@ nlohmann::json placementCandidateFactJson(
               { "abs_dy", absDy },
               { "manhattan_distance", absDx + absDy },
               { "confidence", aAnchor.m_Confidence },
-              { "click_required_to_materialize", true } };
+              { "click_required_to_materialize", true },
+              { "interaction_semantics",
+                { { "mode", "active_interactive_placement" },
+                  { "planning_target", "place_current_item" },
+                  { "placement_anchor_source", "placement_anchor" },
+                  { "cursor_attached_item", true },
+                  { "manual_click_to_materialize", true },
+                  { "manual_click_supersedes_attempt", true },
+                  { "preview_must_be_rebased_after_click", true } } } };
 
     if( std::optional<nlohmann::json> renderRegion =
                 placementCandidateRenderRegionJson( aToolState,
