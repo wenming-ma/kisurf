@@ -1562,6 +1562,87 @@ BOOST_AUTO_TEST_CASE( AdapterAddsGeometrySpecificEffectiveConstraintFacts )
 }
 
 
+BOOST_AUTO_TEST_CASE( AdapterAddsHoleToHoleGeometrySpecificRuleCoverage )
+{
+    BOARD                  board;
+    BOARD_DESIGN_SETTINGS& settings = board.GetDesignSettings();
+
+    board.Add( new NETINFO_ITEM( &board, wxS( "/A" ), 1 ) );
+    board.Add( new NETINFO_ITEM( &board, wxS( "/B" ), 2 ) );
+
+    ZONE* area = new ZONE( &board );
+    area->SetZoneName( wxS( "AI_HOLE_AREA" ) );
+    area->SetIsRuleArea( true );
+    area->SetLayerSet( LSET( { F_Cu, B_Cu } ) );
+
+    SHAPE_POLY_SET areaOutline;
+    areaOutline.NewOutline();
+    areaOutline.Append( VECTOR2I( 0, 0 ) );
+    areaOutline.Append( VECTOR2I( 500000, 0 ) );
+    areaOutline.Append( VECTOR2I( 500000, 500000 ) );
+    areaOutline.Append( VECTOR2I( 0, 500000 ) );
+    area->AddPolygon( areaOutline.COutline( 0 ) );
+
+    board.Add( area );
+
+    PCB_VIA* viaA = new PCB_VIA( &board );
+    viaA->SetPosition( VECTOR2I( 100000, 100000 ) );
+    viaA->SetLayerPair( F_Cu, B_Cu );
+    viaA->SetWidth( PADSTACK::ALL_LAYERS, 60000 );
+    viaA->SetDrill( 30000 );
+    viaA->SetNetCode( 1 );
+    board.Add( viaA );
+
+    PCB_VIA* viaB = new PCB_VIA( &board );
+    viaB->SetPosition( VECTOR2I( 180000, 100000 ) );
+    viaB->SetLayerPair( F_Cu, B_Cu );
+    viaB->SetWidth( PADSTACK::ALL_LAYERS, 60000 );
+    viaB->SetDrill( 30000 );
+    viaB->SetNetCode( 2 );
+    board.Add( viaB );
+
+    auto rule = std::make_shared<DRC_RULE>( wxS( "AI Via Hole Spacing" ) );
+    rule->m_Condition = new DRC_RULE_CONDITION(
+            wxS( "A.Type == 'Via' && B.Type == 'Via' && A.Net != B.Net "
+                 "&& A.intersectsArea('AI_HOLE_AREA')" ) );
+
+    DRC_CONSTRAINT constraint( HOLE_TO_HOLE_CONSTRAINT );
+    constraint.Value().SetMin( 123000 );
+    rule->AddConstraint( constraint );
+
+    auto engine = std::make_shared<DRC_ENGINE>( &board, &settings );
+    engine->InitEngine( rule );
+    settings.m_DRCEngine = engine;
+
+    DRC_CONSTRAINT direct =
+            engine->EvalRules( HOLE_TO_HOLE_CONSTRAINT, viaA, viaB, UNDEFINED_LAYER );
+    BOOST_REQUIRE( direct.GetValue().HasMin() );
+    BOOST_CHECK_EQUAL( direct.GetValue().Min(), 123000 );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json effective = summary["constraint_facts"]["effective_constraints"];
+
+    const nlohmann::json* coverage =
+            findGeometryRuleCoverage( effective["geometry_specific_rule_coverage"],
+                                      "AI Via Hole Spacing", "via_to_via",
+                                      "hole_to_hole" );
+
+    BOOST_REQUIRE( coverage );
+    BOOST_CHECK_EQUAL( ( *coverage )["layer"].get<std::string>(), "all_layers" );
+    BOOST_CHECK_EQUAL( ( *coverage )["covered"].get<bool>(), true );
+    BOOST_CHECK_EQUAL( ( *coverage )["source"].get<std::string>(),
+                       "DRC_ENGINE::EvalRules" );
+    BOOST_CHECK_EQUAL( ( *coverage )["value"]["min"].get<int>(), 123000 );
+    BOOST_CHECK_EQUAL( ( *coverage )["source_item"]["kind"].get<std::string>(), "via" );
+    BOOST_CHECK_EQUAL( ( *coverage )["target_item"]["kind"].get<std::string>(), "via" );
+    BOOST_CHECK( ( *coverage )["source_item"].contains( "bbox" ) );
+    BOOST_CHECK( ( *coverage )["target_item"].contains( "bbox" ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( AdapterAddsStructuredDetailsToRoutingObjects )
 {
     BOARD board;

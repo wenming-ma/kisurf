@@ -2272,6 +2272,11 @@ wxString geometrySpecificRuleCoverageJson( const BOARD& aBoard,
                                            DRC_CONSTRAINT_T aType,
                                            const DRC_CONSTRAINT& aConstraint )
 {
+    wxString layerName = wxS( "all_layers" );
+
+    if( aLayer != UNDEFINED_LAYER )
+        layerName = aBoard.GetLayerName( aLayer );
+
     return wxString::Format(
             wxS( "{\"rule\":%s,\"constraint_type\":%s,\"enum\":%d,"
                  "\"geometry\":%s,\"layer\":%s,\"covered\":true,"
@@ -2280,9 +2285,26 @@ wxString geometrySpecificRuleCoverageJson( const BOARD& aBoard,
             quotedJson( aConstraint.GetName() ),
             quotedJson( drcConstraintTypeToken( aType ) ), static_cast<int>( aType ),
             quotedJson( geometryPairToken( aItemA, aItemB ) ),
-            quotedJson( aBoard.GetLayerName( aLayer ) ),
+            quotedJson( layerName ),
             pairConstraintItemJson( aItemA ), pairConstraintItemJson( aItemB ),
             minOptMaxJson( aConstraint.GetValue() ) );
+}
+
+
+PCB_LAYER_ID evaluationLayerForCoverage( const BOARD& aBoard,
+                                         const BOARD_CONNECTED_ITEM& aItemA,
+                                         const BOARD_CONNECTED_ITEM& aItemB,
+                                         DRC_CONSTRAINT_T aType )
+{
+    if( aType == HOLE_TO_HOLE_CONSTRAINT )
+        return UNDEFINED_LAYER;
+
+    PCB_LAYER_ID layer = UNDEFINED_LAYER;
+
+    if( !firstCommonCopperLayer( aBoard, aItemA, aItemB, layer ) )
+        return UNDEFINED_LAYER;
+
+    return layer;
 }
 
 
@@ -2389,6 +2411,7 @@ std::vector<wxString> makeGeometrySpecificRuleCoverageEntries( const BOARD& aBoa
         PHYSICAL_CLEARANCE_CONSTRAINT,
         HOLE_CLEARANCE_CONSTRAINT,
         PHYSICAL_HOLE_CLEARANCE_CONSTRAINT,
+        HOLE_TO_HOLE_CONSTRAINT,
         EDGE_CLEARANCE_CONSTRAINT
     };
 
@@ -2404,13 +2427,19 @@ std::vector<wxString> makeGeometrySpecificRuleCoverageEntries( const BOARD& aBoa
             if( !itemA || !itemB || itemA->GetNetCode() == itemB->GetNetCode() )
                 continue;
 
-            PCB_LAYER_ID layer = UNDEFINED_LAYER;
+            PCB_LAYER_ID commonLayer = UNDEFINED_LAYER;
 
-            if( !firstCommonCopperLayer( aBoard, *itemA, *itemB, layer ) )
+            if( !firstCommonCopperLayer( aBoard, *itemA, *itemB, commonLayer ) )
                 continue;
 
             for( DRC_CONSTRAINT_T type : coverageTypes )
             {
+                PCB_LAYER_ID layer =
+                        evaluationLayerForCoverage( aBoard, *itemA, *itemB, type );
+
+                if( layer == UNDEFINED_LAYER && type != HOLE_TO_HOLE_CONSTRAINT )
+                    continue;
+
                 DRC_CONSTRAINT constraint = aEngine.EvalRules( type, itemA, itemB, layer );
 
                 if( constraint.IsNull() || constraint.GetName().IsEmpty()
