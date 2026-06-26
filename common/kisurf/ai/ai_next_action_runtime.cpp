@@ -6009,6 +6009,16 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
     {
         packet["surface_count"] = context.m_PanelStates.size();
         packet["surface_summaries"] = panelSummaryArrayJson( context.m_PanelStates );
+        packet["interaction_semantics"] =
+                { { "mode", "focused_structured_surface" },
+                  { "planning_target",
+                    "auto_fill_or_refill_visible_surface" },
+                  { "model_decides_patch_scope", true },
+                  { "preview_artifact", "structured_surface_patch_overlay" },
+                  { "accept_unit", "guarded_surface_patch" },
+                  { "guarded_accept_required", true },
+                  { "surface_revision_required", true },
+                  { "selection_fingerprint_required", true } };
 
         if( const AI_PANEL_STATE_RECORD* panel =
                     focusedPanelState( context.m_PanelStates ) )

@@ -6314,6 +6314,21 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE( packet.contains( "normalized_schema" ) );
     BOOST_REQUIRE( packet.contains( "field_origin_facts" ) );
     BOOST_REQUIRE( packet.contains( "surface_guard_facts" ) );
+    BOOST_REQUIRE( packet.contains( "interaction_semantics" ) );
+    const nlohmann::json& surfaceInteraction =
+            packet["interaction_semantics"];
+    BOOST_CHECK_EQUAL( surfaceInteraction["mode"].get<std::string>(),
+                       "focused_structured_surface" );
+    BOOST_CHECK_EQUAL( surfaceInteraction["planning_target"].get<std::string>(),
+                       "auto_fill_or_refill_visible_surface" );
+    BOOST_CHECK_EQUAL( surfaceInteraction["preview_artifact"].get<std::string>(),
+                       "structured_surface_patch_overlay" );
+    BOOST_CHECK_EQUAL( surfaceInteraction["accept_unit"].get<std::string>(),
+                       "guarded_surface_patch" );
+    BOOST_CHECK( surfaceInteraction["model_decides_patch_scope"].get<bool>() );
+    BOOST_CHECK( surfaceInteraction["guarded_accept_required"].get<bool>() );
+    BOOST_CHECK( surfaceInteraction["surface_revision_required"].get<bool>() );
+    BOOST_CHECK( surfaceInteraction["selection_fingerprint_required"].get<bool>() );
     BOOST_CHECK_EQUAL( packet["schema_version"].get<std::string>(),
                        "net-class-v1" );
     BOOST_CHECK_EQUAL( packet["target_scope"]["kind"].get<std::string>(),
