@@ -174,6 +174,28 @@ void addMainAuxBBoxRelationFact( const nlohmann::json& aIssue,
           { { "x", overlapX }, { "y", overlapY },
             { "intersects", overlapX > 0 && overlapY > 0 } } }
     };
+
+    const bool intersects = overlapX > 0 && overlapY > 0;
+    const char* preferredAxis =
+            intersects
+                    ? ( overlapX <= overlapY ? "x" : "y" )
+                    : ( spacingX <= spacingY ? "x" : "y" );
+
+    aFact["suggested_fix_facts"] =
+            nlohmann::json::array(
+                    { { { "kind", "bbox_clearance_review_hint" },
+                        { "source", "main_aux_bbox_relation" },
+                        { "preferred_axis", preferredAxis },
+                        { "current_spacing",
+                          { { "x", spacingX }, { "y", spacingY },
+                            { "manhattan", spacingX + spacingY } } },
+                        { "overlap",
+                          { { "x", overlapX }, { "y", overlapY },
+                            { "intersects", intersects } } },
+                        { "center_delta",
+                          { { "x", auxCenterX - mainCenterX },
+                            { "y", auxCenterY - mainCenterY } } },
+                        { "requires_rule_clearance_context", true } } } );
 }
 
 

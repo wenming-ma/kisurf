@@ -10147,6 +10147,18 @@ BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeNativeDrcItemBboxesForReview )
     BOOST_CHECK_EQUAL( relation["spacing"]["x"].get<int>(), 10 );
     BOOST_CHECK_EQUAL( relation["spacing"]["y"].get<int>(), 0 );
     BOOST_CHECK( !relation["overlap"]["intersects"].get<bool>() );
+    BOOST_REQUIRE( issueFact.contains( "suggested_fix_facts" ) );
+    BOOST_REQUIRE_EQUAL( issueFact["suggested_fix_facts"].size(), 1 );
+    const nlohmann::json& fixFact = issueFact["suggested_fix_facts"].at( 0 );
+    BOOST_CHECK_EQUAL( fixFact["kind"].get<std::string>(),
+                       "bbox_clearance_review_hint" );
+    BOOST_CHECK_EQUAL( fixFact["source"].get<std::string>(),
+                       "main_aux_bbox_relation" );
+    BOOST_CHECK_EQUAL( fixFact["preferred_axis"].get<std::string>(), "y" );
+    BOOST_CHECK_EQUAL( fixFact["current_spacing"]["x"].get<int>(), 10 );
+    BOOST_CHECK_EQUAL( fixFact["current_spacing"]["y"].get<int>(), 0 );
+    BOOST_CHECK( !fixFact["overlap"]["intersects"].get<bool>() );
+    BOOST_CHECK( fixFact["requires_rule_clearance_context"].get<bool>() );
     BOOST_CHECK_EQUAL( issueFact["layer_name"].get<std::string>(), "F.Cu" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
 }
