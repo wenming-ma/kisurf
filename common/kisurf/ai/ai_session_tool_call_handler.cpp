@@ -165,6 +165,30 @@ nlohmann::json catalogHandleArraySchema( const char* aDescription )
 }
 
 
+nlohmann::json catalogQueryHandleFilterSchema()
+{
+    return { { "description",
+               "Handle filter as an alias, session-local handle id, or handle object." },
+             { "anyOf",
+               nlohmann::json::array(
+                       { { { "type", "string" },
+                           { "description", "Session handle alias." } },
+                         { { "type", "integer" }, { "minimum", 1 } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "session_id",
+                                 { { "type", "integer" }, { "minimum", 1 } } },
+                               { "handle_id",
+                                 { { "type", "integer" }, { "minimum", 1 } } },
+                               { "generation",
+                                 { { "type", "integer" }, { "minimum", 1 } } },
+                               { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "handle_id" } ) } } } ) } };
+}
+
+
 nlohmann::json catalogStringArraySchema( const char* aDescription )
 {
     return { { "type", "array" },
@@ -219,6 +243,25 @@ nlohmann::json catalogOperationScopeSchema( const char* aDescription )
              { "enum",
                nlohmann::json::array(
                        { "session", "affected_area", "selection", "region" } ) } };
+}
+
+
+nlohmann::json catalogQueryItemsFilterSchema()
+{
+    return { { "type", "object" },
+             { "description",
+               "Optional semantic shadow-board filter aligned with AI_SHADOW_BOARD::QueryItems." },
+             { "additionalProperties", false },
+             { "properties",
+               { { "type", { { "type", "string" } } },
+                 { "net", { { "type", "string" } } },
+                 { "layer", { { "type", "string" } } },
+                 { "alias", { { "type", "string" } } },
+                 { "selection", { { "type", "boolean" } } },
+                 { "bbox",
+                   catalogBoxSchema(
+                           "Bounding box intersection filter in internal coordinates." ) },
+                 { "handle", catalogQueryHandleFilterSchema() } } } };
 }
 
 
@@ -599,6 +642,10 @@ nlohmann::json sessionToolCatalogJson()
             tool["requires_journal"] = true;
             tool["lowers_to_atomic_ops"] = sessionAtomicOperationSetJson();
             tool["execution_runtime"] = "python_subprocess_session_sdk";
+        }
+        else if( name == "kisurf_query_items" )
+        {
+            tool["filter_contract"] = catalogQueryItemsFilterSchema();
         }
         else if( name == "kisurf_accept_session" )
         {

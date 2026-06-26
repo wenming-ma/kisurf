@@ -113,6 +113,35 @@ bool stringEnumContainsAll( const nlohmann::json& aSchema,
 
     return true;
 }
+
+
+bool queryFilterSchemaSupportsShadowFilters( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || aSchema.value( "type", std::string() ) != "object"
+        || aSchema.value( "additionalProperties", true ) != false
+        || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "type" )
+           && properties["type"].value( "type", std::string() ) == "string"
+           && properties.contains( "net" )
+           && properties["net"].value( "type", std::string() ) == "string"
+           && properties.contains( "layer" )
+           && properties["layer"].value( "type", std::string() ) == "string"
+           && properties.contains( "alias" )
+           && properties["alias"].value( "type", std::string() ) == "string"
+           && properties.contains( "selection" )
+           && properties["selection"].value( "type", std::string() ) == "boolean"
+           && properties.contains( "bbox" )
+           && boxSchemaSupportsCanonicalForms( properties["bbox"] )
+           && properties.contains( "handle" )
+           && properties["handle"].contains( "anyOf" );
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNativeProvider )
@@ -574,6 +603,11 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                              != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_query_items" ) != toolNames.end() );
+                const nlohmann::json& queryItemsParameters =
+                        toolByName["kisurf_query_items"]["function"]["parameters"];
+                BOOST_REQUIRE( queryItemsParameters["properties"].contains( "filter" ) );
+                BOOST_CHECK( queryFilterSchemaSupportsShadowFilters(
+                        queryItemsParameters["properties"]["filter"] ) );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_query_item" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),

@@ -144,6 +144,35 @@ bool stringEnumContainsAll( const nlohmann::json& aSchema,
 }
 
 
+bool queryFilterSchemaSupportsShadowFilters( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || aSchema.value( "type", std::string() ) != "object"
+        || aSchema.value( "additionalProperties", true ) != false
+        || !aSchema.contains( "properties" )
+        || !aSchema["properties"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& properties = aSchema["properties"];
+
+    return properties.contains( "type" )
+           && properties["type"].value( "type", std::string() ) == "string"
+           && properties.contains( "net" )
+           && properties["net"].value( "type", std::string() ) == "string"
+           && properties.contains( "layer" )
+           && properties["layer"].value( "type", std::string() ) == "string"
+           && properties.contains( "alias" )
+           && properties["alias"].value( "type", std::string() ) == "string"
+           && properties.contains( "selection" )
+           && properties["selection"].value( "type", std::string() ) == "boolean"
+           && properties.contains( "bbox" )
+           && boxSchemaSupportsCanonicalForms( properties["bbox"] )
+           && properties.contains( "handle" )
+           && properties["handle"].contains( "anyOf" );
+}
+
+
 AI_TOOL_CALL_RECORD toolCall( const wxString& aToolName, const wxString& aArguments )
 {
     AI_TOOL_CALL_RECORD call;
@@ -729,6 +758,10 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "side_effect",
                                                                   std::string() ),
                        "read_only" );
+    BOOST_REQUIRE( catalogTool( "kisurf_query_items" )->contains(
+            "filter_contract" ) );
+    BOOST_CHECK( queryFilterSchemaSupportsShadowFilters(
+            ( *catalogTool( "kisurf_query_items" ) )["filter_contract"] ) );
     BOOST_REQUIRE( catalogTool( "kisurf_render_preview" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_render_preview" )->value( "side_effect",
                                                                      std::string() ),
