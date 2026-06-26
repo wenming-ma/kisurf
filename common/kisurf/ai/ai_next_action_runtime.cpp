@@ -8682,6 +8682,24 @@ void mergeJsonCounters( nlohmann::json& aTarget, const nlohmann::json& aSource )
 }
 
 
+size_t jsonCounterValue( const nlohmann::json& aCounts,
+                         const std::string& aKey )
+{
+    if( !aCounts.is_object() || !aCounts.contains( aKey ) )
+        return 0;
+
+    const nlohmann::json& value = aCounts[aKey];
+
+    if( value.is_number_unsigned() )
+        return value.get<size_t>();
+
+    if( value.is_number_integer() && value.get<int64_t>() >= 0 )
+        return static_cast<size_t>( value.get<int64_t>() );
+
+    return 0;
+}
+
+
 wxString replayTraceWorkState( const nlohmann::json& aTrace )
 {
     if( aTrace.contains( "observation_packet" )
@@ -9463,6 +9481,59 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                        wxS( "preview_gate_feedback_count_below_minimum" ),
                        wxS( "Replay preview gate feedback count is below expected minimum." ),
                        &traceEval );
+    }
+
+    if( expected.contains( "min_accept_gate_result_count" )
+        && expected["min_accept_gate_result_count"].is_number_unsigned()
+        && traceEval.m_AcceptGateResultCount
+           < expected["min_accept_gate_result_count"].get<size_t>() )
+    {
+        return finish( true, false,
+                       wxS( "accept_gate_result_count_below_minimum" ),
+                       wxS( "Replay accept gate result count is below expected minimum." ),
+                       &traceEval );
+    }
+
+    if( expected.contains( "min_accept_gate_reason_counts" )
+        && expected["min_accept_gate_reason_counts"].is_object() )
+    {
+        nlohmann::json acceptGateReasonCounts =
+                nlohmann::json::parse(
+                        toUtf8String( traceEval.m_AcceptGateReasonCountsJson ),
+                        nullptr, false );
+
+        if( acceptGateReasonCounts.is_discarded()
+            || !acceptGateReasonCounts.is_object() )
+        {
+            acceptGateReasonCounts = nlohmann::json::object();
+        }
+
+        for( auto it = expected["min_accept_gate_reason_counts"].begin();
+             it != expected["min_accept_gate_reason_counts"].end(); ++it )
+        {
+            if( !( it.value().is_number_unsigned()
+                   || ( it.value().is_number_integer()
+                        && it.value().get<int64_t>() >= 0 ) ) )
+            {
+                continue;
+            }
+
+            const size_t minimum =
+                    it.value().is_number_unsigned()
+                            ? it.value().get<size_t>()
+                            : static_cast<size_t>(
+                                      it.value().get<int64_t>() );
+
+            if( jsonCounterValue( acceptGateReasonCounts, it.key() )
+                < minimum )
+            {
+                return finish(
+                        true, false,
+                        wxS( "accept_gate_reason_count_below_minimum" ),
+                        wxS( "Replay accept gate reason count is below expected minimum." ),
+                        &traceEval );
+            }
+        }
     }
 
     return finish( true, true, wxEmptyString, wxEmptyString, &traceEval );
