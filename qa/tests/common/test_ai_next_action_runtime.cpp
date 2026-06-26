@@ -4781,6 +4781,43 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationAttemptPolicyUsesLatencyHistory 
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationAttemptPolicyUsesCandidateQualityHistory )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"quality_policy_probe\"}" ) } );
+    BLOCKING_ISSUE_SESSION_VALIDATION_SERVICE validation;
+    PASSING_SESSION_PREVIEW_SERVICE           preview;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validation,
+                                    &preview };
+
+    BOOST_CHECK( !runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "validation_gate_failed" ) ) );
+
+    BOOST_CHECK( !runtime.Update( makeChangedViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+
+    const AI_PROVIDER_REQUEST& secondDecisionRequest =
+            provider->m_Requests.back();
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"attempt_policy\"" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"base_max_attempts\":3" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"max_attempts\":1" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"candidate_quality_failure_count\":1" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"candidate_quality_history\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 {
     auto* placementProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(

@@ -2917,6 +2917,7 @@ struct ATTEMPT_POLICY_SIGNALS
     size_t m_RecentRejectHistoryCount = 0;
     size_t m_ContextChurnHistoryCount = 0;
     size_t m_LatencyOverBudgetHistoryCount = 0;
+    size_t m_CandidateQualityFailureHistoryCount = 0;
 };
 
 
@@ -2948,7 +2949,8 @@ ATTEMPT_BUDGET_POLICY adjustedAttemptPolicyForWorkState(
 
     if( aSignals.m_RecentRejectHistoryCount > 0
         || aSignals.m_ContextChurnHistoryCount > 0
-        || aSignals.m_LatencyOverBudgetHistoryCount > 0 )
+        || aSignals.m_LatencyOverBudgetHistoryCount > 0
+        || aSignals.m_CandidateQualityFailureHistoryCount > 0 )
     {
         policy.m_MaxAttempts = std::min<size_t>( policy.m_MaxAttempts, 1 );
     }
@@ -3008,6 +3010,12 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
         adjustments.push_back( "latency_over_budget_history" );
     }
 
+    if( aSignals.m_CandidateQualityFailureHistoryCount > 0
+        && policy.m_MaxAttempts < basePolicy.m_MaxAttempts )
+    {
+        adjustments.push_back( "candidate_quality_history" );
+    }
+
     return { { "work_state", toUtf8String( aWorkState ) },
              { "max_attempts", policy.m_MaxAttempts },
              { "max_tool_rounds", policy.m_MaxToolRounds },
@@ -3025,6 +3033,8 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState,
              { "context_churn_count", aSignals.m_ContextChurnHistoryCount },
              { "latency_over_budget_count",
                aSignals.m_LatencyOverBudgetHistoryCount },
+             { "candidate_quality_failure_count",
+               aSignals.m_CandidateQualityFailureHistoryCount },
              { "adjustments", std::move( adjustments ) },
              { "policy_owner", "native_runtime" } };
 }
@@ -3057,6 +3067,7 @@ wxString budgetPolicyWorkStateForCandidate(
 ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
         const std::vector<AI_SUGGESTION_RECORD>& aSuggestions,
         const std::vector<AI_NEXT_ACTION_ATTEMPT_RECORD>& aAttempts,
+        const std::vector<AI_NEXT_ACTION_RUNTIME_STEP>& aSteps,
         const wxString& aWorkState )
 {
     ATTEMPT_POLICY_SIGNALS signals;
@@ -3096,6 +3107,61 @@ ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
 
         if( attempt.m_BudgetCounters.m_WallTimeMs > policy.m_MaxWallTimeMs )
             ++signals.m_LatencyOverBudgetHistoryCount;
+    }
+
+    for( const AI_NEXT_ACTION_RUNTIME_STEP& step : aSteps )
+    {
+        if( step.m_Status != AI_NEXT_ACTION_STEP_STATUS::Abandoned )
+            continue;
+
+        nlohmann::json observation = parseObjectBody( step.m_ObservationPacketJson );
+        wxString       stepWorkState;
+
+        if( observation.contains( "structured_facts" )
+            && observation["structured_facts"].is_object()
+            && observation["structured_facts"].contains( "work_state" )
+            && observation["structured_facts"]["work_state"].is_string() )
+        {
+            stepWorkState = fromUtf8String(
+                    observation["structured_facts"]["work_state"]
+                            .get<std::string>() );
+        }
+        else if( observation.contains( "kind" )
+                 && observation["kind"].is_string() )
+        {
+            stepWorkState =
+                    fromUtf8String( observation["kind"].get<std::string>() );
+        }
+
+        if( normalizedAttemptPolicyFamily( stepWorkState ) != targetFamily )
+            continue;
+
+        nlohmann::json review = parseObjectBody( step.m_ReviewDecisionJson );
+
+        if( !review.contains( "preview_gate_result" )
+            || !review["preview_gate_result"].is_object()
+            || !review["preview_gate_result"].contains( "reasons" )
+            || !review["preview_gate_result"]["reasons"].is_array() )
+        {
+            continue;
+        }
+
+        for( const nlohmann::json& reason : review["preview_gate_result"]["reasons"] )
+        {
+            if( !reason.is_string() )
+                continue;
+
+            const std::string reasonText = reason.get<std::string>();
+
+            if( reasonText == "render_gate_failed"
+                || reasonText == "validation_gate_failed"
+                || reasonText == "semantic_relevance_failed"
+                || reasonText == "surface_patch_target_scope_failed" )
+            {
+                ++signals.m_CandidateQualityFailureHistoryCount;
+                break;
+            }
+        }
     }
 
     return signals;
@@ -10302,7 +10368,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
             explicitCandidateSelected ? *decision.m_SelectedCandidateIndex : 0;
     const ATTEMPT_POLICY_SIGNALS policySignals =
             attemptPolicySignalsForWorkState( m_Suggestions, m_Attempts,
-                                              observation.m_Kind );
+                                              m_Steps, observation.m_Kind );
     const size_t attemptLimit = explicitCandidateSelected
                                         ? 1
                                         : attemptLimitForWorkState( observation.m_Kind,
@@ -10977,7 +11043,7 @@ AI_OBSERVATION_PACKET AI_NEXT_ACTION_RUNTIME::buildObservationPacket(
 
     const ATTEMPT_POLICY_SIGNALS policySignals =
             attemptPolicySignalsForWorkState( m_Suggestions, m_Attempts,
-                                              aEvent.m_Kind );
+                                              m_Steps, aEvent.m_Kind );
 
     nlohmann::json facts =
             { { "slot_id", toUtf8String( aEvent.m_SlotId ) },
