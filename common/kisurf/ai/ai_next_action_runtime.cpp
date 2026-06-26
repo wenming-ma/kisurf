@@ -8894,6 +8894,24 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
         if( !attempt.is_object() )
             continue;
 
+        if( attempt.contains( "rollback" )
+            && attempt["rollback"].is_object()
+            && !attempt["rollback"].empty() )
+        {
+            const nlohmann::json& rollback = attempt["rollback"];
+            ++result.m_RollbackAttemptCount;
+
+            if( ( rollback.contains( "rolled_back" )
+                  && rollback["rolled_back"].is_boolean()
+                  && rollback["rolled_back"].get<bool>() )
+                || ( rollback.contains( "status" )
+                     && rollback["status"].is_string()
+                     && rollback["status"].get<std::string>() == "rolled_back" ) )
+            {
+                ++result.m_RolledBackAttemptCount;
+            }
+        }
+
         if( attempt.contains( "hidden_attempt_journal" )
             && attempt["hidden_attempt_journal"].is_object()
             && attempt["hidden_attempt_journal"].contains( "operations" )
@@ -8991,6 +9009,10 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "superseded", result.m_Superseded },
               { "abandoned", result.m_Abandoned },
               { "attempt_count", result.m_AttemptCount },
+              { "rollback_attempt_count",
+                result.m_RollbackAttemptCount },
+              { "rolled_back_attempt_count",
+                result.m_RolledBackAttemptCount },
               { "hidden_operation_count", result.m_HiddenOperationCount },
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
@@ -9091,6 +9113,9 @@ AiEvaluateNextActionReplayTraceBatch(
             ++result.m_BlockingValidationCount;
 
         result.m_AttemptCount += evaluation.m_AttemptCount;
+        result.m_RollbackAttemptCount += evaluation.m_RollbackAttemptCount;
+        result.m_RolledBackAttemptCount +=
+                evaluation.m_RolledBackAttemptCount;
         result.m_HiddenOperationCount += evaluation.m_HiddenOperationCount;
         result.m_RenderResultCount += evaluation.m_RenderResultCount;
         result.m_ValidationResultCount += evaluation.m_ValidationResultCount;
@@ -9181,6 +9206,10 @@ AiEvaluateNextActionReplayTraceBatch(
               { "superseded_count", result.m_SupersededCount },
               { "abandoned_count", result.m_AbandonedCount },
               { "attempt_count", result.m_AttemptCount },
+              { "rollback_attempt_count",
+                result.m_RollbackAttemptCount },
+              { "rolled_back_attempt_count",
+                result.m_RolledBackAttemptCount },
               { "hidden_operation_count", result.m_HiddenOperationCount },
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
