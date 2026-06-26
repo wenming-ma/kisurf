@@ -453,6 +453,94 @@ public:
 BOOST_AUTO_TEST_SUITE( AiSessionToolCallHandler )
 
 
+BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    const nlohmann::json catalog =
+            nlohmann::json::parse( handler.ToolCatalogJson().ToStdString() );
+
+    BOOST_REQUIRE( catalog.is_array() );
+
+    auto catalogTool =
+            [&]( const std::string& aName ) -> const nlohmann::json*
+            {
+                for( const nlohmann::json& tool : catalog )
+                {
+                    if( tool.is_object()
+                        && tool.value( "name", std::string() ) == aName )
+                    {
+                        return &tool;
+                    }
+                }
+
+                return nullptr;
+            };
+
+    BOOST_REQUIRE( catalogTool( "kisurf_run_cell" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_run_cell" )->value( "layer", std::string() ),
+                       "script" );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_run_cell" )->value( "side_effect",
+                                                                std::string() ),
+                       "shadow_mutation" );
+    BOOST_CHECK( !catalogTool( "kisurf_run_cell" )->value( "raw_board_access", true ) );
+    BOOST_CHECK( !catalogTool( "kisurf_run_cell" )->value( "direct_publish", true ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_cell" )->contains( "lowers_to_atomic_ops" ) );
+
+    const nlohmann::json& atomicOps =
+            ( *catalogTool( "kisurf_run_cell" ) )["lowers_to_atomic_ops"];
+    BOOST_REQUIRE( atomicOps.is_array() );
+
+    for( const std::string& opName :
+         { "pcb.create_via",
+           "pcb.create_track_segment",
+           "pcb.create_track_polyline",
+           "pcb.create_zone",
+           "pcb.create_shape",
+           "pcb.move_items",
+           "pcb.delete_items",
+           "pcb.update_item_geometry",
+           "pcb.set_item_net",
+           "pcb.set_item_layer",
+           "pcb.set_item_properties",
+           "pcb.set_metadata",
+           "pcb.refill_zones",
+           "pcb.rebuild_connectivity",
+           "pcb.run_validation",
+           "surface.apply_patch" } )
+    {
+        BOOST_CHECK( std::find( atomicOps.begin(), atomicOps.end(), opName )
+                     != atomicOps.end() );
+    }
+
+    BOOST_REQUIRE( catalogTool( "kisurf_query_items" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "layer",
+                                                                  std::string() ),
+                       "atomic" );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "side_effect",
+                                                                  std::string() ),
+                       "read_only" );
+    BOOST_REQUIRE( catalogTool( "kisurf_render_preview" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_render_preview" )->value( "side_effect",
+                                                                     std::string() ),
+                       "render" );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_validation" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_run_validation" )->value( "side_effect",
+                                                                     std::string() ),
+                       "validate" );
+    BOOST_REQUIRE( catalogTool( "kisurf_accept_session" ) );
+    BOOST_CHECK_EQUAL( catalogTool( "kisurf_accept_session" )->value( "layer",
+                                                                     std::string() ),
+                       "runtime_gate" );
+    BOOST_CHECK( !catalogTool( "kisurf_accept_session" )->value( "can_publish", true ) );
+    BOOST_CHECK( !catalogTool( "kisurf_accept_session" )->value( "direct_publish", true ) );
+
+    const wxString catalogText = handler.ToolCatalogJson();
+    BOOST_CHECK( !catalogText.Contains( wxS( "script_run_operation_bundle" ) ) );
+    BOOST_CHECK( !catalogText.Contains( wxS( "pcb_fill_via_matrix" ) ) );
+    BOOST_CHECK( !catalogText.Contains( wxS( "\"can_publish\":true" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( UnknownToolFallsThroughDispatcherContract )
 {
     AI_SESSION_TOOL_CALL_HANDLER handler;
@@ -552,6 +640,39 @@ BOOST_AUTO_TEST_CASE( RunCellWithConnectedWorkerAppliesLoweredAtomicOps )
     BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 1 );
     BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 1 );
     BOOST_REQUIRE( handler.ActiveSession()->ResolveAlias( wxS( "py-via-0" ) ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationAppliesToShadowSessionOnly )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"direct-via\",\"net\":\"GND\","
+                           "\"position\":{\"x\":25,\"y\":50}}}" ) ) );
+
+    BOOST_REQUIRE( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "atomic_operation_executed" );
+    BOOST_CHECK_EQUAL( payload["kind"].get<std::string>(), "pcb.create_via" );
+    BOOST_CHECK_EQUAL( payload["applied_operation_count"].get<size_t>(), 1 );
+    BOOST_CHECK( payload["shadow_board_mutated"].get<bool>() );
+    BOOST_CHECK( !payload["board_mutated"].get<bool>() );
+    BOOST_REQUIRE( payload["operation_ids"].is_array() );
+    BOOST_REQUIRE_EQUAL( payload["operation_ids"].size(), 1 );
+    BOOST_CHECK_EQUAL( payload["operation_ids"][0].get<uint64_t>(), 1 );
+
+    BOOST_REQUIRE_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 1 );
+    BOOST_CHECK( handler.ActiveSession()->Journal().Operations()[0].m_Kind
+                 == AI_SESSION_OPERATION_KIND::CreateVia );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 1 );
+    BOOST_REQUIRE( handler.ActiveSession()->ResolveAlias( wxS( "direct-via" ) ).has_value() );
 }
 
 
@@ -926,6 +1047,56 @@ BOOST_AUTO_TEST_CASE( RunCellExecutesPythonCheckpointAndRollbackRequests )
 }
 
 
+BOOST_AUTO_TEST_CASE( RunCellRollsBackToNamedPythonCheckpoint )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "named checkpoint rollback" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::Checkpoint,
+              wxS( "{\"name\":\"before correction\"}" ) } );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"wrong-via\",\"net\":\"GND\","
+                   "\"position\":{\"x\":25,\"y\":50}}" ) } );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::RollbackTo,
+              wxS( "{\"checkpoint_name\":\"before correction\"}" ) } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"session.checkpoint('before correction');"
+                           " session.create_via(...);"
+                           " session.rollback_to(name='before correction')\","
+                           "\"cell_id\":\"cell-named-rollback\"}" ) ) );
+
+    BOOST_REQUIRE( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 0 );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(), 0 );
+    BOOST_CHECK( !handler.ActiveSession()->ResolveAlias( wxS( "wrong-via" ) ).has_value() );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "cell_executed" );
+    BOOST_REQUIRE_EQUAL( payload["operation_results"].size(), 2 );
+    BOOST_CHECK_EQUAL( payload["operation_results"][0]["checkpoint_id"].get<uint64_t>(),
+                       2 );
+    BOOST_CHECK_EQUAL( payload["operation_results"][1]["kind"].get<std::string>(),
+                       "session.rollback_to" );
+    BOOST_CHECK_EQUAL( payload["operation_results"][1]["status"].get<std::string>(),
+                       "rolled_back" );
+    BOOST_CHECK_EQUAL( payload["operation_results"][1]["checkpoint_name"].get<std::string>(),
+                       "before correction" );
+    BOOST_CHECK_EQUAL( payload["operation_results"][1]["checkpoint_id"].get<uint64_t>(),
+                       2 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunCellCanContinueAfterPythonRollbackInSameCell )
 {
     AI_PYTHON_CELL_RESULT workerResult;
@@ -1264,6 +1435,37 @@ BOOST_AUTO_TEST_CASE( StepLifecycleAndCheckpointAreStateful )
     nlohmann::json rollbackPayload =
             nlohmann::json::parse( rollbackResult.m_ResultJson.ToStdString() );
     BOOST_CHECK_EQUAL( rollbackPayload["status"].get<std::string>(), "rolled_back" );
+}
+
+
+BOOST_AUTO_TEST_CASE( RollbackToolAcceptsCheckpointName )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    AI_TOOL_INVOCATION_RESULT open = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) );
+    BOOST_REQUIRE( open.m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT checkpoint = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_checkpoint" ),
+                      wxS( "{\"name\":\"before direct correction\"}" ) ) );
+    BOOST_REQUIRE( checkpoint.m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT rollback = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_rollback_to" ),
+                      wxS( "{\"checkpoint_name\":\"before direct correction\"}" ) ) );
+
+    BOOST_CHECK( rollback.m_Allowed );
+    BOOST_CHECK( rollback.m_Executed );
+
+    nlohmann::json payload = nlohmann::json::parse( rollback.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "rolled_back" );
+    BOOST_CHECK_EQUAL( payload["checkpoint_name"].get<std::string>(),
+                       "before direct correction" );
+    BOOST_CHECK_EQUAL( payload["checkpoint_id"].get<uint64_t>(), 1 );
 }
 
 

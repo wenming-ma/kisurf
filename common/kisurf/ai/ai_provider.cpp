@@ -200,6 +200,62 @@ nlohmann::json sessionRunCellToolParameters()
 }
 
 
+const char* sessionRunCellToolDescription()
+{
+    return "Run a Python-first KiSurf session cell. Python can only mutate "
+           "the board through typed session SDK operations; it cannot access "
+           "raw BOARD or BOARD_ITEM pointers and it cannot publish directly. "
+           "Available atomic operation ids include: pcb.create_via, "
+           "pcb.create_track_segment, pcb.create_track_polyline, "
+           "pcb.create_zone, pcb.create_shape, pcb.move_items, "
+           "pcb.delete_items, pcb.update_item_geometry, pcb.set_item_net, "
+           "pcb.set_item_layer, pcb.set_item_properties, pcb.set_metadata, "
+           "pcb.refill_zones, pcb.rebuild_connectivity, pcb.run_validation, "
+           "surface.apply_patch.";
+}
+
+
+nlohmann::json sessionAtomicOperationIdsJson()
+{
+    return nlohmann::json::array(
+            { "pcb.create_via",
+              "pcb.create_track_segment",
+              "pcb.create_track_polyline",
+              "pcb.create_zone",
+              "pcb.create_shape",
+              "pcb.move_items",
+              "pcb.delete_items",
+              "pcb.update_item_geometry",
+              "pcb.set_item_net",
+              "pcb.set_item_layer",
+              "pcb.set_item_properties",
+              "pcb.set_metadata",
+              "pcb.refill_zones",
+              "pcb.rebuild_connectivity",
+              "pcb.run_validation",
+              "surface.apply_patch" } );
+}
+
+
+nlohmann::json sessionAtomicOperationToolParameters()
+{
+    return { { "type", "object" },
+             { "properties",
+               { { "kind",
+                   { { "type", "string" },
+                     { "enum", sessionAtomicOperationIdsJson() },
+                     { "description", "Typed KiSurf atomic operation id." } } },
+                 { "arguments",
+                   { { "type", "object" },
+                     { "description",
+                       "Operation-specific JSON arguments. Handles must be session "
+                       "handles or aliases returned by prior session operations." },
+                     { "additionalProperties", true } } } } },
+             { "required", nlohmann::json::array( { "kind", "arguments" } ) },
+             { "additionalProperties", false } };
+}
+
+
 nlohmann::json sessionBeginStepToolParameters()
 {
     return { { "type", "object" },
@@ -285,8 +341,14 @@ nlohmann::json sessionRollbackToolParameters()
                { { "checkpoint_id",
                    { { "type", "integer" },
                      { "minimum", 1 },
-                     { "description", "Checkpoint id returned by kisurf_checkpoint." } } } } },
-             { "required", nlohmann::json::array( { "checkpoint_id" } ) },
+                     { "description", "Checkpoint id returned by kisurf_checkpoint." } } },
+                 { "checkpoint_name",
+                   { { "type", "string" },
+                     { "description",
+                       "Checkpoint name previously supplied to kisurf_checkpoint or "
+                       "session.checkpoint(). Use this when the Python cell cannot know "
+                       "the runtime-assigned checkpoint id yet." } } } } },
+             { "required", nlohmann::json::array() },
              { "additionalProperties", false } };
 }
 
@@ -934,9 +996,14 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
                             "accepting pending preview changes.",
                             sessionOptionalReasonToolParameters() ),
               functionTool( "kisurf_run_cell",
-                            "Run a Python-first KiSurf session cell. Python can only "
-                            "mutate the board through typed session operations.",
+                            sessionRunCellToolDescription(),
                             sessionRunCellToolParameters() ),
+              functionTool( "kisurf_run_atomic_operation",
+                            "Run one typed KiSurf atomic operation inside the active "
+                            "AI execution session. This mutates only the shadow board "
+                            "and journal; it cannot publish or mutate the live board "
+                            "without kisurf_accept_session.",
+                            sessionAtomicOperationToolParameters() ),
               functionTool( "kisurf_begin_step",
                             "Begin a named AI execution step. Atomic operations recorded "
                             "after this call are grouped in the session journal.",

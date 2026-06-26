@@ -48,8 +48,18 @@ class KiSurfSession:
     def checkpoint(self, name: str) -> None:
         self.emit("session.checkpoint", name=name)
 
-    def rollback_to(self, checkpoint_id: int) -> None:
-        self.emit("session.rollback_to", checkpoint_id=int(checkpoint_id))
+    def rollback_to(self, checkpoint_id: int | None = None, *, name: str = "") -> None:
+        args: dict[str, Any] = {}
+
+        if checkpoint_id is not None:
+            args["checkpoint_id"] = int(checkpoint_id)
+
+        _set_optional(args, "checkpoint_name", name)
+
+        if not args:
+            raise ValueError("rollback_to requires checkpoint_id or name")
+
+        self.emit("session.rollback_to", **args)
 
     def create_via(self, *, position: Any, net: str = "", diameter: Any = None,
                    drill: Any = None, layer_pair: Any = None, alias: str = "",

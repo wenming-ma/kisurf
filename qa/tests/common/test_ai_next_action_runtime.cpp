@@ -665,6 +665,60 @@ public:
 };
 
 
+class ATOMIC_OPERATION_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "atomic operation tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"atomic_operation_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need atomic operation execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_atomic_operation" );
+                call.m_ToolName = wxS( "atomic_run_operation" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"atomic_via_1\"}}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class FAILING_BOUNDED_SCRIPT_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -4284,6 +4338,17 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
     BOOST_CHECK_EQUAL(
             catalogTool( "render.hidden_attempt" )->value( "namespace", std::string() ),
             "runtime" );
+    BOOST_REQUIRE( catalogTool( "atomic.run_operation" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "atomic.run_operation" )->value( "namespace", std::string() ),
+            "atomic" );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "atomic.run_operation" )->value( "layer", std::string() ),
+            "atomic" );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "atomic.run_operation" )->value( "role", std::string() ),
+            "hidden_mutation" );
+    BOOST_CHECK( !catalogTool( "atomic.run_operation" )->value( "can_publish", true ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"atomic\"" ) ) );
@@ -4336,6 +4401,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( !callable.empty() );
 
     bool sawScriptTool = false;
+    bool sawAtomicRunTool = false;
+    bool sawAtomicRunCreateViaKind = false;
     bool sawRepairTool = false;
     bool sawPlacementFootprintTransformTool = false;
     bool sawPlacementFootprintTransformRequiredPoints = false;
@@ -4493,6 +4560,45 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             && description.find( "namespace=surface" ) != std::string::npos )
         {
             sawSurfaceNamespaceDescription = true;
+        }
+
+        if( functionName == "atomic_run_operation" )
+        {
+            sawAtomicRunTool = true;
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+            bool requiresKind = false;
+            bool requiresArguments = false;
+
+            for( const nlohmann::json& item : required )
+            {
+                if( !item.is_string() )
+                    continue;
+
+                if( item.get<std::string>() == "kind" )
+                    requiresKind = true;
+
+                if( item.get<std::string>() == "arguments" )
+                    requiresArguments = true;
+            }
+
+            BOOST_CHECK( requiresKind );
+            BOOST_CHECK( requiresArguments );
+
+            const nlohmann::json& kindEnum =
+                    function["parameters"]["properties"]["kind"]["enum"];
+            BOOST_REQUIRE( kindEnum.is_array() );
+
+            for( const nlohmann::json& kind : kindEnum )
+            {
+                if( kind.is_string()
+                    && kind.get<std::string>() == "pcb.create_via" )
+                {
+                    sawAtomicRunCreateViaKind = true;
+                }
+            }
         }
 
         if( functionName == "script_run_bounded_plan"
@@ -5056,6 +5162,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     }
 
     BOOST_CHECK( sawScriptTool );
+    BOOST_CHECK( sawAtomicRunTool );
+    BOOST_CHECK( sawAtomicRunCreateViaKind );
     BOOST_CHECK( sawRepairTool );
     BOOST_CHECK( sawPlacementFootprintTransformTool );
     BOOST_CHECK( sawPlacementFootprintTransformRequiredPoints );
@@ -9115,6 +9223,70 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesBoundedScriptPlanToolAgainstHiddenAttempt )
                  == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
     BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "render_freshness_failed" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesAtomicOperationToolAgainstHiddenAttempt )
+{
+    auto* provider = new ATOMIC_OPERATION_TOOL_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+
+    const std::vector<AI_TOOL_CALL_RECORD> toolResults =
+            toolResultsWithoutPreviewGateFeedback( provider->m_Requests.back() );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result = toolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolCallId,
+                       wxString( wxS( "call_atomic_operation" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "atomic_run_operation" ) ) );
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"tool\":\"atomic.run_operation\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"atomic_operation_executed\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"checkpoint_id\":" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"session_journal\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"lowered_operations\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"script_step_count\":1" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"raw_board_access\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"direct_publish\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"pcb.create_via\"" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"atomic_via_1\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"provider_tool_results\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"call_atomic_operation\"" ) ) );
+    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
+            wxS( "\"atomic.run_operation\"" ) ) );
+
+    const wxString& mergedJournal = runtime.Attempts().front().m_JournalJson;
+    BOOST_CHECK( mergedJournal.Contains( wxS( "\"atomic_via_1\"" ) ) );
+    BOOST_CHECK( mergedJournal.Contains(
+            wxS( "\"merged_from_tool\":\"atomic.run_operation\"" ) ) );
+    BOOST_CHECK( mergedJournal.Contains(
+            wxS( "\"merged_from_tool_call_id\":\"call_atomic_operation\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
 }
 
 

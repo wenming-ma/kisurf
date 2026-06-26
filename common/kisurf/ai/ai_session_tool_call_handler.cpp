@@ -77,6 +77,7 @@ bool isSessionTool( const wxString& aToolName )
     return aToolName == wxS( "kisurf_open_session" )
            || aToolName == wxS( "kisurf_close_session" )
            || aToolName == wxS( "kisurf_run_cell" )
+           || aToolName == wxS( "kisurf_run_atomic_operation" )
            || aToolName == wxS( "kisurf_begin_step" )
            || aToolName == wxS( "kisurf_end_step" )
            || aToolName == wxS( "kisurf_checkpoint" )
@@ -96,6 +97,122 @@ bool isSessionTool( const wxString& aToolName )
            || aToolName == wxS( "kisurf_query_activity_timeline" )
            || aToolName == wxS( "kisurf_render_preview" )
            || aToolName == wxS( "kisurf_run_validation" );
+}
+
+
+nlohmann::json sessionAtomicOperationSetJson()
+{
+    return nlohmann::json::array(
+            { "pcb.create_via",
+              "pcb.create_track_segment",
+              "pcb.create_track_polyline",
+              "pcb.create_zone",
+              "pcb.create_shape",
+              "pcb.move_items",
+              "pcb.delete_items",
+              "pcb.update_item_geometry",
+              "pcb.set_item_net",
+              "pcb.set_item_layer",
+              "pcb.set_item_properties",
+              "pcb.set_metadata",
+              "pcb.refill_zones",
+              "pcb.rebuild_connectivity",
+              "pcb.run_validation",
+              "surface.apply_patch" } );
+}
+
+
+nlohmann::json sessionToolDescriptor( const char* aName, const char* aLayer,
+                                      const char* aRole, const char* aSideEffect )
+{
+    return { { "name", aName },
+             { "layer", aLayer },
+             { "role", aRole },
+             { "side_effect", aSideEffect },
+             { "can_publish", false },
+             { "direct_publish", false },
+             { "raw_board_access", false } };
+}
+
+
+nlohmann::json sessionToolCatalogJson()
+{
+    nlohmann::json tools = nlohmann::json::array(
+            { sessionToolDescriptor( "kisurf_open_session", "session_control",
+                                     "session_lifecycle", "session_control" ),
+              sessionToolDescriptor( "kisurf_close_session", "session_control",
+                                     "session_lifecycle", "session_control" ),
+              sessionToolDescriptor( "kisurf_begin_step", "session_control",
+                                     "step_lifecycle", "session_control" ),
+              sessionToolDescriptor( "kisurf_end_step", "session_control",
+                                     "step_lifecycle", "read_only" ),
+              sessionToolDescriptor( "kisurf_checkpoint", "session_control",
+                                     "checkpoint", "session_control" ),
+              sessionToolDescriptor( "kisurf_rollback_to", "session_control",
+                                     "checkpoint_rollback", "shadow_mutation" ),
+              sessionToolDescriptor( "kisurf_cancel_session", "session_control",
+                                     "session_lifecycle", "session_control" ),
+              sessionToolDescriptor( "kisurf_reject_session", "session_control",
+                                     "session_lifecycle", "session_control" ),
+              sessionToolDescriptor( "kisurf_accept_session", "runtime_gate",
+                                     "accept_gate", "live_commit" ),
+              sessionToolDescriptor( "kisurf_observe_step", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_board_summary", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_items", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_item", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_selection", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_nets", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_layers", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_design_rules", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_viewport", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_activity_timeline", "atomic",
+                                     "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_render_preview", "atomic",
+                                     "render", "render" ),
+              sessionToolDescriptor( "kisurf_run_validation", "atomic",
+                                     "validation", "validate" ),
+              sessionToolDescriptor( "kisurf_run_atomic_operation", "atomic",
+                                     "typed_atomic_operation", "shadow_mutation" ),
+              sessionToolDescriptor( "kisurf_run_cell", "script",
+                                     "python_cell_batch_composition",
+                                     "shadow_mutation" ) } );
+
+    for( nlohmann::json& tool : tools )
+    {
+        if( !tool.is_object() )
+            continue;
+
+        const std::string name = tool.value( "name", std::string() );
+
+        if( name == "kisurf_run_atomic_operation" )
+        {
+            tool["requires_journal"] = true;
+            tool["supported_kinds"] = sessionAtomicOperationSetJson();
+            tool["cannot_publish"] = true;
+        }
+        else if( name == "kisurf_run_cell" )
+        {
+            tool["requires_journal"] = true;
+            tool["lowers_to_atomic_ops"] = sessionAtomicOperationSetJson();
+            tool["execution_runtime"] = "python_subprocess_session_sdk";
+        }
+        else if( name == "kisurf_accept_session" )
+        {
+            tool["requires_accept_gate"] = true;
+            tool["requires_exact_journal_replay"] = true;
+        }
+    }
+
+    return tools;
 }
 
 
@@ -178,6 +295,56 @@ bool getRequiredUint64( const nlohmann::json& aArguments, const char* aName,
     }
 
     return true;
+}
+
+
+bool resolveCheckpointReference( const AI_EXECUTION_SESSION& aSession,
+                                 const nlohmann::json& aArguments,
+                                 uint64_t& aCheckpointId,
+                                 wxString& aCheckpointName,
+                                 wxString& aError )
+{
+    aCheckpointId = 0;
+    aCheckpointName.clear();
+
+    if( aArguments.contains( "checkpoint_id" )
+        && getRequiredUint64( aArguments, "checkpoint_id", aCheckpointId, aError ) )
+    {
+        return true;
+    }
+
+    if( aArguments.contains( "checkpoint_id" ) )
+        return false;
+
+    if( !aArguments.contains( "checkpoint_name" )
+        || !aArguments["checkpoint_name"].is_string() )
+    {
+        aError = wxS( "checkpoint_id or checkpoint_name is required." );
+        return false;
+    }
+
+    aCheckpointName = wxString::FromUTF8(
+            aArguments["checkpoint_name"].get_ref<const std::string&>().c_str() );
+
+    if( aCheckpointName.IsEmpty() )
+    {
+        aError = wxS( "checkpoint_name must be a non-empty string." );
+        return false;
+    }
+
+    const std::vector<AI_SESSION_CHECKPOINT>& checkpoints = aSession.Checkpoints();
+
+    for( auto it = checkpoints.rbegin(); it != checkpoints.rend(); ++it )
+    {
+        if( it->m_Name == aCheckpointName )
+        {
+            aCheckpointId = it->m_Id;
+            return true;
+        }
+    }
+
+    aError = wxS( "checkpoint_name is not valid for this session." );
+    return false;
 }
 
 
@@ -683,6 +850,60 @@ AI_SESSION_OPERATION_KIND operationKindForSessionQueryTool( const wxString& aToo
 
     if( aToolName == wxS( "kisurf_query_activity_timeline" ) )
         return AI_SESSION_OPERATION_KIND::QueryActivityTimeline;
+
+    return AI_SESSION_OPERATION_KIND::Unknown;
+}
+
+
+AI_SESSION_OPERATION_KIND operationKindForAtomicOperationId( const std::string& aKind )
+{
+    if( aKind == "pcb.create_via" )
+        return AI_SESSION_OPERATION_KIND::CreateVia;
+
+    if( aKind == "pcb.create_track_segment" )
+        return AI_SESSION_OPERATION_KIND::CreateTrackSegment;
+
+    if( aKind == "pcb.create_track_polyline" )
+        return AI_SESSION_OPERATION_KIND::CreateTrackPolyline;
+
+    if( aKind == "pcb.create_zone" )
+        return AI_SESSION_OPERATION_KIND::CreateZone;
+
+    if( aKind == "pcb.create_shape" )
+        return AI_SESSION_OPERATION_KIND::CreateShape;
+
+    if( aKind == "pcb.move_items" )
+        return AI_SESSION_OPERATION_KIND::MoveItems;
+
+    if( aKind == "pcb.delete_items" )
+        return AI_SESSION_OPERATION_KIND::DeleteItems;
+
+    if( aKind == "pcb.update_item_geometry" )
+        return AI_SESSION_OPERATION_KIND::UpdateItemGeometry;
+
+    if( aKind == "pcb.set_item_net" )
+        return AI_SESSION_OPERATION_KIND::SetItemNet;
+
+    if( aKind == "pcb.set_item_layer" )
+        return AI_SESSION_OPERATION_KIND::SetItemLayer;
+
+    if( aKind == "pcb.set_item_properties" )
+        return AI_SESSION_OPERATION_KIND::SetItemProperties;
+
+    if( aKind == "pcb.set_metadata" )
+        return AI_SESSION_OPERATION_KIND::SetMetadata;
+
+    if( aKind == "pcb.refill_zones" )
+        return AI_SESSION_OPERATION_KIND::RefillZones;
+
+    if( aKind == "pcb.rebuild_connectivity" )
+        return AI_SESSION_OPERATION_KIND::RebuildConnectivity;
+
+    if( aKind == "pcb.run_validation" )
+        return AI_SESSION_OPERATION_KIND::RunValidation;
+
+    if( aKind == "surface.apply_patch" )
+        return AI_SESSION_OPERATION_KIND::ApplySurfacePatch;
 
     return AI_SESSION_OPERATION_KIND::Unknown;
 }
@@ -1838,10 +2059,12 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                     const nlohmann::json controlArgs =
                             parseObjectJson( operation.m_ArgumentsJson );
                     uint64_t controlCheckpointId = 0;
+                    wxString checkpointName;
                     wxString error;
 
-                    if( !getRequiredUint64( controlArgs, "checkpoint_id",
-                                            controlCheckpointId, error ) )
+                    if( !resolveCheckpointReference( *m_Session, controlArgs,
+                                                     controlCheckpointId,
+                                                     checkpointName, error ) )
                     {
                         operationErrorCode = wxS( "malformed_arguments" );
                         operationMessage = error;
@@ -1858,8 +2081,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
                     nlohmann::json previewRestore =
                             restorePreviewForCheckpoint( controlCheckpointId );
-                    stepId = 0;
-                    operationResults.push_back(
+                    nlohmann::json rollbackResult =
                             { { "kind", toUtf8String( AiSessionOperationKindId(
                                                   operation.m_Kind ) ) },
                               { "arguments", controlArgs },
@@ -1868,7 +2090,13 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                               { "preview_restored",
                                 previewRestore["preview_restored"] },
                               { "preview", previewRestore["preview"] },
-                              { "board_mutated", false } } );
+                              { "board_mutated", false } };
+
+                    if( !checkpointName.IsEmpty() )
+                        rollbackResult["checkpoint_name"] = toUtf8String( checkpointName );
+
+                    stepId = 0;
+                    operationResults.push_back( std::move( rollbackResult ) );
                     continue;
                 }
 
@@ -2134,6 +2362,118 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                   { "board_mutated", false } } );
     }
 
+    if( aToolCall.m_ToolName == wxS( "kisurf_run_atomic_operation" ) )
+    {
+        if( !arguments.contains( "kind" ) || !arguments["kind"].is_string()
+            || arguments["kind"].get_ref<const std::string&>().empty()
+            || !arguments.contains( "arguments" ) || !arguments["arguments"].is_object() )
+        {
+            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+                                 wxS( "kisurf_run_atomic_operation requires kind and "
+                                      "object arguments." ) );
+        }
+
+        const std::string kindName = arguments["kind"].get_ref<const std::string&>();
+        const AI_SESSION_OPERATION_KIND operationKind =
+                operationKindForAtomicOperationId( kindName );
+
+        if( operationKind == AI_SESSION_OPERATION_KIND::Unknown )
+        {
+            return deniedResult(
+                    aRequest, aToolCall, wxS( "unsupported_operation_kind" ),
+                    wxString::Format( wxS( "Unsupported KiSurf atomic operation '%s'." ),
+                                      wxString::FromUTF8( kindName.c_str() ) ) );
+        }
+
+        if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
+            openSessionFromRequest( aRequest, wxEmptyString, contextBaseHash( aRequest ) );
+
+        if( m_Session->SelectionRevisionConflicts( effectiveContextVersion( aRequest ) ) )
+        {
+            return deniedResult( aRequest, aToolCall, wxS( "selection_conflict" ),
+                                 wxS( "Session selection changed after it was opened. "
+                                      "Query the current selection, roll back, or reject "
+                                      "the session before running another atomic operation." ) );
+        }
+
+        const bool hadOpenStep = m_Session->HasOpenStep();
+        uint64_t   stepId = 0;
+
+        if( !hadOpenStep )
+        {
+            stepId = m_Session->BeginStep(
+                    wxString::Format( wxS( "atomic %s" ),
+                                      wxString::FromUTF8( kindName.c_str() ) ) );
+
+            if( stepId == 0 )
+            {
+                return deniedResult( aRequest, aToolCall, wxS( "step_not_started" ),
+                                     wxS( "Unable to start an AI execution step for the "
+                                          "atomic operation." ) );
+            }
+        }
+
+        const wxString operationArgumentsJson = fromJson( arguments["arguments"] );
+        AI_ATOMIC_EXECUTION_RESULT execution = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                *m_Session, operationKind, operationArgumentsJson );
+
+        if( !execution.m_Ok )
+        {
+            if( stepId != 0 )
+                m_Session->FailStep( stepId, execution.m_Message );
+
+            return deniedResult( aRequest, aToolCall, execution.m_ErrorCode,
+                                 execution.m_Message );
+        }
+
+        wxString validationErrorCode;
+        wxString validationMessage;
+
+        if( operationKind == AI_SESSION_OPERATION_KIND::RunValidation
+            && !applyValidationServiceResult( *m_Session, operationArgumentsJson,
+                                              execution, m_ValidationService,
+                                              validationErrorCode, validationMessage ) )
+        {
+            if( stepId != 0 )
+                m_Session->FailStep( stepId, validationMessage );
+
+            return deniedResult( aRequest, aToolCall, validationErrorCode,
+                                 validationMessage );
+        }
+
+        if( operationKind == AI_SESSION_OPERATION_KIND::RunValidation )
+            projectValidationIssuesToShadowMetadata( *m_Session, execution );
+
+        AI_SESSION_OBSERVATION observation;
+
+        if( stepId != 0 )
+            observation = m_Session->EndStep( stepId );
+
+        nlohmann::json payload = {
+            { "status", "atomic_operation_executed" },
+            { "kind", kindName },
+            { "arguments", arguments["arguments"] },
+            { "applied_operation_count", execution.m_OperationIds.size() },
+            { "operation_ids", operationIdsJson( execution.m_OperationIds ) },
+            { "created_handles", handlesJson( execution.m_CreatedHandles ) },
+            { "resolved_handles", handlesJson( execution.m_ResolvedHandles ) },
+            { "warnings", warningsJson( execution.m_Warnings ) },
+            { "result", parseObjectJson( execution.m_ResultJson ) },
+            { "step_id", stepId },
+            { "observation",
+              stepId != 0 ? parseObjectJson( observation.AsJsonText() )
+                          : nlohmann::json::object() },
+            { "session", sessionJson( *m_Session ) },
+            { "shadow_board_mutated",
+              isMutationOperation( operationKind ) && !execution.m_OperationIds.empty() },
+            { "board_mutated", false }
+        };
+
+        return allowedResult( aRequest, aToolCall, true,
+                              wxS( "KiSurf atomic operation executed in the session." ),
+                              std::move( payload ) );
+    }
+
     if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
     {
         return deniedResult( aRequest, aToolCall, wxS( "no_active_session" ),
@@ -2286,9 +2626,11 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
     if( aToolCall.m_ToolName == wxS( "kisurf_rollback_to" ) )
     {
         uint64_t checkpointId = 0;
+        wxString checkpointName;
         wxString error;
 
-        if( !getRequiredUint64( arguments, "checkpoint_id", checkpointId, error ) )
+        if( !resolveCheckpointReference( *m_Session, arguments, checkpointId,
+                                         checkpointName, error ) )
             return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
 
         if( !m_Session->RollbackTo( checkpointId ) )
@@ -2298,15 +2640,19 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         }
 
         nlohmann::json previewRestore = restorePreviewForCheckpoint( checkpointId );
+        nlohmann::json payload = { { "status", "rolled_back" },
+                                   { "checkpoint_id", checkpointId },
+                                   { "preview_restored",
+                                     previewRestore["preview_restored"] },
+                                   { "preview", previewRestore["preview"] },
+                                   { "session", sessionJson( *m_Session ) },
+                                   { "board_mutated", false } };
+
+        if( !checkpointName.IsEmpty() )
+            payload["checkpoint_name"] = toUtf8String( checkpointName );
 
         return allowedResult( aRequest, aToolCall, true, wxS( "Rolled back." ),
-                              { { "status", "rolled_back" },
-                                { "checkpoint_id", checkpointId },
-                                { "preview_restored",
-                                  previewRestore["preview_restored"] },
-                                { "preview", previewRestore["preview"] },
-                                { "session", sessionJson( *m_Session ) },
-                                { "board_mutated", false } } );
+                              std::move( payload ) );
     }
 
     if( aToolCall.m_ToolName == wxS( "kisurf_render_preview" ) )
@@ -2510,6 +2856,12 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 const AI_EXECUTION_SESSION* AI_SESSION_TOOL_CALL_HANDLER::ActiveSession() const
 {
     return m_Session ? &( *m_Session ) : nullptr;
+}
+
+
+wxString AI_SESSION_TOOL_CALL_HANDLER::ToolCatalogJson() const
+{
+    return fromJson( sessionToolCatalogJson() );
 }
 
 

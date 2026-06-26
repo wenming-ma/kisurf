@@ -803,6 +803,12 @@ bool isBoundedPlanMutationTool( const std::string& aToolName )
 }
 
 
+bool isAtomicRunOperationTool( const std::string& aToolName )
+{
+    return aToolName == "atomic.run_operation";
+}
+
+
 bool isSurfaceRepairPatchTool( const std::string& aToolName )
 {
     return aToolName == "surface.repair_patch";
@@ -894,7 +900,8 @@ bool isRepairWrapperTool( const std::string& aToolName )
 
 bool isHiddenMutationBatchTool( const std::string& aToolName )
 {
-    return isBoundedPlanMutationTool( aToolName )
+    return isAtomicRunOperationTool( aToolName )
+           || isBoundedPlanMutationTool( aToolName )
            || isRepairWrapperTool( aToolName )
            || isRoutingRepairBusSegmentsTool( aToolName );
 }
@@ -1269,9 +1276,15 @@ bool toolRecordIsExecutedHiddenMutation( const nlohmann::json& aToolRecord )
                && result.value( "mutation_applied", false );
     }
 
-    return isHiddenMutationBatchTool( resultTool )
-           && result.value( "status", std::string() ) == "script_plan_executed"
-           && result.value( "mutation_applied", false );
+    if( !isHiddenMutationBatchTool( resultTool )
+        || !result.value( "mutation_applied", false ) )
+    {
+        return false;
+    }
+
+    const std::string status = result.value( "status", std::string() );
+    return status == "script_plan_executed"
+           || status == "atomic_operation_executed";
 }
 
 
@@ -11152,6 +11165,17 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "side_effect", "shadow_mutation" },
                 { "can_publish", false },
                 { "live_board_touched", false } },
+              { { "name", "atomic.run_operation" },
+                { "layer", "atomic" },
+                { "role", "hidden_mutation" },
+                { "side_effect", "shadow_mutation" },
+                { "can_publish", false },
+                { "raw_board_access", false },
+                { "direct_publish", false },
+                { "requires_checkpoint", true },
+                { "requires_journal", true },
+                { "lowers_to", "typed_atomic_operation" },
+                { "max_steps", 1 } },
               { { "name", "render.hidden_attempt" },
                 { "layer", "atomic" },
                 { "role", "render" },
@@ -11295,6 +11319,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
 
                 if( aName.rfind( "surface.", 0 ) == 0 )
                     return std::string( "surface" );
+
+                if( aName.rfind( "atomic.", 0 ) == 0 )
+                    return std::string( "atomic" );
 
                 if( aName.rfind( "script.", 0 ) == 0 )
                     return std::string( "script" );
@@ -11453,7 +11480,40 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
-                if( aName == "shadow.apply_candidate" )
+                if( isAtomicRunOperationTool( aName ) )
+                {
+                    parameters["properties"]["kind"] =
+                            { { "type", "string" },
+                              { "enum",
+                                nlohmann::json::array(
+                                        { "pcb.create_via",
+                                          "pcb.create_track_segment",
+                                          "pcb.create_track_polyline",
+                                          "pcb.create_zone",
+                                          "pcb.create_shape",
+                                          "pcb.move_items",
+                                          "pcb.delete_items",
+                                          "pcb.update_item_geometry",
+                                          "pcb.set_item_net",
+                                          "pcb.set_item_layer",
+                                          "pcb.set_item_properties",
+                                          "pcb.set_metadata",
+                                          "pcb.refill_zones",
+                                          "pcb.rebuild_connectivity",
+                                          "pcb.run_validation",
+                                          "surface.apply_patch" } ) },
+                              { "description",
+                                "Approved typed atomic operation to run in the hidden attempt." } };
+                    parameters["properties"]["arguments"] =
+                            { { "type", "object" },
+                              { "description",
+                                "Arguments for the selected atomic operation. Handles must "
+                                "come from the current hidden attempt journal or aliases." },
+                              { "additionalProperties", true } };
+                    parameters["required"] = nlohmann::json::array(
+                            { "kind", "arguments" } );
+                }
+                else if( aName == "shadow.apply_candidate" )
                 {
                     parameters["properties"]["candidate_index"] =
                             { { "type", "integer" },
@@ -12377,6 +12437,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     return std::string( "shadow.apply_candidate" );
                 }
 
+                if( name == "atomic_run_operation"
+                    || name == "atomic.run_operation" )
+                {
+                    return std::string( "atomic.run_operation" );
+                }
+
                 if( name == "render_hidden_attempt"
                     || name == "render.hidden_attempt" )
                 {
@@ -12727,7 +12793,29 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
 
-        if( isRoutingRepairBusSegmentsTool( toolName ) )
+        if( isAtomicRunOperationTool( toolName ) )
+        {
+            if( !args.contains( "kind" ) || !args["kind"].is_string()
+                || args["kind"].get_ref<const std::string&>().empty()
+                || !args.contains( "arguments" )
+                || !args["arguments"].is_object() )
+            {
+                return makeResult(
+                        false, false, wxS( "malformed_arguments" ),
+                        wxS( "atomic.run_operation requires kind and object arguments." ),
+                        { { "tool", boundedPlanToolName },
+                          { "status", "malformed_arguments" } } );
+            }
+
+            args =
+                    { { "plan",
+                        { { "operations",
+                            nlohmann::json::array(
+                                    { { { "kind", args["kind"] },
+                                        { "arguments", args["arguments"] } } } ) } } },
+                      { "max_steps", 1 } };
+        }
+        else if( isRoutingRepairBusSegmentsTool( toolName ) )
         {
             if( !args.contains( "segments" ) || !args["segments"].is_array()
                 || args["segments"].empty() || args["segments"].size() > 16 )
@@ -13305,8 +13393,13 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
         nlohmann::json payload =
                 { { "tool", boundedPlanToolName },
-                  { "status", failed ? "script_plan_failed"
-                                      : "script_plan_executed" },
+                  { "status",
+                    failed ? ( isAtomicRunOperationTool( boundedPlanToolName )
+                                       ? "atomic_operation_failed"
+                                       : "script_plan_failed" )
+                           : ( isAtomicRunOperationTool( boundedPlanToolName )
+                                       ? "atomic_operation_executed"
+                                       : "script_plan_executed" ) },
                   { "attempt_id", aAttempt->m_Id },
                   { "hidden_session_id", aAttempt->m_HiddenSessionId },
                   { "checkpoint_id", checkpointId },

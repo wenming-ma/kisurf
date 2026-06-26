@@ -372,6 +372,24 @@ class KiSurfAiSessionSdkTest(unittest.TestCase):
                          "before clearance trial")
         self.assertEqual(result["operations"][1]["arguments"]["checkpoint_id"], 7)
 
+    def test_control_helpers_can_rollback_to_named_checkpoint(self):
+        session = KiSurfSession()
+
+        session.checkpoint("before placement correction")
+        session.rollback_to(name="before placement correction")
+
+        result = session.to_result()
+
+        self.assertEqual(
+            [op["kind"] for op in result["operations"]],
+            ["session.checkpoint", "session.rollback_to"],
+        )
+        self.assertEqual(result["operations"][0]["arguments"]["name"],
+                         "before placement correction")
+        self.assertEqual(result["operations"][1]["arguments"]["checkpoint_name"],
+                         "before placement correction")
+        self.assertNotIn("checkpoint_id", result["operations"][1]["arguments"])
+
     def test_run_cell_exception_returns_failed_result_without_operations(self):
         request = {
             "protocol": "kisurf.ai.session.v1",

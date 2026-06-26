@@ -442,7 +442,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
 
                 BOOST_REQUIRE( body.contains( "tools" ) );
                 BOOST_REQUIRE( body["tools"].is_array() );
-                BOOST_REQUIRE_EQUAL( body["tools"].size(), 29 );
+                BOOST_REQUIRE_EQUAL( body["tools"].size(), 30 );
 
                 std::vector<std::string> toolNames;
                 nlohmann::json           toolByName;
@@ -481,6 +481,8 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                         "kisurf_close_session" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_run_cell" ) != toolNames.end() );
+                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
+                                        "kisurf_run_atomic_operation" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_begin_step" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
@@ -551,14 +553,46 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                         "script_run_operation_bundle" ) == toolNames.end() );
                 const nlohmann::json& runCellParameters =
                         toolByName["kisurf_run_cell"]["function"]["parameters"];
+                const std::string runCellDescription =
+                        toolByName["kisurf_run_cell"]["function"]["description"]
+                                .get<std::string>();
+                BOOST_CHECK( runCellDescription.find( "pcb.create_via" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "pcb.create_track_segment" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "surface.apply_patch" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "script_run_operation_bundle" )
+                             == std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "pcb_fill_via_matrix" )
+                             == std::string::npos );
                 BOOST_CHECK( runCellParameters["required"].dump().find( "cell_text" )
                              != std::string::npos );
                 BOOST_CHECK( runCellParameters["properties"].contains( "cell_id" ) );
                 BOOST_CHECK( !runCellParameters["additionalProperties"].get<bool>() );
+                const nlohmann::json& atomicParameters =
+                        toolByName["kisurf_run_atomic_operation"]["function"]["parameters"];
+                const std::string atomicDescription =
+                        toolByName["kisurf_run_atomic_operation"]["function"]["description"]
+                                .get<std::string>();
+                BOOST_CHECK( atomicDescription.find( "typed KiSurf atomic operation" )
+                             != std::string::npos );
+                BOOST_CHECK( atomicDescription.find( "cannot publish" )
+                             != std::string::npos );
+                BOOST_CHECK( atomicParameters["required"].dump().find( "kind" )
+                             != std::string::npos );
+                BOOST_CHECK( atomicParameters["required"].dump().find( "arguments" )
+                             != std::string::npos );
+                BOOST_CHECK( atomicParameters["properties"]["kind"]["enum"].dump().find(
+                                     "pcb.create_via" ) != std::string::npos );
+                BOOST_CHECK( atomicParameters["properties"]["kind"]["enum"].dump().find(
+                                     "surface.apply_patch" ) != std::string::npos );
+                BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& rollbackParameters =
                         toolByName["kisurf_rollback_to"]["function"]["parameters"];
-                BOOST_CHECK( rollbackParameters["required"].dump().find( "checkpoint_id" )
-                             != std::string::npos );
+                BOOST_CHECK( rollbackParameters["required"].empty() );
+                BOOST_CHECK( rollbackParameters["properties"].contains( "checkpoint_id" ) );
+                BOOST_CHECK( rollbackParameters["properties"].contains( "checkpoint_name" ) );
                 BOOST_CHECK( !rollbackParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& validationParameters =
                         toolByName["kisurf_run_validation"]["function"]["parameters"];
