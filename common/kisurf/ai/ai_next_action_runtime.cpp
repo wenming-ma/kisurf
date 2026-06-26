@@ -9223,6 +9223,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "can_publish", false },
                 { "requires_review_decision", "publish" } } } );
 
+    auto namespaceForTool =
+            []( const std::string& aName )
+            {
+                if( aName.rfind( "placement.", 0 ) == 0 )
+                    return std::string( "placement" );
+
+                if( aName.rfind( "routing.", 0 ) == 0 )
+                    return std::string( "routing" );
+
+                if( aName.rfind( "surface.", 0 ) == 0 )
+                    return std::string( "surface" );
+
+                if( aName.rfind( "script.", 0 ) == 0 )
+                    return std::string( "script" );
+
+                if( aName.rfind( "repair.", 0 ) == 0 )
+                    return std::string( "repair" );
+
+                return std::string( "runtime" );
+            };
+
+    for( nlohmann::json& tool : tools )
+    {
+        if( tool.is_object() )
+            tool["namespace"] = namespaceForTool(
+                    tool.value( "name", std::string() ) );
+    }
+
     return fromUtf8String( tools.dump() );
 }
 
@@ -9870,6 +9898,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
         const std::string description =
                 "KiSurf Next Action tool: " + name + ". Layer="
                 + tool.value( "layer", std::string( "unknown" ) )
+                + ", namespace="
+                + tool.value( "namespace", std::string( "unknown" ) )
                 + ", role=" + tool.value( "role", std::string( "unknown" ) )
                 + ", side_effect="
                 + tool.value( "side_effect", std::string( "unknown" ) )

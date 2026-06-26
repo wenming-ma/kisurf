@@ -4146,9 +4146,31 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
 {
     AI_NEXT_ACTION_TOOL_REGISTRY tools;
     const wxString catalog = tools.ToolCatalogJson();
+    const nlohmann::json catalogJson =
+            nlohmann::json::parse( catalog.ToStdString() );
+
+    auto catalogTool =
+            [&]( const std::string& aName ) -> const nlohmann::json*
+            {
+                for( const nlohmann::json& tool : catalogJson )
+                {
+                    if( tool.is_object()
+                        && tool.value( "name", std::string() ) == aName )
+                    {
+                        return &tool;
+                    }
+                }
+
+                return nullptr;
+            };
 
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "placement.generate_via_pattern_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "placement.generate_via_pattern_candidates" )
+                    ->value( "namespace", std::string() ),
+            "placement" );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.generate_footprint_transform_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
@@ -4159,6 +4181,11 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"candidate_source\":\"internal_footprint_orientation_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "routing.generate_segment_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "routing.generate_segment_candidates" )
+                    ->value( "namespace", std::string() ),
+            "routing" );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_parallel_segment_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
@@ -4177,11 +4204,24 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"candidate_source\":\"internal_constraint_aware_reroute_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "surface.generate_fill_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "surface.generate_fill_candidates" )
+                    ->value( "namespace", std::string() ),
+            "surface" );
+    BOOST_REQUIRE( catalogTool( "render.hidden_attempt" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "render.hidden_attempt" )->value( "namespace", std::string() ),
+            "runtime" );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"atomic\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"shadow_mutation\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "script.run_bounded_plan" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "script.run_bounded_plan" )->value( "namespace", std::string() ),
+            "script" );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"script\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_batch_composition\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
@@ -4271,6 +4311,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawPlacementOrientationRepairHandleSchema = false;
     bool sawRoutingReplacePathHandleSchema = false;
     bool sawRoutingConstraintRerouteHandleSchema = false;
+    bool sawRoutingNamespaceDescription = false;
+    bool sawScriptNamespaceDescription = false;
+    bool sawSurfaceNamespaceDescription = false;
 
     auto pointSchemaRequiresXY =
             []( const nlohmann::json& aSchema )
@@ -4360,6 +4403,26 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                            "object" );
 
         const std::string functionName = function["name"].get<std::string>();
+        const std::string description =
+                function.value( "description", std::string() );
+
+        if( functionName == "routing_repair_segment"
+            && description.find( "namespace=routing" ) != std::string::npos )
+        {
+            sawRoutingNamespaceDescription = true;
+        }
+
+        if( functionName == "script_run_bounded_plan"
+            && description.find( "namespace=script" ) != std::string::npos )
+        {
+            sawScriptNamespaceDescription = true;
+        }
+
+        if( functionName == "surface_repair_patch"
+            && description.find( "namespace=surface" ) != std::string::npos )
+        {
+            sawSurfaceNamespaceDescription = true;
+        }
 
         if( functionName == "script_run_bounded_plan"
             || functionName == "repair_apply_bounded_plan" )
@@ -4965,6 +5028,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawPlacementOrientationRepairHandleSchema );
     BOOST_CHECK( sawRoutingReplacePathHandleSchema );
     BOOST_CHECK( sawRoutingConstraintRerouteHandleSchema );
+    BOOST_CHECK( sawRoutingNamespaceDescription );
+    BOOST_CHECK( sawScriptNamespaceDescription );
+    BOOST_CHECK( sawSurfaceNamespaceDescription );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( sawSurfaceRepairWritePolicy );
