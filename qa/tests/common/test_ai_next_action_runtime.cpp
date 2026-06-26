@@ -6014,6 +6014,29 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE(
             routingPacket["routing_reachability_facts"].at( 0 )
                     .contains( "reachability_obstacle_facts" ) );
+    BOOST_REQUIRE(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    .contains( "router_cost_hint" ) );
+    const nlohmann::json& routerCostHint =
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["router_cost_hint"];
+    BOOST_CHECK_EQUAL( routerCostHint["source"].get<std::string>(),
+                       "routing_reachability_fact" );
+    BOOST_CHECK_EQUAL( routerCostHint["cost_model"].get<std::string>(),
+                       "heuristic_manhattan_obstacle_layer" );
+    BOOST_CHECK_EQUAL(
+            routerCostHint["route_head_to_nearest_endpoint_manhattan"].get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routerCostHint["remaining_endpoint_span_manhattan"].get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            routerCostHint["candidate_obstacle_count"].get<int>(), 2 );
+    BOOST_CHECK(
+            !routerCostHint["requires_layer_switch"].get<bool>() );
+    BOOST_CHECK_EQUAL(
+            routerCostHint["via_transition_count_estimate"].get<int>(), 0 );
+    BOOST_CHECK( routerCostHint["review_required"].get<bool>() );
 
     std::set<std::string> reachabilityObstacleLabels;
 
