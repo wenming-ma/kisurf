@@ -364,6 +364,9 @@ inline constexpr unsigned AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_SCHEMA_VERSION = 
 KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
 AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson );
 
+KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath );
+
 class KICOMMON_API AI_NEXT_ACTION_SCHEDULER
 {
 public:
