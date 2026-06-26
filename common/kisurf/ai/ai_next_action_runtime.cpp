@@ -8818,6 +8818,9 @@ AiEvaluateNextActionReplayTraceBatch(
         if( evaluation.m_PreviewGateAllowed )
             ++result.m_PreviewGateAllowedCount;
 
+        if( evaluation.m_WorkStateInteractionSemanticsPresent )
+            ++result.m_WorkStateInteractionSemanticsPresentCount;
+
         if( evaluation.m_HasBlockingValidationIssue )
             ++result.m_BlockingValidationCount;
 
@@ -8847,6 +8850,8 @@ AiEvaluateNextActionReplayTraceBatch(
               { "tool_result_count", result.m_ToolResultCount },
               { "preview_gate_allowed_count",
                 result.m_PreviewGateAllowedCount },
+              { "work_state_interaction_semantics_present_count",
+                result.m_WorkStateInteractionSemanticsPresentCount },
               { "blocking_validation_count",
                 result.m_BlockingValidationCount },
               { "valid", result.m_Valid } };
