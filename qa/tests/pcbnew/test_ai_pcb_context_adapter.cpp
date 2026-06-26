@@ -25,6 +25,7 @@
 #include <project/project_local_settings.h>
 #include <project/net_settings.h>
 #include <settings/settings_manager.h>
+#include <cmath>
 #include <memory>
 #include <set>
 #include <wx/filename.h>
@@ -180,6 +181,58 @@ const nlohmann::json* findGeometryRuleCoverage( const nlohmann::json& aCoverage,
     }
 
     return nullptr;
+}
+
+
+const nlohmann::json* findCourtyardPairByLabels( const nlohmann::json& aPairs,
+                                                 const std::string& aLabelA,
+                                                 const std::string& aLabelB )
+{
+    for( const nlohmann::json& pair : aPairs )
+    {
+        const std::string source = pair["source_footprint"]["label"].get<std::string>();
+        const std::string target = pair["target_footprint"]["label"].get<std::string>();
+
+        if( ( source == aLabelA && target == aLabelB )
+            || ( source == aLabelB && target == aLabelA ) )
+        {
+            return &pair;
+        }
+    }
+
+    return nullptr;
+}
+
+
+int bboxAxisGapForTest( int aMinA, int aMaxA, int aMinB, int aMaxB )
+{
+    if( aMaxA < aMinB )
+        return aMinB - aMaxA;
+
+    if( aMaxB < aMinA )
+        return aMinA - aMaxB;
+
+    return 0;
+}
+
+
+int bboxSpacingForTest( const BOX2I& aBoxA, const BOX2I& aBoxB )
+{
+    const int gapX = bboxAxisGapForTest( aBoxA.GetX(), aBoxA.GetEnd().x,
+                                         aBoxB.GetX(), aBoxB.GetEnd().x );
+    const int gapY = bboxAxisGapForTest( aBoxA.GetY(), aBoxA.GetEnd().y,
+                                         aBoxB.GetY(), aBoxB.GetEnd().y );
+
+    return static_cast<int>( std::llround( std::sqrt(
+            static_cast<double>( gapX ) * static_cast<double>( gapX )
+            + static_cast<double>( gapY ) * static_cast<double>( gapY ) ) ) );
+}
+
+
+bool bboxOverlapsWithAreaForTest( const BOX2I& aBoxA, const BOX2I& aBoxB )
+{
+    return aBoxA.GetX() < aBoxB.GetEnd().x && aBoxB.GetX() < aBoxA.GetEnd().x
+           && aBoxA.GetY() < aBoxB.GetEnd().y && aBoxB.GetY() < aBoxA.GetEnd().y;
 }
 
 
@@ -1808,6 +1861,99 @@ BOOST_AUTO_TEST_CASE( AdapterAddsFootprintGeometryExtents )
     BOOST_CHECK_EQUAL( details["courtyard_bbox"]["y"].get<int>(), courtyardBBox.GetY() );
     BOOST_CHECK_EQUAL( details["courtyard_bbox"]["width"].get<int>(), courtyardBBox.GetWidth() );
     BOOST_CHECK_EQUAL( details["courtyard_bbox"]["height"].get<int>(), courtyardBBox.GetHeight() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AdapterAddsPlacementCourtyardPairFacts )
+{
+    BOARD board;
+
+    auto addFootprint =
+            [&]( const wxString& aReference,
+                 const std::vector<VECTOR2I>& aCourtyardPoints ) -> FOOTPRINT*
+            {
+                FOOTPRINT* footprint = new FOOTPRINT( &board );
+                footprint->SetReference( aReference );
+                footprint->SetLayer( F_Cu );
+                footprint->SetPosition( VECTOR2I( 0, 0 ) );
+
+                PCB_SHAPE* courtyard = new PCB_SHAPE( footprint, SHAPE_T::POLY );
+                courtyard->SetLayer( F_CrtYd );
+                courtyard->SetWidth( 50000 );
+                courtyard->SetPolyPoints( aCourtyardPoints );
+                footprint->Add( courtyard );
+
+                board.Add( footprint );
+                return footprint;
+            };
+
+    FOOTPRINT* u1 = addFootprint( wxS( "U1" ),
+                                  { VECTOR2I( 0, 0 ), VECTOR2I( 100000, 0 ),
+                                    VECTOR2I( 100000, 100000 ), VECTOR2I( 0, 100000 ) } );
+    FOOTPRINT* u2 = addFootprint( wxS( "U2" ),
+                                  { VECTOR2I( 300000, 25000 ), VECTOR2I( 400000, 25000 ),
+                                    VECTOR2I( 400000, 125000 ),
+                                    VECTOR2I( 300000, 125000 ) } );
+    FOOTPRINT* u3 = addFootprint( wxS( "U3" ),
+                                  { VECTOR2I( 350000, 50000 ), VECTOR2I( 450000, 50000 ),
+                                    VECTOR2I( 450000, 150000 ),
+                                    VECTOR2I( 350000, 150000 ) } );
+
+    KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
+    AI_CONTEXT_SNAPSHOT           snapshot = adapter.BuildIndex().BuildSnapshot();
+
+    nlohmann::json summary = nlohmann::json::parse( snapshot.m_Summary.ToStdString() );
+    nlohmann::json placementFacts = summary["placement_facts"];
+
+    BOOST_CHECK_EQUAL( placementFacts["footprint_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( placementFacts["footprints_with_courtyard_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( placementFacts["courtyard_pair_sample_truncated"].get<bool>(), false );
+    BOOST_REQUIRE_GE( placementFacts["courtyard_pairs"].size(), 3u );
+
+    const nlohmann::json* u1u2 =
+            findCourtyardPairByLabels( placementFacts["courtyard_pairs"], "U1", "U2" );
+
+    BOOST_REQUIRE( u1u2 );
+    BOOST_CHECK_EQUAL( ( *u1u2 )["kind"].get<std::string>(), "footprint_courtyard_pair" );
+    BOOST_CHECK_EQUAL( ( *u1u2 )["side"].get<std::string>(), "front" );
+    BOOST_CHECK_EQUAL( ( *u1u2 )["layer"].get<std::string>(), "F.Courtyard" );
+    BOOST_CHECK_EQUAL( ( *u1u2 )["bbox_spacing"].get<int>(),
+                       bboxSpacingForTest( u1->GetCourtyard( F_CrtYd ).BBox(),
+                                           u2->GetCourtyard( F_CrtYd ).BBox() ) );
+    BOOST_CHECK_EQUAL( ( *u1u2 )["bbox_overlaps"].get<bool>(),
+                       bboxOverlapsWithAreaForTest( u1->GetCourtyard( F_CrtYd ).BBox(),
+                                                    u2->GetCourtyard( F_CrtYd ).BBox() ) );
+    BOOST_CHECK_GT( ( *u1u2 )["bbox_spacing"].get<int>(), 0 );
+
+    const nlohmann::json& u1Json =
+            ( *u1u2 )["source_footprint"]["label"].get<std::string>() == "U1"
+                    ? ( *u1u2 )["source_footprint"]
+                    : ( *u1u2 )["target_footprint"];
+    const nlohmann::json& u2Json =
+            ( *u1u2 )["source_footprint"]["label"].get<std::string>() == "U2"
+                    ? ( *u1u2 )["source_footprint"]
+                    : ( *u1u2 )["target_footprint"];
+
+    BOOST_CHECK_EQUAL( u1Json["courtyard_bbox"]["width"].get<int>(),
+                       u1->GetCourtyard( F_CrtYd ).BBox().GetWidth() );
+    BOOST_CHECK_EQUAL( u2Json["courtyard_bbox"]["x"].get<int>(),
+                       u2->GetCourtyard( F_CrtYd ).BBox().GetX() );
+
+    const nlohmann::json* u2u3 =
+            findCourtyardPairByLabels( placementFacts["courtyard_pairs"], "U2", "U3" );
+
+    BOOST_REQUIRE( u2u3 );
+    BOOST_CHECK_EQUAL( ( *u2u3 )["bbox_overlaps"].get<bool>(),
+                       bboxOverlapsWithAreaForTest( u2->GetCourtyard( F_CrtYd ).BBox(),
+                                                    u3->GetCourtyard( F_CrtYd ).BBox() ) );
+    BOOST_CHECK_EQUAL( ( *u2u3 )["bbox_spacing"].get<int>(),
+                       bboxSpacingForTest( u2->GetCourtyard( F_CrtYd ).BBox(),
+                                           u3->GetCourtyard( F_CrtYd ).BBox() ) );
+    BOOST_CHECK( ( *u2u3 )["bbox_overlaps"].get<bool>() );
+    BOOST_CHECK_EQUAL( ( *u2u3 )["bbox_spacing"].get<int>(), 0 );
+
+    (void) u1;
+    (void) u3;
 }
 
 
