@@ -5242,6 +5242,24 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_corridor_facts"].at( 0 )["dy"].get<int>(),
             0 );
     BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["x"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["y"].get<int>(),
+            200 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["width"]
+                    .get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["height"]
+                    .get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["corridor_bbox"]["center"]
+                    ["x"].get<int>(),
+            210 );
+    BOOST_CHECK_EQUAL(
             routingPacket["routing_corridor_facts"].at( 0 )["segment_style"]
                     .get<std::string>(),
             "horizontal" );
