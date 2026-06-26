@@ -100,6 +100,7 @@
       "expected": {
         "terminal_state": "published",
         "published": true,
+        "work_state": "routing",
         "min_hidden_operation_count": 1,
         "min_decision_tool_result_count": 1,
         "min_review_tool_result_count": 1,

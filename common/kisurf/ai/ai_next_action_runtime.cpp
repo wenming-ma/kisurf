@@ -9279,6 +9279,16 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
 
     const nlohmann::json& expected = golden["expected"];
 
+    if( expected.contains( "work_state" )
+        && expected["work_state"].is_string()
+        && expected["work_state"].get<std::string>()
+           != toUtf8String( result.m_WorkState ) )
+    {
+        return finish( true, false, wxS( "work_state_mismatch" ),
+                       wxS( "Replay work_state did not match expected." ),
+                       &traceEval );
+    }
+
     if( expected.contains( "terminal_state" )
         && expected["terminal_state"].is_string()
         && expected["terminal_state"].get<std::string>()
