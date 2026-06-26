@@ -4146,9 +4146,31 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
 {
     AI_NEXT_ACTION_TOOL_REGISTRY tools;
     const wxString catalog = tools.ToolCatalogJson();
+    const nlohmann::json catalogJson =
+            nlohmann::json::parse( catalog.ToStdString() );
+
+    auto catalogTool =
+            [&]( const std::string& aName ) -> const nlohmann::json*
+            {
+                for( const nlohmann::json& tool : catalogJson )
+                {
+                    if( tool.is_object()
+                        && tool.value( "name", std::string() ) == aName )
+                    {
+                        return &tool;
+                    }
+                }
+
+                return nullptr;
+            };
 
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "placement.generate_via_pattern_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "placement.generate_via_pattern_candidates" )
+                    ->value( "namespace", std::string() ),
+            "placement" );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"placement.generate_footprint_transform_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
@@ -4159,6 +4181,11 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"candidate_source\":\"internal_footprint_orientation_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "routing.generate_segment_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "routing.generate_segment_candidates" )
+                    ->value( "namespace", std::string() ),
+            "routing" );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"routing.generate_parallel_segment_candidates\"" ) ) );
     BOOST_CHECK( catalog.Contains(
@@ -4177,11 +4204,24 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
             wxS( "\"candidate_source\":\"internal_constraint_aware_reroute_library\"" ) ) );
     BOOST_CHECK( catalog.Contains(
             wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "surface.generate_fill_candidates" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "surface.generate_fill_candidates" )
+                    ->value( "namespace", std::string() ),
+            "surface" );
+    BOOST_REQUIRE( catalogTool( "render.hidden_attempt" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "render.hidden_attempt" )->value( "namespace", std::string() ),
+            "runtime" );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"integrated\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"read_only\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"atomic\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"side_effect\":\"shadow_mutation\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"script.run_bounded_plan\"" ) ) );
+    BOOST_REQUIRE( catalogTool( "script.run_bounded_plan" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "script.run_bounded_plan" )->value( "namespace", std::string() ),
+            "script" );
     BOOST_CHECK( catalog.Contains( wxS( "\"layer\":\"script\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"role\":\"bounded_batch_composition\"" ) ) );
     BOOST_CHECK( catalog.Contains( wxS( "\"name\":\"repair.apply_bounded_plan\"" ) ) );
@@ -4271,6 +4311,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawPlacementOrientationRepairHandleSchema = false;
     bool sawRoutingReplacePathHandleSchema = false;
     bool sawRoutingConstraintRerouteHandleSchema = false;
+    bool sawRoutingNamespaceDescription = false;
+    bool sawScriptNamespaceDescription = false;
+    bool sawSurfaceNamespaceDescription = false;
 
     auto pointSchemaRequiresXY =
             []( const nlohmann::json& aSchema )
@@ -4360,6 +4403,26 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                            "object" );
 
         const std::string functionName = function["name"].get<std::string>();
+        const std::string description =
+                function.value( "description", std::string() );
+
+        if( functionName == "routing_repair_segment"
+            && description.find( "namespace=routing" ) != std::string::npos )
+        {
+            sawRoutingNamespaceDescription = true;
+        }
+
+        if( functionName == "script_run_bounded_plan"
+            && description.find( "namespace=script" ) != std::string::npos )
+        {
+            sawScriptNamespaceDescription = true;
+        }
+
+        if( functionName == "surface_repair_patch"
+            && description.find( "namespace=surface" ) != std::string::npos )
+        {
+            sawSurfaceNamespaceDescription = true;
+        }
 
         if( functionName == "script_run_bounded_plan"
             || functionName == "repair_apply_bounded_plan" )
@@ -4965,6 +5028,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawPlacementOrientationRepairHandleSchema );
     BOOST_CHECK( sawRoutingReplacePathHandleSchema );
     BOOST_CHECK( sawRoutingConstraintRerouteHandleSchema );
+    BOOST_CHECK( sawRoutingNamespaceDescription );
+    BOOST_CHECK( sawScriptNamespaceDescription );
+    BOOST_CHECK( sawSurfaceNamespaceDescription );
     BOOST_CHECK( sawSurfaceRepairRequiredPatch );
     BOOST_CHECK( sawSurfaceRepairExpectedMetadata );
     BOOST_CHECK( sawSurfaceRepairWritePolicy );
@@ -5569,6 +5635,13 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"net_name\":\"GND\",\"visible\":true}],"
                  "\"unconnected_edge_sample_truncated\":false},"
                  "\"net_facts\":[{\"code\":1,\"name\":\"GND\","
+                 "\"routed_track_length\":780,\"routed_track_segment_count\":3,"
+                 "\"routed_via_count\":2,"
+                 "\"routed_layer_lengths\":[{\"layer\":\"F.Cu\","
+                 "\"routed_track_length\":780,"
+                 "\"routed_track_segment_count\":3},"
+                 "{\"layer\":\"B.Cu\",\"routed_track_length\":120,"
+                 "\"routed_track_segment_count\":1}],"
                  "\"netclass\":{\"name\":\"Default\",\"clearance\":90000,"
                  "\"track_width\":150000,\"via_diameter\":450000,"
                  "\"via_drill\":250000},"
@@ -5670,6 +5743,68 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["active_net_summary"]["component_graph_edges"]
                     .at( 0 )["from"].get<std::string>(),
             "U1.1" );
+    BOOST_REQUIRE( routingPacket.contains( "routing_progress_facts" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["source"].get<std::string>(),
+            "active_net_summary.component_graph_edges" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["active_net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["remaining_component_edge_count"]
+                    .get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["visible_remaining_component_edge_count"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["remaining_estimated_manhattan_length"].get<int>(),
+            520 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["shortest_remaining_estimated_manhattan_length"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_track_length"].get<int>(),
+            780 );
+    BOOST_REQUIRE( routingPacket["routing_progress_facts"].contains(
+            "routed_track_segment_count" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_track_segment_count"].get<int>(),
+            3 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_via_count"].get<int>(),
+            2 );
+    BOOST_REQUIRE( routingPacket["routing_progress_facts"].contains(
+            "routed_layer_lengths" ) );
+    BOOST_REQUIRE_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].size(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].at( 0 )
+                    ["layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_layer_lengths"].at( 0 )
+                    ["routed_track_length"].get<int>(),
+            780 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["active_layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["active_layer_routed_track_length"].get<int>(),
+            780 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["active_layer_routed_track_segment_count"].get<int>(),
+            3 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["estimated_total_work_length"]
+                    .get<int>(),
+            1300 );
     BOOST_REQUIRE( routingPacket.contains( "routing_reachability_facts" ) );
     BOOST_REQUIRE_EQUAL( routingPacket["routing_reachability_facts"].size(), 2 );
     BOOST_CHECK_EQUAL(

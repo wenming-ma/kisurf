@@ -1607,6 +1607,66 @@ wxString makeNetTopologyJson( const BOARD& aBoard,
 }
 
 
+struct ROUTED_NET_LENGTH_FACTS
+{
+    int m_TrackLength = 0;
+    int m_TrackSegmentCount = 0;
+    int m_ViaCount = 0;
+    std::map<PCB_LAYER_ID, std::pair<int, int>> m_LayerLengths;
+};
+
+
+ROUTED_NET_LENGTH_FACTS routedNetLengthFacts( const BOARD& aBoard,
+                                              int aNetCode )
+{
+    ROUTED_NET_LENGTH_FACTS facts;
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+    {
+        if( !track || track->GetNetCode() != aNetCode )
+            continue;
+
+        if( track->Type() == PCB_VIA_T )
+        {
+            ++facts.m_ViaCount;
+            continue;
+        }
+
+        if( track->Type() == PCB_TRACE_T || track->Type() == PCB_ARC_T )
+        {
+            const int length = static_cast<int>( track->GetLength() );
+
+            ++facts.m_TrackSegmentCount;
+            facts.m_TrackLength += length;
+
+            std::pair<int, int>& layerFacts = facts.m_LayerLengths[track->GetLayer()];
+            layerFacts.first += length;
+            ++layerFacts.second;
+        }
+    }
+
+    return facts;
+}
+
+
+wxString routedLayerLengthsJson( const BOARD& aBoard,
+                                 const ROUTED_NET_LENGTH_FACTS& aFacts )
+{
+    std::vector<wxString> entries;
+
+    for( const auto& [layer, layerFacts] : aFacts.m_LayerLengths )
+    {
+        entries.push_back( wxString::Format(
+                wxS( "{\"layer\":%s,\"routed_track_length\":%d,"
+                     "\"routed_track_segment_count\":%d}" ),
+                quotedJson( aBoard.GetLayerName( layer ) ), layerFacts.first,
+                layerFacts.second ) );
+    }
+
+    return jsonArray( entries );
+}
+
+
 wxString makeNetFactsJson( const BOARD& aBoard )
 {
     std::shared_ptr<CONNECTIVITY_DATA> connectivity = aBoard.GetConnectivity();
@@ -1617,9 +1677,17 @@ wxString makeNetFactsJson( const BOARD& aBoard )
         if( net->GetNetCode() == NETINFO_LIST::UNCONNECTED )
             continue;
 
+        const ROUTED_NET_LENGTH_FACTS lengthFacts =
+                routedNetLengthFacts( aBoard, net->GetNetCode() );
+
         netEntries.push_back( wxString::Format(
-                wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s,\"topology\":%s}" ),
+                wxS( "{\"code\":%d,\"name\":%s,\"routed_track_length\":%d,"
+                     "\"routed_track_segment_count\":%d,\"routed_via_count\":%d,"
+                     "\"routed_layer_lengths\":%s,"
+                     "\"netclass\":%s,\"topology\":%s}" ),
                 net->GetNetCode(), quotedJson( net->GetNetname() ),
+                lengthFacts.m_TrackLength, lengthFacts.m_TrackSegmentCount,
+                lengthFacts.m_ViaCount, routedLayerLengthsJson( aBoard, lengthFacts ),
                 makeNetclassJson( net->GetNetClass() ),
                 makeNetTopologyJson( aBoard, connectivity, net->GetNetCode() ) ) );
     }

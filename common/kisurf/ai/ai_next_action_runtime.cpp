@@ -3968,6 +3968,154 @@ nlohmann::json routingEndpointSweptBBoxJson(
 }
 
 
+nlohmann::json routingProgressFactsJson(
+        const nlohmann::json& aActiveNetSummary,
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    if( !aActiveNetSummary.is_object()
+        || !aActiveNetSummary.contains( "component_graph_edges" )
+        || !aActiveNetSummary["component_graph_edges"].is_array() )
+    {
+        return nlohmann::json::object();
+    }
+
+    int  remainingEdgeCount = 0;
+    int  visibleRemainingEdgeCount = 0;
+    int  remainingLength = 0;
+    int  shortestRemainingLength = 2147483647;
+    bool hasRemainingLength = false;
+
+    for( const nlohmann::json& edge :
+         aActiveNetSummary["component_graph_edges"] )
+    {
+        if( !edge.is_object() )
+            continue;
+
+        ++remainingEdgeCount;
+
+        if( edge.contains( "visible" ) && edge["visible"].is_boolean()
+            && edge["visible"].get<bool>() )
+        {
+            ++visibleRemainingEdgeCount;
+        }
+
+        int edgeLength = 0;
+
+        if( jsonNumberAsInt( edge, "estimated_manhattan_length", edgeLength )
+            && edgeLength >= 0 )
+        {
+            hasRemainingLength = true;
+            remainingLength += edgeLength;
+            shortestRemainingLength =
+                    std::min( shortestRemainingLength, edgeLength );
+        }
+    }
+
+    nlohmann::json facts = {
+        { "source", "active_net_summary.component_graph_edges" },
+        { "purpose", "routing_progress_review" },
+        { "remaining_component_edge_count", remainingEdgeCount },
+        { "visible_remaining_component_edge_count",
+          visibleRemainingEdgeCount } };
+
+    if( aActiveNetSummary.contains( "name" )
+        && aActiveNetSummary["name"].is_string() )
+    {
+        facts["active_net"] = aActiveNetSummary["name"];
+    }
+
+    if( hasRemainingLength )
+    {
+        facts["remaining_estimated_manhattan_length"] = remainingLength;
+        facts["shortest_remaining_estimated_manhattan_length"] =
+                shortestRemainingLength;
+    }
+
+    int routedTrackLength = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_track_length",
+                         routedTrackLength )
+        && routedTrackLength >= 0 )
+    {
+        facts["routed_track_length"] = routedTrackLength;
+
+        if( hasRemainingLength )
+            facts["estimated_total_work_length"] =
+                    routedTrackLength + remainingLength;
+    }
+
+    int routedTrackSegmentCount = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_track_segment_count",
+                         routedTrackSegmentCount )
+        && routedTrackSegmentCount >= 0 )
+    {
+        facts["routed_track_segment_count"] = routedTrackSegmentCount;
+    }
+
+    int routedViaCount = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_via_count",
+                         routedViaCount )
+        && routedViaCount >= 0 )
+    {
+        facts["routed_via_count"] = routedViaCount;
+    }
+
+    if( aActiveNetSummary.contains( "routed_layer_lengths" )
+        && aActiveNetSummary["routed_layer_lengths"].is_array() )
+    {
+        bool truncated = false;
+        facts["routed_layer_lengths"] =
+                cappedJsonArray( aActiveNetSummary["routed_layer_lengths"],
+                                 16, truncated );
+
+        if( truncated )
+            facts["routed_layer_lengths_truncated"] = true;
+
+        const nlohmann::json modeContext =
+                objectFromJsonText( aToolState.m_ModeContextJson );
+
+        if( modeContext.contains( "layer" ) && modeContext["layer"].is_string() )
+        {
+            const std::string activeLayer =
+                    modeContext["layer"].get<std::string>();
+            facts["active_layer"] = activeLayer;
+
+            for( const nlohmann::json& layerFact :
+                 facts["routed_layer_lengths"] )
+            {
+                if( !layerFact.is_object()
+                    || !layerFact.contains( "layer" )
+                    || !layerFact["layer"].is_string()
+                    || layerFact["layer"].get<std::string>() != activeLayer )
+                {
+                    continue;
+                }
+
+                if( layerFact.contains( "routed_track_length" )
+                    && !layerFact["routed_track_length"].is_null() )
+                {
+                    facts["active_layer_routed_track_length"] =
+                            layerFact["routed_track_length"];
+                }
+
+                if( layerFact.contains( "routed_track_segment_count" )
+                    && !layerFact["routed_track_segment_count"].is_null() )
+                {
+                    facts["active_layer_routed_track_segment_count"] =
+                            layerFact["routed_track_segment_count"];
+                }
+
+                break;
+            }
+        }
+    }
+
+    return facts;
+}
+
+
 nlohmann::json routingReachabilityFactsJson(
         const nlohmann::json& aActiveNetSummary,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
@@ -5570,6 +5718,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["connectivity_summary"] = std::move( connectivity );
 
     nlohmann::json activeNet = activeNetSummaryJson( context );
+    nlohmann::json routingProgress =
+            routingProgressFactsJson( activeNet, context.m_ToolState );
     nlohmann::json routingReachability =
             routingReachabilityFactsJson( activeNet, context.m_ToolState,
                                           context.m_VisibleObjects );
@@ -5599,6 +5749,9 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["routing_corridor_facts"] =
                 routingCorridorFactsJson( context.m_Anchors, context.m_ToolState,
                                           context.m_VisibleObjects );
+
+        if( !routingProgress.empty() )
+            packet["routing_progress_facts"] = std::move( routingProgress );
 
         if( !routingReachability.empty() )
             packet["routing_reachability_facts"] =
@@ -9070,6 +9223,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "can_publish", false },
                 { "requires_review_decision", "publish" } } } );
 
+    auto namespaceForTool =
+            []( const std::string& aName )
+            {
+                if( aName.rfind( "placement.", 0 ) == 0 )
+                    return std::string( "placement" );
+
+                if( aName.rfind( "routing.", 0 ) == 0 )
+                    return std::string( "routing" );
+
+                if( aName.rfind( "surface.", 0 ) == 0 )
+                    return std::string( "surface" );
+
+                if( aName.rfind( "script.", 0 ) == 0 )
+                    return std::string( "script" );
+
+                if( aName.rfind( "repair.", 0 ) == 0 )
+                    return std::string( "repair" );
+
+                return std::string( "runtime" );
+            };
+
+    for( nlohmann::json& tool : tools )
+    {
+        if( tool.is_object() )
+            tool["namespace"] = namespaceForTool(
+                    tool.value( "name", std::string() ) );
+    }
+
     return fromUtf8String( tools.dump() );
 }
 
@@ -9717,6 +9898,8 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
         const std::string description =
                 "KiSurf Next Action tool: " + name + ". Layer="
                 + tool.value( "layer", std::string( "unknown" ) )
+                + ", namespace="
+                + tool.value( "namespace", std::string( "unknown" ) )
                 + ", role=" + tool.value( "role", std::string( "unknown" ) )
                 + ", side_effect="
                 + tool.value( "side_effect", std::string( "unknown" ) )
