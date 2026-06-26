@@ -9538,6 +9538,16 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
 
     result.m_Valid = result.m_InvalidDatasetCount == 0;
     result.m_Passed = result.m_Valid && result.m_FailedDatasetCount == 0;
+    result.m_DatasetPassRate =
+            result.m_TotalDatasetCount == 0
+                    ? 0.0
+                    : static_cast<double>( result.m_PassedDatasetCount )
+                              / static_cast<double>( result.m_TotalDatasetCount );
+    result.m_RecordPassRate =
+            result.m_TotalRecordCount == 0
+                    ? 0.0
+                    : static_cast<double>( result.m_PassedRecordCount )
+                              / static_cast<double>( result.m_TotalRecordCount );
 
     nlohmann::json summary =
             { { "valid", result.m_Valid },
@@ -9552,6 +9562,8 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
+              { "dataset_pass_rate", result.m_DatasetPassRate },
+              { "record_pass_rate", result.m_RecordPassRate },
               { "datasets", datasetSummaries } };
 
     if( !result.m_FirstErrorCode.IsEmpty() )

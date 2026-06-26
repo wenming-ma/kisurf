@@ -7309,6 +7309,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 3 );
     BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 3 );
     BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_DatasetPassRate, 1.0 );
+    BOOST_CHECK_EQUAL( evaluation.m_RecordPassRate, 1.0 );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( evaluation.m_SummaryJson.ToStdString() );
+
+    BOOST_REQUIRE( summary.is_object() );
+    BOOST_CHECK_EQUAL( summary["dataset_pass_rate"].get<double>(), 1.0 );
+    BOOST_CHECK_EQUAL( summary["record_pass_rate"].get<double>(), 1.0 );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
             wxS( "\"total_dataset_count\":3" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
