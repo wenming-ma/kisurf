@@ -5249,6 +5249,22 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["routing_corridor_facts"].at( 0 )["manhattan_length"]
                     .get<int>(),
             220 );
+    BOOST_CHECK(
+            routingPacket["routing_corridor_facts"].at( 0 )["cursor_is_sorting_hint"]
+                    .get<bool>() );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["cursor"]["x"].get<int>(),
+            260 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["cursor_dx"].get<int>(),
+            60 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["cursor_dy"].get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_corridor_facts"].at( 0 )["cursor_manhattan_distance"]
+                    .get<int>(),
+            60 );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_corridor_facts"].at( 0 )["net"].get<std::string>(),
             "GND" );
