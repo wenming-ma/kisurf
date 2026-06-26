@@ -8891,6 +8891,24 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                     attempt["hidden_attempt_journal"]["operations"].size();
         }
 
+        if( attempt.contains( "budget_counters" )
+            && attempt["budget_counters"].is_object() )
+        {
+            const nlohmann::json& budget = attempt["budget_counters"];
+            result.m_BudgetToolRoundCount +=
+                    jsonCounterValue( budget, "tool_round_count" );
+            result.m_BudgetMutationCount +=
+                    jsonCounterValue( budget, "mutation_count" );
+            result.m_BudgetRenderCount +=
+                    jsonCounterValue( budget, "render_count" );
+            result.m_BudgetValidationCount +=
+                    jsonCounterValue( budget, "validation_count" );
+            result.m_BudgetCreatedObjectCount +=
+                    jsonCounterValue( budget, "created_object_count" );
+            result.m_BudgetTouchedObjectCount +=
+                    jsonCounterValue( budget, "touched_object_count" );
+        }
+
         if( attempt.contains( "render_outputs" )
             && attempt["render_outputs"].is_object()
             && !attempt["render_outputs"].empty() )
@@ -8964,6 +8982,14 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "hidden_operation_count", result.m_HiddenOperationCount },
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
+              { "budget_tool_round_count", result.m_BudgetToolRoundCount },
+              { "budget_mutation_count", result.m_BudgetMutationCount },
+              { "budget_render_count", result.m_BudgetRenderCount },
+              { "budget_validation_count", result.m_BudgetValidationCount },
+              { "budget_created_object_count",
+                result.m_BudgetCreatedObjectCount },
+              { "budget_touched_object_count",
+                result.m_BudgetTouchedObjectCount },
               { "tool_result_count", result.m_ToolResultCount },
               { "decision_tool_result_count",
                 result.m_DecisionToolResultCount },
@@ -9056,6 +9082,14 @@ AiEvaluateNextActionReplayTraceBatch(
         result.m_HiddenOperationCount += evaluation.m_HiddenOperationCount;
         result.m_RenderResultCount += evaluation.m_RenderResultCount;
         result.m_ValidationResultCount += evaluation.m_ValidationResultCount;
+        result.m_BudgetToolRoundCount += evaluation.m_BudgetToolRoundCount;
+        result.m_BudgetMutationCount += evaluation.m_BudgetMutationCount;
+        result.m_BudgetRenderCount += evaluation.m_BudgetRenderCount;
+        result.m_BudgetValidationCount += evaluation.m_BudgetValidationCount;
+        result.m_BudgetCreatedObjectCount +=
+                evaluation.m_BudgetCreatedObjectCount;
+        result.m_BudgetTouchedObjectCount +=
+                evaluation.m_BudgetTouchedObjectCount;
         result.m_ToolResultCount += evaluation.m_ToolResultCount;
         result.m_DecisionToolResultCount +=
                 evaluation.m_DecisionToolResultCount;
@@ -9138,6 +9172,14 @@ AiEvaluateNextActionReplayTraceBatch(
               { "hidden_operation_count", result.m_HiddenOperationCount },
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
+              { "budget_tool_round_count", result.m_BudgetToolRoundCount },
+              { "budget_mutation_count", result.m_BudgetMutationCount },
+              { "budget_render_count", result.m_BudgetRenderCount },
+              { "budget_validation_count", result.m_BudgetValidationCount },
+              { "budget_created_object_count",
+                result.m_BudgetCreatedObjectCount },
+              { "budget_touched_object_count",
+                result.m_BudgetTouchedObjectCount },
               { "tool_result_count", result.m_ToolResultCount },
               { "decision_tool_result_count",
                 result.m_DecisionToolResultCount },
@@ -9324,6 +9366,18 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                     summary["trace_hidden_operation_count"] =
                             aTraceEval->m_HiddenOperationCount;
                     summary["trace_attempt_count"] = aTraceEval->m_AttemptCount;
+                    summary["trace_budget_tool_round_count"] =
+                            aTraceEval->m_BudgetToolRoundCount;
+                    summary["trace_budget_mutation_count"] =
+                            aTraceEval->m_BudgetMutationCount;
+                    summary["trace_budget_render_count"] =
+                            aTraceEval->m_BudgetRenderCount;
+                    summary["trace_budget_validation_count"] =
+                            aTraceEval->m_BudgetValidationCount;
+                    summary["trace_budget_created_object_count"] =
+                            aTraceEval->m_BudgetCreatedObjectCount;
+                    summary["trace_budget_touched_object_count"] =
+                            aTraceEval->m_BudgetTouchedObjectCount;
                     summary["trace_decision_tool_result_count"] =
                             aTraceEval->m_DecisionToolResultCount;
                     summary["trace_review_tool_result_count"] =
@@ -9448,6 +9502,76 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                        wxS( "hidden_operation_count_below_minimum" ),
                        wxS( "Replay hidden operation count is below expected minimum." ),
                        &traceEval );
+    }
+
+    auto checkMinimum =
+            [&]( const char* aExpectedKey, size_t aActualValue,
+                 const wxString& aErrorCode, const wxString& aMessage )
+            -> std::optional<AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT>
+            {
+                if( expected.contains( aExpectedKey )
+                    && expected[aExpectedKey].is_number_unsigned()
+                    && aActualValue < expected[aExpectedKey].get<size_t>() )
+                {
+                    return finish( true, false, aErrorCode, aMessage,
+                                   &traceEval );
+                }
+
+                return std::nullopt;
+            };
+
+    if( auto checked = checkMinimum(
+                "min_budget_tool_round_count",
+                traceEval.m_BudgetToolRoundCount,
+                wxS( "budget_tool_round_count_below_minimum" ),
+                wxS( "Replay budget tool-round count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_budget_mutation_count",
+                traceEval.m_BudgetMutationCount,
+                wxS( "budget_mutation_count_below_minimum" ),
+                wxS( "Replay budget mutation count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_budget_render_count",
+                traceEval.m_BudgetRenderCount,
+                wxS( "budget_render_count_below_minimum" ),
+                wxS( "Replay budget render count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_budget_validation_count",
+                traceEval.m_BudgetValidationCount,
+                wxS( "budget_validation_count_below_minimum" ),
+                wxS( "Replay budget validation count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_budget_created_object_count",
+                traceEval.m_BudgetCreatedObjectCount,
+                wxS( "budget_created_object_count_below_minimum" ),
+                wxS( "Replay budget created-object count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_budget_touched_object_count",
+                traceEval.m_BudgetTouchedObjectCount,
+                wxS( "budget_touched_object_count_below_minimum" ),
+                wxS( "Replay budget touched-object count is below expected minimum." ) ) )
+    {
+        return *checked;
     }
 
     if( expected.contains( "min_decision_tool_result_count" )

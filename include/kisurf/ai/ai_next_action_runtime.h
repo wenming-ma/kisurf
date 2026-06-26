@@ -275,6 +275,12 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
     size_t   m_HiddenOperationCount = 0;
     size_t   m_RenderResultCount = 0;
     size_t   m_ValidationResultCount = 0;
+    size_t   m_BudgetToolRoundCount = 0;
+    size_t   m_BudgetMutationCount = 0;
+    size_t   m_BudgetRenderCount = 0;
+    size_t   m_BudgetValidationCount = 0;
+    size_t   m_BudgetCreatedObjectCount = 0;
+    size_t   m_BudgetTouchedObjectCount = 0;
     size_t   m_ToolResultCount = 0;
     size_t   m_DecisionToolResultCount = 0;
     size_t   m_ReviewToolResultCount = 0;
@@ -312,6 +318,12 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
     size_t   m_HiddenOperationCount = 0;
     size_t   m_RenderResultCount = 0;
     size_t   m_ValidationResultCount = 0;
+    size_t   m_BudgetToolRoundCount = 0;
+    size_t   m_BudgetMutationCount = 0;
+    size_t   m_BudgetRenderCount = 0;
+    size_t   m_BudgetValidationCount = 0;
+    size_t   m_BudgetCreatedObjectCount = 0;
+    size_t   m_BudgetTouchedObjectCount = 0;
     size_t   m_ToolResultCount = 0;
     size_t   m_DecisionToolResultCount = 0;
     size_t   m_ReviewToolResultCount = 0;

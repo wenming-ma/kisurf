@@ -86,6 +86,14 @@
               "accept_validation_sufficient": true,
               "preview_state_exact": true,
               "issues": []
+            },
+            "budget_counters": {
+              "tool_round_count": 2,
+              "mutation_count": 1,
+              "render_count": 1,
+              "validation_count": 1,
+              "created_object_count": 1,
+              "touched_object_count": 1
             }
           }
         ],
@@ -104,7 +112,12 @@
         "min_hidden_operation_count": 1,
         "min_decision_tool_result_count": 1,
         "min_review_tool_result_count": 1,
-        "min_preview_gate_feedback_count": 1
+        "min_preview_gate_feedback_count": 1,
+        "min_budget_mutation_count": 1,
+        "min_budget_render_count": 1,
+        "min_budget_validation_count": 1,
+        "min_budget_created_object_count": 1,
+        "min_budget_touched_object_count": 1
       }
     }
   ]
