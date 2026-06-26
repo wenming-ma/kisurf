@@ -4402,9 +4402,71 @@ nlohmann::json routingReachabilityFactsJson(
                     { { "source", "routing_reachability_swept_bbox" },
                       { "mode", "routing_reachability_review" },
                       { "bbox", sweptBBox } };
-            fact["reachability_obstacle_facts"] =
+
+            nlohmann::json obstacleFacts =
                     obstacleFactsInBBoxJson( aVisibleObjects, sweptBBox,
                                              "routing_reachability_swept_bbox" );
+            fact["reachability_obstacle_facts"] = obstacleFacts;
+
+            nlohmann::json routerCostHint =
+                    { { "source", "routing_reachability_fact" },
+                      { "cost_model", "heuristic_manhattan_obstacle_layer" },
+                      { "remaining_endpoint_span_manhattan",
+                        std::abs( startX - endX ) + std::abs( startY - endY ) },
+                      { "candidate_obstacle_count",
+                        static_cast<int>( obstacleFacts.size() ) },
+                      { "review_required", true } };
+
+            if( fact.contains( "nearest_endpoint_role" ) )
+            {
+                const std::string nearestRole =
+                        fact["nearest_endpoint_role"].get<std::string>();
+
+                if( nearestRole == "from"
+                    && fact.contains(
+                            "route_head_to_from_endpoint_manhattan" ) )
+                {
+                    routerCostHint["route_head_to_nearest_endpoint_manhattan"] =
+                            fact["route_head_to_from_endpoint_manhattan"];
+                }
+                else if( nearestRole == "to"
+                         && fact.contains(
+                                 "route_head_to_to_endpoint_manhattan" ) )
+                {
+                    routerCostHint["route_head_to_nearest_endpoint_manhattan"] =
+                            fact["route_head_to_to_endpoint_manhattan"];
+                }
+            }
+
+            bool requiresLayerSwitch = false;
+            int  viaTransitionEstimate = 0;
+
+            if( fact.contains( "layer_reachability" )
+                && fact["layer_reachability"].is_object() )
+            {
+                const nlohmann::json& layerReachability =
+                        fact["layer_reachability"];
+
+                if( layerReachability.contains( "requires_layer_switch" )
+                    && layerReachability["requires_layer_switch"].is_boolean() )
+                {
+                    requiresLayerSwitch =
+                            layerReachability["requires_layer_switch"]
+                                    .get<bool>();
+                }
+
+                if( layerReachability.contains( "via_required" )
+                    && layerReachability["via_required"].is_boolean()
+                    && layerReachability["via_required"].get<bool>() )
+                {
+                    viaTransitionEstimate = 1;
+                }
+            }
+
+            routerCostHint["requires_layer_switch"] = requiresLayerSwitch;
+            routerCostHint["via_transition_count_estimate"] =
+                    viaTransitionEstimate;
+            fact["router_cost_hint"] = std::move( routerCostHint );
         }
 
         if( edge.contains( "kind" ) )
