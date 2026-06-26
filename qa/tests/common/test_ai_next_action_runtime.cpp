@@ -6546,6 +6546,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_REQUIRE( packet.contains( "normalized_schema" ) );
     BOOST_REQUIRE( packet.contains( "field_origin_facts" ) );
     BOOST_REQUIRE( packet.contains( "surface_guard_facts" ) );
+    BOOST_REQUIRE( packet.contains( "structured_surface_work_summary" ) );
     BOOST_REQUIRE( packet.contains( "interaction_semantics" ) );
     const nlohmann::json& surfaceInteraction =
             packet["interaction_semantics"];
@@ -6626,6 +6627,24 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK_EQUAL(
             guardFacts["overlap_set"]["expected_argument"].get<std::string>(),
             "expected_overlap_set" );
+    const nlohmann::json& surfaceSummary =
+            packet["structured_surface_work_summary"];
+    BOOST_CHECK_EQUAL( surfaceSummary["source"].get<std::string>(),
+                       "structured_surface_work_state" );
+    BOOST_CHECK_EQUAL( surfaceSummary["surface_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( surfaceSummary["focused_surface_id"].get<std::string>(),
+                       "properties" );
+    BOOST_CHECK_EQUAL( surfaceSummary["focused_control_id"].get<std::string>(),
+                       "net_class" );
+    BOOST_CHECK_EQUAL( surfaceSummary["schema_version"].get<std::string>(),
+                       "net-class-v1" );
+    BOOST_CHECK( surfaceSummary["has_target_scope"].get<bool>() );
+    BOOST_CHECK( surfaceSummary["has_complete_accept_guard"].get<bool>() );
+    BOOST_CHECK_EQUAL( surfaceSummary["normalized_field_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( surfaceSummary["field_origin_fact_count"].get<int>(), 1 );
+    BOOST_CHECK( surfaceSummary["validation_state_present"].get<bool>() );
+    BOOST_CHECK_EQUAL( surfaceSummary["validation_status"].get<std::string>(),
+                       "needs_value" );
 }
 
 
