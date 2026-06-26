@@ -7147,6 +7147,88 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksInnerLoopMetrics )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksAcceptGateMetrics )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    RECORDING_EDIT_ADAPTER editAdapter;
+    AI_EDIT_SESSION        edit( editAdapter );
+    AI_CONTEXT_VERSION     drifted = suggestion->m_ContextVersion;
+    drifted.m_DocumentRevision += 1;
+
+    BOOST_REQUIRE( !runtime.Accept( suggestion->m_Id, edit, drifted ) );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json passing =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-accept-context-drift" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "expired" },
+                  { "published", true },
+                  { "min_accept_gate_result_count", 1 },
+                  { "min_accept_gate_reason_counts",
+                    { { "context_drift", 1 } } } } } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT passEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( passing.dump().c_str() ) );
+
+    BOOST_CHECK( passEvaluation.m_Valid );
+    BOOST_CHECK( passEvaluation.m_Passed );
+
+    nlohmann::json failing = passing;
+    failing["id"] = "placement-via-accept-context-drift-too-high";
+    failing["expected"]["min_accept_gate_result_count"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failEvaluation.m_Valid );
+    BOOST_CHECK( !failEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failEvaluation.m_ErrorCode,
+            wxString( wxS( "accept_gate_result_count_below_minimum" ) ) );
+
+    failing = passing;
+    failing["id"] = "placement-via-accept-context-drift-reason-too-high";
+    failing["expected"]["min_accept_gate_reason_counts"]["context_drift"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failReasonEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failReasonEvaluation.m_Valid );
+    BOOST_CHECK( !failReasonEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failReasonEvaluation.m_ErrorCode,
+            wxString( wxS( "accept_gate_reason_count_below_minimum" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationReportsExpectationMismatch )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
@@ -7415,6 +7497,8 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
             wxS( "routing_segment_inner_loop_smoke.json" ) ) );
     datasetPaths.Add( repositoryGoldenDatasetPath(
             wxS( "surface_fill_inner_loop_smoke.json" ) ) );
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "accept_context_drift_inner_loop_smoke.json" ) ) );
 
     for( const wxString& datasetPath : datasetPaths )
     {
@@ -7428,15 +7512,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
 
     BOOST_CHECK( evaluation.m_Valid );
     BOOST_CHECK( evaluation.m_Passed );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 3 );
-    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 3 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 3 );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 3 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 4 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 4 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 4 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 4 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 4 );
     BOOST_CHECK_EQUAL( evaluation.m_DatasetPassRate, 1.0 );
     BOOST_CHECK_EQUAL( evaluation.m_RecordPassRate, 1.0 );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
-            wxS( "\"placement\":1" ) ) );
+            wxS( "\"placement\":2" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
             wxS( "\"routing\":1" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
@@ -7449,15 +7533,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_REQUIRE( summary.is_object() );
     BOOST_CHECK_EQUAL( summary["dataset_pass_rate"].get<double>(), 1.0 );
     BOOST_CHECK_EQUAL( summary["record_pass_rate"].get<double>(), 1.0 );
-    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
     BOOST_REQUIRE( summary["error_code_counts"].is_object() );
     BOOST_CHECK( summary["error_code_counts"].empty() );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_dataset_count\":3" ) ) );
+            wxS( "\"total_dataset_count\":4" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_record_count\":3" ) ) );
+            wxS( "\"total_record_count\":4" ) ) );
 }
 
 
