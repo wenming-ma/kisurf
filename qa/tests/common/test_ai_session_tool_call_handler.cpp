@@ -608,6 +608,27 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                             patchPointsContract["items"]["required"].end(), "y" )
                  != patchPointsContract["items"]["required"].end() );
 
+    BOOST_REQUIRE( operationContracts.contains( "pcb.set_item_properties" ) );
+    BOOST_REQUIRE( operationContracts["pcb.set_item_properties"]["properties"].contains(
+            "typed_props" ) );
+    const nlohmann::json& typedPropsContract =
+            operationContracts["pcb.set_item_properties"]["properties"]["typed_props"];
+    BOOST_REQUIRE( typedPropsContract.contains( "properties" ) );
+    for( const std::string& propName :
+         { "diameter", "drill", "width", "fill", "clearance", "priority",
+           "fill_mode", "reference", "value", "side", "orientation_degrees" } )
+    {
+        BOOST_CHECK( typedPropsContract["properties"].contains( propName ) );
+    }
+    BOOST_CHECK_EQUAL( typedPropsContract["properties"]["fill"]["type"], "boolean" );
+    BOOST_CHECK_EQUAL( typedPropsContract["properties"]["reference"]["type"], "string" );
+    BOOST_CHECK_EQUAL( typedPropsContract["properties"]["side"]["type"], "string" );
+    BOOST_REQUIRE( typedPropsContract["properties"]["fill_mode"].contains( "enum" ) );
+    BOOST_CHECK( std::find( typedPropsContract["properties"]["fill_mode"]["enum"].begin(),
+                            typedPropsContract["properties"]["fill_mode"]["enum"].end(),
+                            "hatch_pattern" )
+                 != typedPropsContract["properties"]["fill_mode"]["enum"].end() );
+
     BOOST_REQUIRE( catalogTool( "kisurf_query_items" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "layer",
                                                                   std::string() ),

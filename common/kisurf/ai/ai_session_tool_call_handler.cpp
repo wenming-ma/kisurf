@@ -225,6 +225,38 @@ nlohmann::json catalogZoneOutlineSchema()
 }
 
 
+nlohmann::json catalogTypedPropertiesSchema()
+{
+    nlohmann::json schema = {
+        { "type", "object" },
+        { "additionalProperties", true },
+        { "description",
+          "Typed property patch for existing PCB items. Supported fields are "
+          "applied according to the target item type." }
+    };
+
+    schema["properties"] = {
+        { "diameter", { { "type", "integer" }, { "minimum", 1 } } },
+        { "drill", { { "type", "integer" }, { "minimum", 1 } } },
+        { "width", { { "type", "integer" }, { "minimum", 0 } } },
+        { "fill", { { "type", "boolean" } } },
+        { "clearance", { { "type", "integer" }, { "minimum", 0 } } },
+        { "priority", { { "type", "integer" }, { "minimum", 0 } } },
+        { "fill_mode",
+          { { "type", "string" },
+            { "enum",
+              nlohmann::json::array( { "solid", "hatch_pattern",
+                                        "copper_thieving" } ) } } },
+        { "reference", { { "type", "string" } } },
+        { "value", { { "type", "string" } } },
+        { "side", { { "type", "string" } } },
+        { "orientation_degrees", { { "type", "number" } } }
+    };
+
+    return schema;
+}
+
+
 nlohmann::json sessionAtomicOperationContractsJson()
 {
     return {
@@ -378,8 +410,7 @@ nlohmann::json sessionAtomicOperationContractsJson()
             { "additionalProperties", false },
             { "properties",
               { { "handle", catalogHandleSchema( "Item to update." ) },
-                { "typed_props",
-                  { { "type", "object" }, { "additionalProperties", true } } } } },
+                { "typed_props", catalogTypedPropertiesSchema() } } },
             { "required", nlohmann::json::array( { "handle", "typed_props" } ) } } },
         { "pcb.set_metadata",
           { { "type", "object" },

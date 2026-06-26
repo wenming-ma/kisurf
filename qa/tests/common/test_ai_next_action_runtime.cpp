@@ -4431,6 +4431,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptShapePolygonContract = false;
     bool sawScriptGeometryPatchContract = false;
     bool sawScriptZoneOutlineContract = false;
+    bool sawScriptTypedPropsContract = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
@@ -4745,6 +4746,51 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                                            == 3
                                 && pointSchemaRequiresXY(
                                            patchProperties["points"]["items"] );
+                    }
+                }
+
+                if( contracts.contains( "pcb.set_item_properties" ) )
+                {
+                    const nlohmann::json& setPropertiesContract =
+                            contracts["pcb.set_item_properties"];
+
+                    if( setPropertiesContract.contains( "properties" )
+                        && setPropertiesContract["properties"].contains(
+                                   "typed_props" )
+                        && setPropertiesContract["properties"]["typed_props"]
+                                   .contains( "properties" ) )
+                    {
+                        const nlohmann::json& typedProps =
+                                setPropertiesContract["properties"]["typed_props"]
+                                                     ["properties"];
+
+                        sawScriptTypedPropsContract =
+                                typedProps.contains( "diameter" )
+                                && typedProps.contains( "drill" )
+                                && typedProps.contains( "width" )
+                                && typedProps.contains( "fill" )
+                                && typedProps.contains( "clearance" )
+                                && typedProps.contains( "priority" )
+                                && typedProps.contains( "fill_mode" )
+                                && typedProps.contains( "reference" )
+                                && typedProps.contains( "value" )
+                                && typedProps.contains( "side" )
+                                && typedProps.contains( "orientation_degrees" )
+                                && typedProps["fill"].value( "type",
+                                                             std::string() )
+                                           == "boolean"
+                                && typedProps["reference"].value(
+                                           "type", std::string() )
+                                           == "string"
+                                && typedProps["side"].value( "type",
+                                                             std::string() )
+                                           == "string"
+                                && typedProps["fill_mode"].contains( "enum" )
+                                && std::find(
+                                           typedProps["fill_mode"]["enum"].begin(),
+                                           typedProps["fill_mode"]["enum"].end(),
+                                           "hatch_pattern" )
+                                           != typedProps["fill_mode"]["enum"].end();
                     }
                 }
             }
@@ -5317,6 +5363,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptShapePolygonContract );
     BOOST_CHECK( sawScriptGeometryPatchContract );
     BOOST_CHECK( sawScriptZoneOutlineContract );
+    BOOST_CHECK( sawScriptTypedPropsContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
