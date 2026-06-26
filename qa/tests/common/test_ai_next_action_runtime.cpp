@@ -3491,6 +3491,73 @@ public:
 };
 
 
+class INVALID_ROLLBACK_AFTER_SCRIPT_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "invalid rollback after script next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need bounded script plan execution facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"invalid_rollback_via\"}}]},\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Try rollback with invalid JSON." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_invalid_rollback" );
+                call.m_ToolName = wxS( "rollback_attempt" );
+                call.m_ArgumentsJson = wxS( "{" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body = wxS( "{\"decision_kind\":\"abandon\","
+                                  "\"reason_code\":\"invalid_rollback_result_seen\"}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class RECORDING_EDIT_ADAPTER : public AI_EDIT_ADAPTER
 {
 public:
@@ -8893,6 +8960,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonRenderToolArgumentsBeforeService 
     BOOST_CHECK( !result.m_Executed );
     BOOST_CHECK_EQUAL( result.m_ErrorCode,
                        wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
     BOOST_CHECK_EQUAL( services.m_Preview.m_RenderCount, 1 );
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_RenderCount, 1 );
@@ -8958,6 +9026,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonValidationToolArgumentsBeforeServ
     BOOST_CHECK( !result.m_Executed );
     BOOST_CHECK_EQUAL( result.m_ErrorCode,
                        wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
     BOOST_CHECK_EQUAL( services.m_Validation.m_RunCount, 1 );
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK_EQUAL( runtime.Attempts().front().m_BudgetCounters.m_ValidationCount,
@@ -11927,6 +11996,146 @@ BOOST_AUTO_TEST_CASE( RuntimeRollbackToolRestoresAttemptJournalBeforeValidationI
                        1 );
     BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
             wxS( "script_via_1" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonRollbackToolWithoutRollingBack )
+{
+    auto* provider = new INVALID_ROLLBACK_AFTER_SCRIPT_NEXT_ACTION_PROVIDER();
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.back().m_ToolResults.size(), 2 );
+
+    const AI_TOOL_CALL_RECORD& rollbackResult =
+            provider->m_Requests.back().m_ToolResults.at( 1 );
+    BOOST_CHECK_EQUAL( rollbackResult.m_ToolCallId,
+                       wxString( wxS( "call_invalid_rollback" ) ) );
+    BOOST_CHECK_EQUAL( rollbackResult.m_ToolName,
+                       wxString( wxS( "rollback_attempt" ) ) );
+    BOOST_CHECK( !rollbackResult.m_Allowed );
+    BOOST_CHECK( !rollbackResult.m_Executed );
+    BOOST_CHECK_EQUAL( rollbackResult.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( rollbackResult.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "invalid_rollback_via" ) ) );
+    BOOST_CHECK_GE( runtime.Attempts().front().m_BudgetCounters.m_MutationCount,
+                    1 );
+    BOOST_CHECK_GE( runtime.Attempts().front().m_BudgetCounters.m_TouchedObjectCount,
+                    1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonScriptPlanBeforeHiddenMutation )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "script_run_bounded_plan" ), wxS( "{" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+    BOOST_CHECK( !result.m_ResultJson.Contains(
+            wxS( "\"script_step_id\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "merged_tool_batches" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonShadowApplyCandidateBeforeMutation )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "shadow_apply_candidate" ), wxS( "{" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "shadow_apply_candidate" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( !runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "\"tool\":\"shadow.apply_candidate\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonCandidateToolArgumentsAtParseLayer )
+{
+    auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
+            wxS( "routing_generate_parallel_segment_candidates" ), wxS( "{" ) );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    const AI_TOOL_CALL_RECORD& result =
+            provider->m_Requests.at( 2 ).m_ToolResults.front();
+    BOOST_CHECK_EQUAL( result.m_ToolName,
+                       wxString( wxS( "routing_generate_parallel_segment_candidates" ) ) );
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
+    BOOST_CHECK( result.m_ResultJson.Contains(
+            wxS( "\"status\":\"malformed_arguments\"" ) ) );
 }
 
 

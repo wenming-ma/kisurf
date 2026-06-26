@@ -13371,6 +13371,26 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                   { "status", "unknown_tool" } } );
     }
 
+    auto parseArgumentsOrMalformed =
+            [&]( const std::string& aToolName,
+                 nlohmann::json& aArgs ) -> std::optional<AI_TOOL_INVOCATION_RESULT>
+            {
+                wxString argumentError;
+
+                if( parseRuntimeToolArgumentsObject(
+                            aToolCall.m_ArgumentsJson, aArgs, argumentError ) )
+                {
+                    return std::nullopt;
+                }
+
+                return makeResult(
+                        false, false, wxS( "malformed_arguments" ),
+                        argumentError,
+                        { { "tool", aToolName },
+                          { "status", "malformed_arguments" },
+                          { "message", toUtf8String( argumentError ) } } );
+            };
+
     if( toolName == "observation.read" )
     {
         nlohmann::json observation =
@@ -13415,7 +13435,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "placement.generate_footprint_transform_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 placementFootprintTransformCandidatePayloadJson( args );
         const bool malformed =
@@ -13435,7 +13458,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "placement.generate_footprint_orientation_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 placementFootprintOrientationCandidatePayloadJson( args );
         const bool malformed =
@@ -13455,7 +13481,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "routing.generate_parallel_segment_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 routingParallelCandidatePayloadJson( args, aObservation );
         const bool malformed =
@@ -13475,7 +13504,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "routing.generate_bus_segment_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 routingBusCandidatePayloadJson( args, aObservation );
         const bool malformed =
@@ -13495,7 +13527,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "routing.generate_replace_path_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 routingReplacePathCandidatePayloadJson( args );
         const bool malformed =
@@ -13515,7 +13550,10 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
     if( toolName == "routing.generate_constraint_aware_reroute_candidates" )
     {
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
         nlohmann::json payload =
                 routingConstraintAwareRerouteCandidatePayloadJson( args );
         const bool malformed =
@@ -13544,7 +13582,19 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "status", "missing_attempt_context" } } );
         }
 
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        wxString       argumentError;
+
+        if( !parseRuntimeToolArgumentsObject( aToolCall.m_ArgumentsJson, args,
+                                              argumentError ) )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ), argumentError,
+                    { { "tool", "shadow.apply_candidate" },
+                      { "status", "malformed_arguments" },
+                      { "message", toUtf8String( argumentError ) } } );
+        }
+
         std::optional<size_t> candidateIndex =
                 optionalSizeField( args, "candidate_index" );
 
@@ -13603,7 +13653,18 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "status", "missing_attempt_context" } } );
         }
 
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        wxString       argumentError;
+
+        if( !parseRuntimeToolArgumentsObject( aToolCall.m_ArgumentsJson, args,
+                                              argumentError ) )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ), argumentError,
+                    { { "tool", boundedPlanToolName },
+                      { "status", "malformed_arguments" },
+                      { "message", toUtf8String( argumentError ) } } );
+        }
 
         if( isAtomicRunOperationTool( toolName ) )
         {
@@ -14262,7 +14323,19 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                       { "status", "missing_attempt_context" } } );
         }
 
-        nlohmann::json args = objectFromJsonText( aToolCall.m_ArgumentsJson );
+        nlohmann::json args;
+        wxString       argumentError;
+
+        if( !parseRuntimeToolArgumentsObject( aToolCall.m_ArgumentsJson, args,
+                                              argumentError ) )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ), argumentError,
+                    { { "tool", "rollback.attempt" },
+                      { "status", "malformed_arguments" },
+                      { "message", toUtf8String( argumentError ) } } );
+        }
+
         nlohmann::json rollback =
                 rollbackMergedToolBatch( *aAttempt, aAttemptSession, args );
 
