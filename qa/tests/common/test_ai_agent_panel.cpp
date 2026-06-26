@@ -198,6 +198,17 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesSuggestionReviewCommands )
             decltype( &AI_AGENT_PANEL::AcceptLatestSuggestion )> ) );
     BOOST_CHECK( ( std::is_member_function_pointer_v<
             decltype( &AI_AGENT_PANEL::RejectLatestSuggestion )> ) );
+    BOOST_CHECK( ( std::is_member_function_pointer_v<
+            decltype( &AI_AGENT_PANEL::HasPendingChatSessionPreview )> ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReviewCommandsPreferPendingChatSession )
+{
+    BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( false, true ) );
+    BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( true, true ) );
+    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( true, false ) );
+    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( false, false ) );
 }
 
 

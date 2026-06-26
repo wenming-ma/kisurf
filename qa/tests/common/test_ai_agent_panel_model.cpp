@@ -54,6 +54,43 @@ public:
 };
 
 
+class TWO_ROUND_TOOL_CALL_AI_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "two round tool call" );
+
+        if( aRequest.m_ToolResults.size() >= 2 )
+        {
+            response.m_Body = wxS( "Two tool results received." );
+            return response;
+        }
+
+        const size_t round = aRequest.m_ToolResults.size() + 1;
+        response.m_Body = wxString::Format( wxS( "Tool round %llu requested." ),
+                                            static_cast<unsigned long long>( round ) );
+
+        AI_TOOL_CALL_RECORD call;
+        call.m_RequestId = aRequest.m_RequestId;
+        call.m_ToolCallId = wxString::Format( wxS( "call_panel_%llu" ),
+                                              static_cast<unsigned long long>( round ) );
+        call.m_ToolName = wxS( "kisurf_run_action" );
+        call.m_ArgumentsJson = wxS( "{\"action\":\"common.Control.showAgentPanel\"}" );
+        response.m_ToolCalls.push_back( call );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class RUNTIME_ACTIVITY_CAPTURE_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -986,6 +1023,29 @@ BOOST_AUTO_TEST_CASE( SendUserTextUsesInstalledToolCallHandler )
     BOOST_CHECK( response.m_ToolCalls.front().m_Executed );
     BOOST_CHECK_EQUAL( response.m_ToolCalls.front().m_ResultJson,
                        wxString( wxS( "{\"status\":\"panel-executed\"}" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SendUserTextContinuesMultiRoundToolCalls )
+{
+    auto* provider = new TWO_ROUND_TOOL_CALL_AI_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_PANEL_TOOL_CALL_HANDLER handler;
+
+    model.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_RESPONSE response =
+            model.SendUserText( wxS( "preview a via" ), AI_EDITOR_KIND::Pcb );
+
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Two tool results received." ) ) );
+    BOOST_REQUIRE_EQUAL( response.m_ToolCalls.size(), 2 );
+    BOOST_CHECK( response.m_ToolCalls.at( 0 ).m_Executed );
+    BOOST_CHECK( response.m_ToolCalls.at( 1 ).m_Executed );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 2 );
 }
 
 

@@ -75,6 +75,7 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
 
     request.m_ContextVersion = request.m_ContextSnapshot.m_Version;
     request.m_UserText = aText;
+    request.m_MaxToolRounds = 6;
 
     m_Messages.push_back( { wxS( "user" ), aText } );
 

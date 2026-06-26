@@ -1009,6 +1009,32 @@ BOOST_AUTO_TEST_CASE( RunCellAutoOpensSessionButDoesNotMutateBoard )
 }
 
 
+BOOST_AUTO_TEST_CASE( HandlerReportsPendingSessionAfterAtomicMutation )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) ).m_Allowed );
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\","
+                           "\"arguments\":{\"position\":{\"x\":25,\"y\":50},"
+                           "\"alias\":\"pending-via\"}}" ) ) ).m_Allowed );
+    BOOST_CHECK( handler.HasPendingSessionPreview() );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_reject_session" ), wxS( "{}" ) ) ).m_Allowed );
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+}
+
+
 BOOST_AUTO_TEST_CASE( SessionBaseHashPrefersEditorBoardHashContext )
 {
     AI_PROVIDER_REQUEST request = requestWithContext();

@@ -14,6 +14,7 @@
 
 class wxCommandEvent;
 class AI_ACCEPT_APPLY_ADAPTER;
+class AI_SESSION_TOOL_CALL_HANDLER;
 class AI_SESSION_PREVIEW_SERVICE;
 class AI_SESSION_SHADOW_BOARD_SEEDER;
 class AI_SESSION_VALIDATION_SERVICE;
@@ -93,6 +94,7 @@ public:
     bool PreviewLatestSuggestion();
     bool AcceptLatestSuggestion();
     bool RejectLatestSuggestion();
+    bool HasPendingChatSessionPreview() const;
     bool HandlePreviewShortcut( int aKeyCode, bool aHasModifier = false,
                                 bool aFocusInsideAgentPanel = false );
     bool HandlePreviewPointer( bool aFocusInsideAgentPanel = false );
@@ -109,6 +111,12 @@ private:
     void OnRejectSuggestion( wxCommandEvent& aEvent ) override;
 
     bool acceptActionPreviewSuggestion( uint64_t aSuggestionId );
+    bool previewActiveChatSession();
+    bool acceptActiveChatSession();
+    bool rejectActiveChatSession();
+    bool invokeActiveChatSessionTool( const wxString& aToolName,
+                                      const wxString& aArgumentsJson,
+                                      const wxString& aToolCallId );
     AI_CONTEXT_SNAPSHOT contextSnapshotWithPanelState() const;
     void updateModeControls();
     void updateComposerStatus();
@@ -122,6 +130,9 @@ private:
     AI_ACTIVITY_LOG                           m_ToolActivityLog;
     std::unique_ptr<AI_ACTION_RUNNER>         m_ActionRunner;
     std::unique_ptr<AI_TOOL_CALL_HANDLER>        m_ToolCallHandler;
+    AI_SESSION_TOOL_CALL_HANDLER*             m_SessionToolCallHandler = nullptr;
+    bool                                      m_HasSessionPreviewService = false;
+    bool                                      m_HasSessionAcceptAdapter = false;
     SUGGESTION_PREVIEW_HANDLER                m_PreviewSuggestionHandler;
     SUGGESTION_ACCEPT_HANDLER                 m_AcceptSuggestionHandler;
     SUGGESTION_REJECT_HANDLER                 m_RejectSuggestionHandler;
@@ -145,3 +156,5 @@ KICOMMON_API bool AiAgentSuggestionTargetsWorkspacePreview(
         const AI_SUGGESTION_RECORD& aSuggestion );
 KICOMMON_API bool AiAgentShouldAutoPreviewBackgroundSuggestion(
         const AI_AGENT_BACKGROUND_PREVIEW_VIEW& aView );
+KICOMMON_API bool AiAgentReviewCommandTargetsChatSession(
+        bool aHasActiveSuggestion, bool aHasPendingChatSession );

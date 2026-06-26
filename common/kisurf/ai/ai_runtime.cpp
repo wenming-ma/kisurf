@@ -128,6 +128,32 @@ void recordPythonWorkerEvents( AI_ACTIVITY_LOG& aActivityLog,
         aActivityLog.Append( record );
     }
 }
+
+
+bool sameToolCallIdentity( const AI_TOOL_CALL_RECORD& aFirst,
+                           const AI_TOOL_CALL_RECORD& aSecond )
+{
+    return !aFirst.m_ToolCallId.IsEmpty()
+           && aFirst.m_ToolCallId == aSecond.m_ToolCallId
+           && aFirst.m_ToolName == aSecond.m_ToolName
+           && aFirst.m_ArgumentsJson == aSecond.m_ArgumentsJson;
+}
+
+
+bool repeatsHandledToolCall( const std::vector<AI_TOOL_CALL_RECORD>& aRoundToolCalls,
+                             const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    for( const AI_TOOL_CALL_RECORD& roundCall : aRoundToolCalls )
+    {
+        for( const AI_TOOL_CALL_RECORD& handledCall : aHandledToolCalls )
+        {
+            if( sameToolCallIdentity( roundCall, handledCall ) )
+                return true;
+        }
+    }
+
+    return false;
+}
 } // namespace
 
 
@@ -169,6 +195,9 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest )
     while( !response.m_ToolCalls.empty() && toolRounds < aRequest.m_MaxToolRounds )
     {
         std::vector<AI_TOOL_CALL_RECORD> roundToolCalls = std::move( response.m_ToolCalls );
+
+        if( repeatsHandledToolCall( roundToolCalls, handledToolCalls ) )
+            break;
 
         for( AI_TOOL_CALL_RECORD& toolCall : roundToolCalls )
         {

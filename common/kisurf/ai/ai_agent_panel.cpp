@@ -819,6 +819,14 @@ bool AiAgentShouldAutoPreviewBackgroundSuggestion(
 }
 
 
+bool AiAgentReviewCommandTargetsChatSession(
+        bool aHasActiveSuggestion, bool aHasPendingChatSession )
+{
+    wxUnusedVar( aHasActiveSuggestion );
+    return aHasPendingChatSession;
+}
+
+
 AI_AGENT_PANEL::AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
                                 CONTEXT_PROVIDER aContextProvider ) :
         AI_AGENT_PANEL_BASE( aParent ),
@@ -943,13 +951,18 @@ void AI_AGENT_PANEL::ConfigureActionToolCalls(
                         snapshot, latestActivitySequence );
             } );
     m_ToolCallHandler.reset();
+    m_SessionToolCallHandler = nullptr;
+    m_HasSessionPreviewService = aPreviewService != nullptr;
+    m_HasSessionAcceptAdapter = aAcceptAdapter != nullptr;
     m_ActionRunner = std::move( aRunner );
     m_ToolExecutionPolicy = AI_TOOL_EXECUTION_POLICY();
 
     auto dispatcher = std::make_unique<AI_TOOL_CALL_DISPATCHER>();
-    dispatcher->AddHandler( std::make_unique<AI_SESSION_TOOL_CALL_HANDLER>(
+    auto sessionHandler = std::make_unique<AI_SESSION_TOOL_CALL_HANDLER>(
             AI_PYTHON_LOCAL_WORKER::CreateDefault(), aAcceptAdapter,
-            aPreviewService, aShadowBoardSeeder, aValidationService ) );
+            aPreviewService, aShadowBoardSeeder, aValidationService );
+    m_SessionToolCallHandler = sessionHandler.get();
+    dispatcher->AddHandler( std::move( sessionHandler ) );
     dispatcher->AddHandler( std::make_unique<AI_SEMANTIC_TOOL_CALL_HANDLER>(
             [this]()
             {
@@ -1009,6 +1022,13 @@ bool AI_AGENT_PANEL::BackgroundAgentEnabled() const
 }
 
 
+bool AI_AGENT_PANEL::HasPendingChatSessionPreview() const
+{
+    return m_SessionToolCallHandler
+           && m_SessionToolCallHandler->HasPendingSessionPreview();
+}
+
+
 bool AI_AGENT_PANEL::ShowModelSettingsDialog()
 {
     wxString        loadError;
@@ -1046,13 +1066,16 @@ AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    view.m_HasActiveSuggestion = activeSuggestion.has_value();
+    const bool hasPendingChatSession = HasPendingChatSessionPreview();
+    view.m_HasActiveSuggestion = activeSuggestion.has_value() || hasPendingChatSession;
     view.m_CanPreviewSuggestion =
-            activeSuggestion && m_PreviewSuggestionHandler
-            && m_Model->CanPreviewSuggestion( *activeSuggestion );
+            ( activeSuggestion && m_PreviewSuggestionHandler
+              && m_Model->CanPreviewSuggestion( *activeSuggestion ) )
+            || ( hasPendingChatSession && m_HasSessionPreviewService );
     view.m_CanAcceptSuggestion =
-            activeSuggestion && m_AcceptSuggestionHandler
-            && m_Model->CanAcceptSuggestion( *activeSuggestion );
+            ( activeSuggestion && m_AcceptSuggestionHandler
+              && m_Model->CanAcceptSuggestion( *activeSuggestion ) )
+            || ( hasPendingChatSession && m_HasSessionAcceptAdapter );
     view.m_MessageCount = m_Model->Messages().size();
     view.m_SuggestionCount = m_Model->Suggestions().size();
     AI_AGENT_COMPOSER_STATUS_VIEW status;
@@ -1179,7 +1202,14 @@ bool AI_AGENT_PANEL::PreviewLatestSuggestion()
 {
     std::optional<uint64_t> suggestionId = m_Model->LatestActiveSuggestionId();
 
-    if( !suggestionId || !m_PreviewSuggestionHandler )
+    if( AiAgentReviewCommandTargetsChatSession(
+                suggestionId.has_value(), HasPendingChatSessionPreview() ) )
+        return previewActiveChatSession();
+
+    if( !suggestionId )
+        return false;
+
+    if( !m_PreviewSuggestionHandler )
         return false;
 
     bool handled = m_PreviewSuggestionHandler( *m_Model, *suggestionId );
@@ -1218,9 +1248,113 @@ bool AI_AGENT_PANEL::acceptActionPreviewSuggestion( uint64_t aSuggestionId )
 }
 
 
+bool AI_AGENT_PANEL::invokeActiveChatSessionTool( const wxString& aToolName,
+                                                  const wxString& aArgumentsJson,
+                                                  const wxString& aToolCallId )
+{
+    if( !m_SessionToolCallHandler || !HasPendingChatSessionPreview() )
+        return false;
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = m_Model->LastRequestId();
+    request.m_EditorKind = m_EditorKind;
+    request.m_ContextSnapshot = contextSnapshotWithPanelState();
+
+    if( request.m_ContextSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
+        request.m_ContextSnapshot.m_EditorKind = m_EditorKind;
+
+    request.m_ContextVersion = request.m_ContextSnapshot.m_Version;
+
+    AI_TOOL_CALL_RECORD toolCall;
+    toolCall.m_RequestId = request.m_RequestId;
+    toolCall.m_ToolCallId = aToolCallId;
+    toolCall.m_ToolName = aToolName;
+    toolCall.m_ArgumentsJson = aArgumentsJson;
+
+    AI_ACTIVITY_RECORD toolRequest;
+    toolRequest.m_RequestId = request.m_RequestId;
+    toolRequest.m_ToolCallId = toolCall.m_ToolCallId;
+    toolRequest.m_Kind = AI_ACTIVITY_KIND::ModelToolRequest;
+    toolRequest.m_EditorKind = m_EditorKind;
+    toolRequest.m_ActionName = toolCall.m_ToolName;
+    toolRequest.m_ArgumentsJson = toolCall.m_ArgumentsJson;
+    toolRequest.m_Message = wxS( "Panel session control requested." );
+    m_Model->RecordActivity( std::move( toolRequest ) );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            m_SessionToolCallHandler->HandleToolCall( request, toolCall );
+
+    AI_ACTIVITY_RECORD resultRecord;
+    resultRecord.m_RequestId = result.m_RequestId;
+    resultRecord.m_ToolCallId = result.m_ToolCallId;
+    resultRecord.m_Kind = AI_ACTIVITY_KIND::ToolResult;
+    resultRecord.m_EditorKind = m_EditorKind;
+    resultRecord.m_ActionName = result.m_ActionName.IsEmpty()
+                                        ? toolCall.m_ToolName
+                                        : result.m_ActionName;
+    resultRecord.m_ResultJson = result.m_ResultJson;
+    resultRecord.m_ErrorCode = result.m_ErrorCode;
+    resultRecord.m_Allowed = result.m_Allowed;
+    resultRecord.m_Executed = result.m_Executed;
+    resultRecord.m_Message = result.m_Message;
+    m_Model->RecordActivity( std::move( resultRecord ) );
+
+    return result.m_Allowed && result.m_Executed;
+}
+
+
+bool AI_AGENT_PANEL::previewActiveChatSession()
+{
+    if( !m_HasSessionPreviewService )
+        return false;
+
+    const bool handled = invokeActiveChatSessionTool(
+            wxS( "kisurf_render_preview" ), wxS( "{\"mode\":\"native\"}" ),
+            wxS( "panel_session_preview" ) );
+
+    RefreshSuggestions();
+    RefreshLog();
+    updateComposerStatus();
+    return handled;
+}
+
+
+bool AI_AGENT_PANEL::acceptActiveChatSession()
+{
+    if( !m_HasSessionAcceptAdapter )
+        return false;
+
+    const bool handled = invokeActiveChatSessionTool(
+            wxS( "kisurf_accept_session" ), wxS( "{}" ),
+            wxS( "panel_session_accept" ) );
+
+    RefreshSuggestions();
+    RefreshLog();
+    updateComposerStatus();
+    return handled;
+}
+
+
+bool AI_AGENT_PANEL::rejectActiveChatSession()
+{
+    const bool handled = invokeActiveChatSessionTool(
+            wxS( "kisurf_reject_session" ), wxS( "{}" ),
+            wxS( "panel_session_reject" ) );
+
+    RefreshSuggestions();
+    RefreshLog();
+    updateComposerStatus();
+    return handled;
+}
+
+
 bool AI_AGENT_PANEL::AcceptLatestSuggestion()
 {
     std::optional<uint64_t> suggestionId = m_Model->LatestActiveSuggestionId();
+
+    if( AiAgentReviewCommandTargetsChatSession(
+                suggestionId.has_value(), HasPendingChatSessionPreview() ) )
+        return acceptActiveChatSession();
 
     if( !suggestionId )
         return false;
@@ -1256,6 +1390,10 @@ bool AI_AGENT_PANEL::AcceptLatestSuggestion()
 bool AI_AGENT_PANEL::RejectLatestSuggestion()
 {
     std::optional<uint64_t> suggestionId = m_Model->LatestActiveSuggestionId();
+
+    if( AiAgentReviewCommandTargetsChatSession(
+                suggestionId.has_value(), HasPendingChatSessionPreview() ) )
+        return rejectActiveChatSession();
 
     if( !suggestionId )
         return false;
@@ -1395,13 +1533,17 @@ void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )
 void AI_AGENT_PANEL::updateModeControls()
 {
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    const bool              hasActiveSuggestion = activeSuggestion.has_value();
+    const bool              hasPendingChatSession = HasPendingChatSessionPreview();
+    const bool              hasActiveSuggestion =
+            activeSuggestion.has_value() || hasPendingChatSession;
     const bool              canPreviewSuggestion =
-            activeSuggestion && m_PreviewSuggestionHandler
-            && m_Model->CanPreviewSuggestion( *activeSuggestion );
+            ( activeSuggestion && m_PreviewSuggestionHandler
+              && m_Model->CanPreviewSuggestion( *activeSuggestion ) )
+            || ( hasPendingChatSession && m_HasSessionPreviewService );
     const bool              canAcceptSuggestion =
-            activeSuggestion && m_AcceptSuggestionHandler
-            && m_Model->CanAcceptSuggestion( *activeSuggestion );
+            ( activeSuggestion && m_AcceptSuggestionHandler
+              && m_Model->CanAcceptSuggestion( *activeSuggestion ) )
+            || ( hasPendingChatSession && m_HasSessionAcceptAdapter );
 
     if( m_PreviewButton )
         m_PreviewButton->Enable( canPreviewSuggestion );
@@ -1425,7 +1567,9 @@ void AI_AGENT_PANEL::updateComposerStatus()
     AI_AGENT_COMPOSER_STATUS_VIEW view;
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
-    view.m_HasActiveSuggestion = m_Model->LatestActiveSuggestionId().has_value();
+    view.m_HasActiveSuggestion =
+            m_Model->LatestActiveSuggestionId().has_value()
+            || HasPendingChatSessionPreview();
     view.m_LatestRequestId = m_Model->LastRequestId();
     view.m_LastRequestCancelled = m_Model->LastRequestCancelled();
 

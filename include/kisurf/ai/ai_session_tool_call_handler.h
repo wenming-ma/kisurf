@@ -102,6 +102,7 @@ public:
     void OnPythonEvent( const AI_PYTHON_EVENT& aEvent ) override;
 
     const AI_EXECUTION_SESSION* ActiveSession() const;
+    bool HasPendingSessionPreview() const;
     wxString ToolCatalogJson() const;
 
 private:

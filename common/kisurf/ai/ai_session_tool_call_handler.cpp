@@ -3966,6 +3966,14 @@ const AI_EXECUTION_SESSION* AI_SESSION_TOOL_CALL_HANDLER::ActiveSession() const
 }
 
 
+bool AI_SESSION_TOOL_CALL_HANDLER::HasPendingSessionPreview() const
+{
+    return m_Session
+           && m_Session->Status() == AI_EXECUTION_SESSION_STATUS::Open
+           && !m_Session->Journal().Operations().empty();
+}
+
+
 wxString AI_SESSION_TOOL_CALL_HANDLER::ToolCatalogJson() const
 {
     return fromJson( sessionToolCatalogJson() );
