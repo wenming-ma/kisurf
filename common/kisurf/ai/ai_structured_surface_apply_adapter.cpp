@@ -1728,8 +1728,18 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
     }
 
     const std::string tableId = stringField( args, "table_id" );
-    const bool fillEmptyOnly =
-            surfacePatchWritePolicy( args ) == "fill_empty_only";
+    const std::string writePolicy = surfacePatchWritePolicy( args );
+
+    if( !writePolicy.empty()
+        && writePolicy != "fill_empty_only"
+        && writePolicy != "allow_overwrite" )
+    {
+        aError = wxS( "SurfacePatch write_policy must be fill_empty_only or "
+                      "allow_overwrite." );
+        return false;
+    }
+
+    const bool fillEmptyOnly = writePolicy == "fill_empty_only";
     nlohmann::json workingState = objectFromJsonText( m_WorkingStateJson );
 
     if( args.contains( "expected_surface_revision" ) )
