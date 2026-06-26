@@ -167,6 +167,7 @@ nlohmann::json footprintGeometry( const FOOTPRINT& aFootprint )
     return {
         { "position", pointJson( aFootprint.GetPosition() ) },
         { "reference", toUtf8String( aFootprint.GetReference() ) },
+        { "value", toUtf8String( aFootprint.GetValue() ) },
         { "fp_id", toUtf8String( aFootprint.GetFPIDAsString() ) },
         { "orientation_degrees", aFootprint.GetOrientationDegrees() },
         { "pad_count", aFootprint.Pads().size() }
@@ -270,6 +271,7 @@ void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
         std::vector<wxString> footprintLayers = { LSET::Name( footprint->GetLayer() ) };
         std::map<wxString, wxString> footprintMetadata = {
             { wxS( "footprint_reference" ), footprint->GetReference() },
+            { wxS( "footprint_value" ), footprint->GetValue() },
             { wxS( "fp_id" ), footprint->GetFPIDAsString() },
             { wxS( "pad_count" ),
               wxString::Format( wxS( "%zu" ), footprint->Pads().size() ) }
@@ -285,6 +287,7 @@ void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
             std::vector<wxString> padLayers = layerNames( pad->GetLayerSet() );
             std::map<wxString, wxString> padMetadata = {
                 { wxS( "footprint_reference" ), footprint->GetReference() },
+                { wxS( "footprint_value" ), footprint->GetValue() },
                 { wxS( "footprint_uuid" ), footprint->m_Uuid.AsString() },
                 { wxS( "pad_number" ), pad->GetNumber() }
             };

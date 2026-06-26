@@ -253,6 +253,12 @@ Currently implemented:
 - Published Next Action previews carry runtime provenance, preview lease, and
   accept-token metadata. Runtime accept validates the token/lease/context before
   applying the reviewed edit objects through the guarded accept path.
+- PCB accept replay runs native DRC against the reconstructed preview-board
+  state before touching the live board; stale sessions still fail hard instead
+  of rebasing automatically.
+- Footprint session facts now expose reference/value identity, and typed
+  `pcb.set_item_properties` patches can update those identity fields through
+  journal replay.
 - Active-routing route-to-anchor previews can target a semantic anchor directly;
   if the model omits the start anchor, KiSurf uses the current
   `tool.routing.start` anchor from the routing context.
@@ -285,9 +291,6 @@ Still in progress:
 - Production-level autonomous placement/routing workflows.
 - Model settings UI edge-case polish and production credential-store fallback
   handling.
-- Final native DRC over reconstructed shadow-board state. Stale-session rebase
-  is intentionally out of the current phase; stale accept is rejected by base
-  hash.
 
 ## Quickstart: Agent Preview
 

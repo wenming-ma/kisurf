@@ -791,6 +791,28 @@ bool applyTypedProperties( BOARD_ITEM& aItem, const nlohmann::json& aProps,
 
     if( FOOTPRINT* footprint = dynamic_cast<FOOTPRINT*>( &aItem ) )
     {
+        if( aProps.contains( "reference" ) )
+        {
+            if( !aProps["reference"].is_string() )
+            {
+                aError = wxS( "Footprint reference property must be a string." );
+                return false;
+            }
+
+            footprint->SetReference( stringField( aProps, "reference" ) );
+        }
+
+        if( aProps.contains( "value" ) )
+        {
+            if( !aProps["value"].is_string() )
+            {
+                aError = wxS( "Footprint value property must be a string." );
+                return false;
+            }
+
+            footprint->SetValue( stringField( aProps, "value" ) );
+        }
+
         if( aProps.contains( "side" ) )
         {
             if( !aProps["side"].is_string() )

@@ -227,6 +227,37 @@ BOOST_AUTO_TEST_CASE( SetItemPropertiesRejectsInvalidZoneTypedPropsBeforeJournal
 }
 
 
+BOOST_AUTO_TEST_CASE( SetItemPropertiesRejectsInvalidFootprintIdentityPropsBeforeJournalAppend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+    session.BeginStep( wxS( "reject invalid footprint identity patch" ) );
+
+    AI_SESSION_HANDLE handle = session.CreateHandle( wxS( "u1" ) );
+    AI_SHADOW_ITEM footprint;
+    footprint.m_Handle = handle;
+    footprint.m_Type = wxS( "footprint" );
+    footprint.m_Alias = wxS( "u1" );
+    footprint.m_PropertiesJson = wxS( "{\"reference\":\"U1\",\"value\":\"MCU\"}" );
+    footprint.m_CreatedEpoch = session.Epoch();
+    footprint.m_UpdatedEpoch = session.Epoch();
+    session.ShadowBoard().UpsertItem( std::move( footprint ) );
+
+    const size_t operationCountBefore = session.Journal().Operations().size();
+    AI_ATOMIC_EXECUTION_RESULT props = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::SetItemProperties,
+            wxS( "{\"handle\":\"u1\",\"typed_props\":{\"reference\":42}}" ) );
+
+    BOOST_CHECK( !props.m_Ok );
+    BOOST_CHECK_EQUAL( props.m_ErrorCode, wxString( wxS( "invalid_arguments" ) ) );
+    BOOST_CHECK_EQUAL( session.Journal().Operations().size(), operationCountBefore );
+
+    const AI_SHADOW_ITEM* after = session.ShadowBoard().FindItem( handle );
+    BOOST_REQUIRE( after );
+    BOOST_CHECK_EQUAL( after->m_PropertiesJson,
+                       wxString( wxS( "{\"reference\":\"U1\",\"value\":\"MCU\"}" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( UpdateGeometryRejectsNonObjectPatchBeforeJournalAppend )
 {
     AI_EXECUTION_SESSION session = makeSession();

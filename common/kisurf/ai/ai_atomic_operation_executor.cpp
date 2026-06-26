@@ -275,6 +275,19 @@ std::optional<AI_ATOMIC_EXECUTION_RESULT> validateTypedPropertyPatch(
                                 wxS( "Shape fill must be a boolean." ) );
         }
     }
+    else if( aItem.m_Type == wxS( "footprint" ) )
+    {
+        for( const char* key : { "reference", "value" } )
+        {
+            if( aProps.contains( key ) && !aProps[key].is_string() )
+            {
+                return errorResult(
+                        wxS( "invalid_arguments" ),
+                        wxString::Format( wxS( "Footprint %s must be a string." ),
+                                          wxString::FromUTF8( key ) ) );
+            }
+        }
+    }
 
     return std::nullopt;
 }

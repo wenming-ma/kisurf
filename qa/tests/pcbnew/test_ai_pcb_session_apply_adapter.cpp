@@ -416,6 +416,7 @@ BOOST_AUTO_TEST_CASE( ShadowSeederReconstructsSelectedPads )
     board.Add( gnd );
 
     PAD* selectedPad = addFootprintPad( board, gnd );
+    selectedPad->GetParentFootprint()->SetValue( wxS( "MCU" ) );
     selectedPad->SetSelected();
 
     AI_EXECUTION_SESSION session = makeSession();
@@ -432,6 +433,9 @@ BOOST_AUTO_TEST_CASE( ShadowSeederReconstructsSelectedPads )
     BOOST_REQUIRE( selectedItems.front().m_Metadata.count( wxS( "footprint_reference" ) ) == 1 );
     BOOST_CHECK_EQUAL( selectedItems.front().m_Metadata.at( wxS( "footprint_reference" ) ),
                        wxString( wxS( "U1" ) ) );
+    BOOST_REQUIRE( selectedItems.front().m_Metadata.count( wxS( "footprint_value" ) ) == 1 );
+    BOOST_CHECK_EQUAL( selectedItems.front().m_Metadata.at( wxS( "footprint_value" ) ),
+                       wxString( wxS( "MCU" ) ) );
     BOOST_REQUIRE( selectedItems.front().m_Metadata.count( wxS( "pad_number" ) ) == 1 );
     BOOST_CHECK_EQUAL( selectedItems.front().m_Metadata.at( wxS( "pad_number" ) ),
                        wxString( wxS( "1" ) ) );
@@ -446,6 +450,38 @@ BOOST_AUTO_TEST_CASE( ShadowSeederReconstructsSelectedPads )
             nlohmann::json::parse( session.ShadowBoard().QueryBoardSummary().ToStdString() );
     BOOST_CHECK_EQUAL( summary["footprints"].get<size_t>(), 1 );
     BOOST_CHECK_EQUAL( summary["pads"].get<size_t>(), 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ShadowSeederExposesFootprintIdentityFacts )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    FOOTPRINT* footprint = addFootprintWithPad( board, gnd );
+    footprint->SetReference( wxS( "U7" ) );
+    footprint->SetValue( wxS( "LDO-3V3" ) );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( session );
+
+    std::vector<AI_SHADOW_ITEM> footprints =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":\"footprint\"}" ) );
+    BOOST_REQUIRE_EQUAL( footprints.size(), 1 );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( footprints.front().m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["reference"].get<std::string>(), "U7" );
+    BOOST_CHECK_EQUAL( geometry["value"].get<std::string>(), "LDO-3V3" );
+
+    BOOST_REQUIRE( footprints.front().m_Metadata.count( wxS( "footprint_reference" ) ) == 1 );
+    BOOST_REQUIRE( footprints.front().m_Metadata.count( wxS( "footprint_value" ) ) == 1 );
+    BOOST_CHECK_EQUAL( footprints.front().m_Metadata.at( wxS( "footprint_reference" ) ),
+                       wxString( wxS( "U7" ) ) );
+    BOOST_CHECK_EQUAL( footprints.front().m_Metadata.at( wxS( "footprint_value" ) ),
+                       wxString( wxS( "LDO-3V3" ) ) );
 }
 
 
@@ -642,6 +678,57 @@ BOOST_AUTO_TEST_CASE( AcceptReplayAppliesSidePropertyToSeededLiveFootprint )
     BOOST_CHECK( result.m_BoardMutated );
     BOOST_CHECK_EQUAL( footprint->GetLayer(), B_Cu );
     BOOST_CHECK( footprint->IsFlipped() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptReplayAppliesIdentityPropertiesToSeededLiveFootprint )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    FOOTPRINT* footprint = addFootprintWithPad( board, gnd );
+    footprint->SetReference( wxS( "U1" ) );
+    footprint->SetValue( wxS( "MCU" ) );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( session );
+
+    std::vector<AI_SHADOW_ITEM> footprints =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":\"footprint\"}" ) );
+    BOOST_REQUIRE_EQUAL( footprints.size(), 1 );
+
+    const uint64_t stepId = session.BeginStep( wxS( "rename seeded footprint" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    nlohmann::json handle = {
+        { "session_id", footprints.front().m_Handle.m_SessionId },
+        { "handle_id", footprints.front().m_Handle.m_HandleId },
+        { "generation", footprints.front().m_Handle.m_Generation }
+    };
+    nlohmann::json args = {
+        { "handle", handle },
+        { "typed_props", { { "reference", "U42" }, { "value", "STM32F4" } } }
+    };
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::SetItemProperties,
+            wxString::FromUTF8( args.dump().c_str() ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK( result.m_BoardMutated );
+    BOOST_CHECK_EQUAL( footprint->GetReference(), wxString( wxS( "U42" ) ) );
+    BOOST_CHECK_EQUAL( footprint->GetValue(), wxString( wxS( "STM32F4" ) ) );
 }
 
 
