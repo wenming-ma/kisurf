@@ -10904,6 +10904,54 @@ AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
         response.m_RequestId = aRequest.m_RequestId;
     }
 
+    if( !response.m_ToolCalls.empty()
+        && toolRounds >= aRequest.m_MaxToolRounds )
+    {
+        std::vector<AI_TOOL_CALL_RECORD> unhandledToolCalls =
+                std::move( response.m_ToolCalls );
+
+        for( AI_TOOL_CALL_RECORD& toolCall : unhandledToolCalls )
+        {
+            toolCall.m_RequestId = aRequest.m_RequestId;
+            toolCall.m_Allowed = false;
+            toolCall.m_Executed = false;
+            toolCall.m_ErrorCode = wxS( "tool_round_budget_exceeded" );
+            toolCall.m_Message = wxS( "Next Action tool round budget was "
+                                      "exhausted before this tool call could run." );
+
+            nlohmann::json result =
+                    { { "tool", toUtf8String( toolCall.m_ToolName ) },
+                      { "provider_tool_name", toUtf8String( toolCall.m_ToolName ) },
+                      { "tool_call_id", toUtf8String( toolCall.m_ToolCallId ) },
+                      { "status", "tool_round_budget_exceeded" },
+                      { "allowed", false },
+                      { "executed", false },
+                      { "publish_allowed", false },
+                      { "error_code", "tool_round_budget_exceeded" },
+                      { "message",
+                        "Next Action tool round budget was exhausted before "
+                        "this tool call could run." },
+                      { "max_tool_rounds", aRequest.m_MaxToolRounds },
+                      { "completed_tool_rounds", toolRounds } };
+
+            toolCall.m_ResultJson = fromUtf8String( result.dump() );
+        }
+
+        handledToolCalls.insert(
+                handledToolCalls.end(),
+                std::make_move_iterator( unhandledToolCalls.begin() ),
+                std::make_move_iterator( unhandledToolCalls.end() ) );
+
+        if( aAttempt )
+        {
+            const nlohmann::json toolTrace =
+                    { { "provider_tool_results",
+                        toolCallRecordsJson( handledToolCalls ) } };
+            attachReviewProviderToolResultsToAttempt(
+                    *aAttempt, fromUtf8String( toolTrace.dump() ) );
+        }
+    }
+
     if( !handledToolCalls.empty() )
         response.m_ToolCalls = std::move( handledToolCalls );
 
