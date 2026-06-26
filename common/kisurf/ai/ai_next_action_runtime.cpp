@@ -3182,7 +3182,8 @@ bool previewGateFailureCanReenterReview(
             hasRepairableReason = true;
         }
 
-        if( reason == wxS( "validation_gate_failed" ) )
+        if( reason == wxS( "render_gate_failed" )
+            || reason == wxS( "validation_gate_failed" ) )
         {
             if( reviewDeclaresRepairableGateFailure( aReviewJson, reason ) )
                 hasRepairableReason = true;
