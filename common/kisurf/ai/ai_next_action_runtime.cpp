@@ -10617,6 +10617,15 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                             ? operation["arguments"]
                             : nlohmann::json::object();
 
+            if( kindName == "surface.apply_patch"
+                && !operationArgs.contains( "write_policy" )
+                && !( operationArgs.contains( "patch" )
+                      && operationArgs["patch"].is_object()
+                      && operationArgs["patch"].contains( "write_policy" ) ) )
+            {
+                operationArgs["write_policy"] = "fill_empty_only";
+            }
+
             loweredOperation["kind"] = kindName;
             loweredOperation["arguments"] = operationArgs;
 
