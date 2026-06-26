@@ -4399,6 +4399,75 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStateAttemptPolicy )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationAttemptPolicyUsesRejectHistory )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"wait\","
+                   "\"reason_code\":\"reject_policy_probe\"}" ) } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( first.has_value() );
+    BOOST_REQUIRE( runtime.Reject( first->m_Id ) );
+
+    BOOST_CHECK( !runtime.Update( makeChangedViaTrigger() ).has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+
+    const AI_PROVIDER_REQUEST& secondDecisionRequest =
+            provider->m_Requests.back();
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"attempt_policy\"" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"base_max_attempts\":3" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"max_attempts\":1" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"reject_history_count\":1" ) ) );
+    BOOST_CHECK( secondDecisionRequest.m_UserText.Contains(
+            wxS( "\"recent_reject_history\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRejectHistoryCapsRollbackRetryAttemptLoop )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"rollback_retry\","
+                   "\"reason_code\":\"revise_after_reject\"}" ),
+              publishReview() } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> first =
+            runtime.Update( makeViaTrigger() );
+    BOOST_REQUIRE( first.has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_REQUIRE( runtime.Reject( first->m_Id ) );
+
+    BOOST_CHECK( !runtime.Update( makeChangedViaTrigger() ).has_value() );
+    BOOST_CHECK_EQUAL( runtime.Attempts().size(), 2 );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 4 );
+    BOOST_CHECK_EQUAL( provider->m_Bodies.size(), 1 );
+    BOOST_REQUIRE_GE( runtime.Steps().size(), 2 );
+    BOOST_CHECK( runtime.Steps().back().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+    BOOST_CHECK_EQUAL( runtime.Steps().back().m_AttemptIds.size(), 1 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 {
     auto* placementProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(

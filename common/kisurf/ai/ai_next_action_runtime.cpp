@@ -2912,6 +2912,12 @@ struct ATTEMPT_BUDGET_POLICY
 };
 
 
+struct ATTEMPT_POLICY_SIGNALS
+{
+    size_t m_RecentRejectHistoryCount = 0;
+};
+
+
 ATTEMPT_BUDGET_POLICY attemptPolicyForWorkState( const wxString& aWorkState )
 {
     const wxString workState = aWorkState.Lower();
@@ -2932,15 +2938,57 @@ ATTEMPT_BUDGET_POLICY attemptPolicyForWorkState( const wxString& aWorkState )
 }
 
 
-size_t attemptLimitForWorkState( const wxString& aWorkState )
+ATTEMPT_BUDGET_POLICY adjustedAttemptPolicyForWorkState(
+        const wxString& aWorkState,
+        const ATTEMPT_POLICY_SIGNALS& aSignals )
 {
-    return attemptPolicyForWorkState( aWorkState ).m_MaxAttempts;
+    ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState( aWorkState );
+
+    if( aSignals.m_RecentRejectHistoryCount > 0 )
+        policy.m_MaxAttempts = std::min<size_t>( policy.m_MaxAttempts, 1 );
+
+    return policy;
 }
 
 
-nlohmann::json attemptPolicyJson( const wxString& aWorkState )
+size_t attemptLimitForWorkState( const wxString& aWorkState,
+                                 const ATTEMPT_POLICY_SIGNALS& aSignals )
 {
-    const ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState( aWorkState );
+    return adjustedAttemptPolicyForWorkState( aWorkState, aSignals ).m_MaxAttempts;
+}
+
+
+wxString normalizedAttemptPolicyFamily( const wxString& aWorkState )
+{
+    const wxString workState = aWorkState.Lower();
+
+    if( workState == wxS( "layout" ) || workState == wxS( "placement" ) )
+        return wxS( "placement" );
+
+    if( workState == wxS( "autofill" ) || workState == wxS( "panel" )
+        || workState == wxS( "structured_surface" ) )
+    {
+        return wxS( "structured_surface" );
+    }
+
+    return workState;
+}
+
+
+nlohmann::json attemptPolicyJson( const wxString& aWorkState,
+                                  const ATTEMPT_POLICY_SIGNALS& aSignals = {} )
+{
+    const ATTEMPT_BUDGET_POLICY basePolicy = attemptPolicyForWorkState( aWorkState );
+    const ATTEMPT_BUDGET_POLICY policy =
+            adjustedAttemptPolicyForWorkState( aWorkState, aSignals );
+
+    nlohmann::json adjustments = nlohmann::json::array();
+
+    if( aSignals.m_RecentRejectHistoryCount > 0
+        && policy.m_MaxAttempts < basePolicy.m_MaxAttempts )
+    {
+        adjustments.push_back( "recent_reject_history" );
+    }
 
     return { { "work_state", toUtf8String( aWorkState ) },
              { "max_attempts", policy.m_MaxAttempts },
@@ -2949,7 +2997,30 @@ nlohmann::json attemptPolicyJson( const wxString& aWorkState )
              { "max_render_count", policy.m_MaxRenderCount },
              { "max_validation_count", policy.m_MaxValidationCount },
              { "max_wall_time_ms", policy.m_MaxWallTimeMs },
+             { "base_max_attempts", basePolicy.m_MaxAttempts },
+             { "base_max_tool_rounds", basePolicy.m_MaxToolRounds },
+             { "base_max_mutations", basePolicy.m_MaxMutations },
+             { "base_max_render_count", basePolicy.m_MaxRenderCount },
+             { "base_max_validation_count", basePolicy.m_MaxValidationCount },
+             { "base_max_wall_time_ms", basePolicy.m_MaxWallTimeMs },
+             { "reject_history_count", aSignals.m_RecentRejectHistoryCount },
+             { "adjustments", std::move( adjustments ) },
              { "policy_owner", "native_runtime" } };
+}
+
+
+wxString workStateForCandidateSourceToolName( const std::string& aSelectedTool )
+{
+    if( stringStartsWith( aSelectedTool, "routing." ) )
+        return wxS( "routing" );
+
+    if( stringStartsWith( aSelectedTool, "surface." ) )
+        return wxS( "structured_surface" );
+
+    if( stringStartsWith( aSelectedTool, "placement." ) )
+        return wxS( "placement" );
+
+    return wxS( "unknown" );
 }
 
 
@@ -2958,16 +3029,33 @@ wxString budgetPolicyWorkStateForCandidate(
 {
     const std::string selectedTool = candidateSourceToolName( aCandidate );
 
-    if( stringStartsWith( selectedTool, "routing." ) )
-        return wxS( "routing" );
+    return workStateForCandidateSourceToolName( selectedTool );
+}
 
-    if( stringStartsWith( selectedTool, "surface." ) )
-        return wxS( "structured_surface" );
 
-    if( stringStartsWith( selectedTool, "placement." ) )
-        return wxS( "placement" );
+ATTEMPT_POLICY_SIGNALS attemptPolicySignalsForWorkState(
+        const std::vector<AI_SUGGESTION_RECORD>& aSuggestions,
+        const wxString& aWorkState )
+{
+    ATTEMPT_POLICY_SIGNALS signals;
+    const wxString targetFamily = normalizedAttemptPolicyFamily( aWorkState );
 
-    return wxS( "unknown" );
+    for( const AI_SUGGESTION_RECORD& suggestion : aSuggestions )
+    {
+        if( suggestion.m_Status != AI_SUGGESTION_STATUS::Rejected
+            || !isNextActionRuntimeSuggestion( suggestion ) )
+        {
+            continue;
+        }
+
+        const wxString suggestionFamily = normalizedAttemptPolicyFamily(
+                budgetPolicyWorkStateForCandidate( suggestion ) );
+
+        if( suggestionFamily == targetFamily )
+            ++signals.m_RecentRejectHistoryCount;
+    }
+
+    return signals;
 }
 
 
@@ -10136,9 +10224,12 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
             decision.m_SelectedCandidateIndex.has_value();
     const size_t firstCandidateIndex =
             explicitCandidateSelected ? *decision.m_SelectedCandidateIndex : 0;
+    const ATTEMPT_POLICY_SIGNALS policySignals =
+            attemptPolicySignalsForWorkState( m_Suggestions, observation.m_Kind );
     const size_t attemptLimit = explicitCandidateSelected
                                         ? 1
-                                        : attemptLimitForWorkState( observation.m_Kind );
+                                        : attemptLimitForWorkState( observation.m_Kind,
+                                                                    policySignals );
 
     for( size_t ii = 0; ii < attemptLimit; ++ii )
     {
@@ -10806,10 +10897,14 @@ AI_OBSERVATION_PACKET AI_NEXT_ACTION_RUNTIME::buildObservationPacket(
     packet.m_ContextSnapshot = aEvent.m_ContextSnapshot;
     packet.m_Activity = aEvent.m_Activity;
 
+    const ATTEMPT_POLICY_SIGNALS policySignals =
+            attemptPolicySignalsForWorkState( m_Suggestions, aEvent.m_Kind );
+
     nlohmann::json facts =
             { { "slot_id", toUtf8String( aEvent.m_SlotId ) },
               { "work_state", toUtf8String( aEvent.m_Kind ) },
-              { "attempt_policy", attemptPolicyJson( aEvent.m_Kind ) },
+              { "attempt_policy", attemptPolicyJson( aEvent.m_Kind,
+                                                     policySignals ) },
               { "reason", toUtf8String( aEvent.m_Reason ) },
               { "dependency_fingerprint",
                 toUtf8String( dependencyFingerprint( aEvent.m_ContextVersion ) ) },
