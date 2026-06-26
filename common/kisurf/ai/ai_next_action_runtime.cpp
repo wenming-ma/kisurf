@@ -8678,6 +8678,19 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                 && trace["tool_results"][phase].is_array() )
             {
                 result.m_ToolResultCount += trace["tool_results"][phase].size();
+
+                for( const nlohmann::json& toolResult :
+                     trace["tool_results"][phase] )
+                {
+                    if( toolResult.is_object()
+                        && toolResult.contains( "tool_name" )
+                        && toolResult["tool_name"].is_string()
+                        && toolResult["tool_name"].get<std::string>()
+                                   == "preview_gate_feedback" )
+                    {
+                        ++result.m_PreviewGateFeedbackCount;
+                    }
+                }
             }
         }
     }
@@ -8759,6 +8772,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
               { "tool_result_count", result.m_ToolResultCount },
+              { "preview_gate_feedback_count",
+                result.m_PreviewGateFeedbackCount },
               { "preview_gate_allowed", result.m_PreviewGateAllowed },
               { "work_state_interaction_semantics_present",
                 result.m_WorkStateInteractionSemanticsPresent },
@@ -8829,6 +8844,8 @@ AiEvaluateNextActionReplayTraceBatch(
         result.m_RenderResultCount += evaluation.m_RenderResultCount;
         result.m_ValidationResultCount += evaluation.m_ValidationResultCount;
         result.m_ToolResultCount += evaluation.m_ToolResultCount;
+        result.m_PreviewGateFeedbackCount +=
+                evaluation.m_PreviewGateFeedbackCount;
     }
 
     result.m_Valid = result.m_InvalidTraceCount == 0;
@@ -8848,6 +8865,8 @@ AiEvaluateNextActionReplayTraceBatch(
               { "render_result_count", result.m_RenderResultCount },
               { "validation_result_count", result.m_ValidationResultCount },
               { "tool_result_count", result.m_ToolResultCount },
+              { "preview_gate_feedback_count",
+                result.m_PreviewGateFeedbackCount },
               { "preview_gate_allowed_count",
                 result.m_PreviewGateAllowedCount },
               { "work_state_interaction_semantics_present_count",
