@@ -10487,6 +10487,14 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                           { "status", "malformed_arguments" } } );
             }
 
+            if( operationKind == "surface.apply_patch"
+                && !args.contains( "write_policy" )
+                && !( args.contains( "patch" ) && args["patch"].is_object()
+                      && args["patch"].contains( "write_policy" ) ) )
+            {
+                args["write_policy"] = "fill_empty_only";
+            }
+
             nlohmann::json operation =
                     { { "kind", operationKind },
                       { "arguments", args } };

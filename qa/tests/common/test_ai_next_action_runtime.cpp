@@ -7784,6 +7784,8 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
     BOOST_CHECK( repairResult.m_ResultJson.Contains(
             wxS( "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"]" ) ) );
     BOOST_CHECK( repairResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
+    BOOST_CHECK( repairResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
     BOOST_CHECK( repairResult.m_ResultJson.Contains(
             wxS( "\"direct_publish\":false" ) ) );
@@ -7802,6 +7804,8 @@ BOOST_AUTO_TEST_CASE( RuntimeSurfaceRepairPatchToolLowersAndFeedsRender )
             wxS( "\"kind\":\"surface_patch_preview\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"surface_repair_fill_class\"" ) ) );
+    BOOST_CHECK( renderResult.m_ResultJson.Contains(
+            wxS( "\"write_policy\":\"fill_empty_only\"" ) ) );
     BOOST_CHECK( renderResult.m_ResultJson.Contains(
             wxS( "\"merged_from_tool\":\"surface.repair_patch\"" ) ) );
 }
