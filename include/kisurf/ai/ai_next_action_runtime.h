@@ -241,6 +241,22 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
 KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT
 AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson );
 
+struct KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT
+{
+    bool     m_Valid = false;
+    bool     m_Migrated = false;
+    wxString m_ErrorCode;
+    wxString m_Message;
+    unsigned m_SourceSchemaVersion = 0;
+    unsigned m_TargetSchemaVersion = 0;
+    wxString m_ReplayJson;
+};
+
+KICOMMON_API AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT
+AiMigrateNextActionReplayTraceJson( const wxString& aReplayTraceJson,
+                                    unsigned aTargetSchemaVersion =
+                                            AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+
 struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 {
     bool     m_Valid = false;
