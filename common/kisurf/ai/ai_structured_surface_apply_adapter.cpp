@@ -125,6 +125,92 @@ bool surfaceValueAllowsFillEmptyOnlyWrite( const nlohmann::json& aCurrentValue )
 }
 
 
+std::string provenanceFromMap( const nlohmann::json& aOwner,
+                               const std::vector<std::string>& aKeys )
+{
+    for( const char* field : { "value_provenance", "provenance", "cell_provenance" } )
+    {
+        if( !aOwner.contains( field ) || !aOwner[field].is_object() )
+            continue;
+
+        const nlohmann::json& provenance = aOwner[field];
+
+        for( const std::string& key : aKeys )
+        {
+            if( provenance.contains( key ) && provenance[key].is_string() )
+                return provenance[key].get<std::string>();
+        }
+    }
+
+    return std::string();
+}
+
+
+std::string surfaceFieldProvenance( const nlohmann::json& aSurface,
+                                    const std::string& aFieldId )
+{
+    return provenanceFromMap( aSurface, { aFieldId } );
+}
+
+
+std::string surfaceCellProvenance( const nlohmann::json& aSurface,
+                                   const std::string& aTableId,
+                                   const std::string& aRowId,
+                                   const std::string& aColumnId )
+{
+    const std::vector<std::string> keys = {
+        aRowId + "." + aColumnId,
+        aRowId + ":" + aColumnId,
+        aColumnId
+    };
+
+    if( aSurface.contains( "tables" ) && aSurface["tables"].is_object()
+        && aSurface["tables"].contains( aTableId )
+        && aSurface["tables"][aTableId].is_object() )
+    {
+        const nlohmann::json& table = aSurface["tables"][aTableId];
+
+        if( table.contains( "rows" ) && table["rows"].is_object()
+            && table["rows"].contains( aRowId )
+            && table["rows"][aRowId].is_object() )
+        {
+            const std::string rowProvenance =
+                    provenanceFromMap( table["rows"][aRowId], keys );
+
+            if( !rowProvenance.empty() )
+                return rowProvenance;
+        }
+
+        const std::string tableProvenance = provenanceFromMap( table, keys );
+
+        if( !tableProvenance.empty() )
+            return tableProvenance;
+    }
+
+    return provenanceFromMap( aSurface, keys );
+}
+
+
+nlohmann::json valueWithFallbackProvenance( const nlohmann::json& aCurrentValue,
+                                            const std::string& aProvenance )
+{
+    if( aProvenance.empty() || !provenanceAllowsFillEmptyOnlyOverwrite( aProvenance ) )
+        return aCurrentValue;
+
+    if( aCurrentValue.is_object()
+        && ( !stringField( aCurrentValue, "value_provenance" ).empty()
+             || !stringField( aCurrentValue, "provenance" ).empty() ) )
+    {
+        return aCurrentValue;
+    }
+
+    return nlohmann::json{
+        { "value", aCurrentValue },
+        { "value_provenance", aProvenance }
+    };
+}
+
+
 const nlohmann::json* currentSurfaceCellValue(
         const nlohmann::json& aSurface,
         const std::string& aTableId,
@@ -1761,8 +1847,18 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
                     currentSurfaceCellValue( surface, opTableId, rowId,
                                              columnId );
 
+            nlohmann::json currentPolicyValue;
+
+            if( currentValue )
+            {
+                currentPolicyValue = valueWithFallbackProvenance(
+                        *currentValue,
+                        surfaceCellProvenance( surface, opTableId, rowId,
+                                               columnId ) );
+            }
+
             if( fillEmptyOnly && currentValue
-                && !surfaceValueAllowsFillEmptyOnlyWrite( *currentValue ) )
+                && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
             {
                 aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
                               "a non-empty cell." );
@@ -1788,8 +1884,17 @@ bool AI_STRUCTURED_SURFACE_APPLY_ADAPTER::applySurfacePatch(
             const nlohmann::json* currentValue =
                     currentSurfaceFieldValue( surface, fieldId );
 
+            nlohmann::json currentPolicyValue;
+
+            if( currentValue )
+            {
+                currentPolicyValue = valueWithFallbackProvenance(
+                        *currentValue,
+                        surfaceFieldProvenance( surface, fieldId ) );
+            }
+
             if( fillEmptyOnly && currentValue
-                && !surfaceValueAllowsFillEmptyOnlyWrite( *currentValue ) )
+                && !surfaceValueAllowsFillEmptyOnlyWrite( currentPolicyValue ) )
             {
                 aError = wxS( "SurfacePatch fill_empty_only cannot overwrite "
                               "a non-empty field." );

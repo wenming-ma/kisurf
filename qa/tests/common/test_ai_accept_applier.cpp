@@ -1183,6 +1183,78 @@ BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsFillEmptyOnlyCellOverwriteAndAbor
 }
 
 
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayAllowsFillEmptyOnlyProjectDefaultField )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "fill project default surface field" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"write_policy\":\"fill_empty_only\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_field\","
+                 "\"field_id\":\"default_clearance\","
+                 "\"value\":\"0.20mm\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{"
+                 "\"fields\":{\"default_clearance\":\"0.15mm\"},"
+                 "\"value_provenance\":{\"default_clearance\":\"project_default\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+    BOOST_CHECK( surfaceState.Contains(
+            wxS( "\"default_clearance\":\"0.20mm\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SurfacePatchReplayAllowsFillEmptyOnlyProjectDefaultCell )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "fill project default surface cell" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::ApplySurfacePatch,
+            wxS( "{\"surface_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"write_policy\":\"fill_empty_only\","
+                 "\"patch\":{\"kind\":\"SurfacePatch\","
+                 "\"operations\":[{\"op\":\"set_cell\","
+                 "\"row_id\":\"row.power\","
+                 "\"column_id\":\"class\","
+                 "\"value\":\"Power\"}]}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    wxString surfaceState =
+            wxS( "{\"surfaces\":{\"board_setup.clearance\":{\"tables\":"
+                 "{\"clearance.rules\":{\"rows\":{\"row.power\":{\"cells\":"
+                 "{\"class\":\"Signal\"}}}}},"
+                 "\"value_provenance\":{\"row.power.class\":\"project_default\"}}}}" );
+
+    AI_STRUCTURED_SURFACE_APPLY_ADAPTER adapter( surfaceState );
+
+    AI_ACCEPT_APPLY_RESULT result = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "base-hash-accept" ), session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_AppliedOperationCount, 1 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+    BOOST_CHECK( surfaceState.Contains( wxS( "\"class\":\"Power\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( SurfacePatchReplayRejectsStaleSurfaceRevisionAndAborts )
 {
     AI_EXECUTION_SESSION session = makeSession();
