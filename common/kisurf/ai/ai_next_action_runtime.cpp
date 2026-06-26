@@ -9408,6 +9408,10 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                     summary["trace_hidden_operation_count"] =
                             aTraceEval->m_HiddenOperationCount;
                     summary["trace_attempt_count"] = aTraceEval->m_AttemptCount;
+                    summary["trace_rollback_attempt_count"] =
+                            aTraceEval->m_RollbackAttemptCount;
+                    summary["trace_rolled_back_attempt_count"] =
+                            aTraceEval->m_RolledBackAttemptCount;
                     summary["trace_budget_tool_round_count"] =
                             aTraceEval->m_BudgetToolRoundCount;
                     summary["trace_budget_mutation_count"] =
@@ -9583,6 +9587,24 @@ AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
                 traceEval.m_BudgetToolRoundCount,
                 wxS( "budget_tool_round_count_below_minimum" ),
                 wxS( "Replay budget tool-round count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_rollback_attempt_count",
+                traceEval.m_RollbackAttemptCount,
+                wxS( "rollback_attempt_count_below_minimum" ),
+                wxS( "Replay rollback attempt count is below expected minimum." ) ) )
+    {
+        return *checked;
+    }
+
+    if( auto checked = checkMinimum(
+                "min_rolled_back_attempt_count",
+                traceEval.m_RolledBackAttemptCount,
+                wxS( "rolled_back_attempt_count_below_minimum" ),
+                wxS( "Replay rolled-back attempt count is below expected minimum." ) ) )
     {
         return *checked;
     }
@@ -9863,6 +9885,12 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
         nlohmann::json recordSummary =
                 parseJsonObjectOrEmpty( record.m_SummaryJson );
 
+        result.m_TraceRollbackAttemptCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_rollback_attempt_count" );
+        result.m_TraceRolledBackAttemptCount +=
+                jsonCounterValue( recordSummary,
+                                  "trace_rolled_back_attempt_count" );
         result.m_TraceBudgetToolRoundCount +=
                 jsonCounterValue( recordSummary,
                                   "trace_budget_tool_round_count" );
@@ -9952,6 +9980,10 @@ AiEvaluateNextActionReplayGoldenDataset( const wxArrayString& aGoldenRecordJsons
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
+              { "trace_rollback_attempt_count",
+                result.m_TraceRollbackAttemptCount },
+              { "trace_rolled_back_attempt_count",
+                result.m_TraceRolledBackAttemptCount },
               { "trace_budget_tool_round_count",
                 result.m_TraceBudgetToolRoundCount },
               { "trace_budget_mutation_count",
@@ -10202,6 +10234,10 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
         result.m_InvalidRecordCount += dataset.m_InvalidRecordCount;
         result.m_PassedRecordCount += dataset.m_PassedRecordCount;
         result.m_FailedRecordCount += dataset.m_FailedRecordCount;
+        result.m_TraceRollbackAttemptCount +=
+                dataset.m_TraceRollbackAttemptCount;
+        result.m_TraceRolledBackAttemptCount +=
+                dataset.m_TraceRolledBackAttemptCount;
         result.m_TraceBudgetToolRoundCount +=
                 dataset.m_TraceBudgetToolRoundCount;
         result.m_TraceBudgetMutationCount +=
@@ -10377,6 +10413,10 @@ AiEvaluateNextActionReplayGoldenDatasetFiles( const wxArrayString& aGoldenDatase
               { "invalid_record_count", result.m_InvalidRecordCount },
               { "passed_record_count", result.m_PassedRecordCount },
               { "failed_record_count", result.m_FailedRecordCount },
+              { "trace_rollback_attempt_count",
+                result.m_TraceRollbackAttemptCount },
+              { "trace_rolled_back_attempt_count",
+                result.m_TraceRolledBackAttemptCount },
               { "trace_budget_tool_round_count",
                 result.m_TraceBudgetToolRoundCount },
               { "trace_budget_mutation_count",

@@ -1,0 +1,146 @@
+{
+  "schema": {
+    "name": "kisurf.next_action.golden_dataset",
+    "version": 1
+  },
+  "id": "next-action-placement-rollback-retry-inner-loop-smoke",
+  "records": [
+    {
+      "schema": {
+        "name": "kisurf.next_action.golden_trace",
+        "version": 1
+      },
+      "id": "placement-rollback-retry-inner-loop-smoke",
+      "replay_trace": {
+        "schema": {
+          "name": "kisurf.next_action.replay_trace",
+          "version": 1
+        },
+        "runtime": "next_action",
+        "runtime_step_id": 6,
+        "terminal_state": "published",
+        "semantic_event": {
+          "slot_id": "placement/current-via",
+          "kind": "tool_state_changed"
+        },
+        "observation_packet": {
+          "structured_facts": {
+            "work_state_packet": {
+              "kind": "placement",
+              "interaction_semantics": {
+                "planning_target": {
+                  "kind": "place_current_item"
+                },
+                "materialization": "manual_click_or_accept"
+              }
+            }
+          }
+        },
+        "llm_decision": {
+          "decision_kind": "attempt",
+          "opportunity_type": "placement",
+          "reason_code": "likely_helpful"
+        },
+        "tool_results": {
+          "decision": [
+            {
+              "tool_name": "placement_generate_via_pattern_candidates",
+              "result": {
+                "candidate_count": 1
+              }
+            }
+          ],
+          "review": [
+            {
+              "tool_name": "rollback_attempt",
+              "result": {
+                "status": "rolled_back",
+                "rolled_back": true,
+                "rolled_back_tool_call_id": "call_bad_via"
+              }
+            },
+            {
+              "tool_name": "preview_gate_feedback",
+              "result": {
+                "preview_gate_result": {
+                  "allowed": true,
+                  "reasons": [
+                    "render_validation_fresh"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "llm_review_decision": {
+          "decision_kind": "publish",
+          "reason_code": "review_passed_after_retry"
+        },
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "hidden_attempt_journal": {
+              "operations": [
+                {
+                  "kind": "pcb.create_via",
+                  "alias": "VIA_BAD"
+                }
+              ]
+            },
+            "render_outputs": {
+              "visual_frame_id": "frame-placement-rollback-1"
+            },
+            "validation_facts": {
+              "accept_validation_sufficient": false,
+              "preview_state_exact": false,
+              "issues": []
+            },
+            "rollback": {
+              "status": "rolled_back",
+              "rolled_back": true,
+              "checkpoint_id": 1,
+              "rolled_back_tool_call_id": "call_bad_via"
+            }
+          },
+          {
+            "attempt_id": 2,
+            "hidden_attempt_journal": {
+              "operations": [
+                {
+                  "kind": "pcb.create_via",
+                  "alias": "VIA_RETRY"
+                }
+              ]
+            },
+            "render_outputs": {
+              "visual_frame_id": "frame-placement-rollback-2"
+            },
+            "validation_facts": {
+              "accept_validation_sufficient": true,
+              "preview_state_exact": true,
+              "issues": []
+            }
+          }
+        ],
+        "publish_decision": {
+          "preview_gate_result": {
+            "allowed": true,
+            "reasons": []
+          }
+        },
+        "published_suggestion_id": 1
+      },
+      "expected": {
+        "terminal_state": "published",
+        "published": true,
+        "work_state": "placement",
+        "min_hidden_operation_count": 2,
+        "min_decision_tool_result_count": 1,
+        "min_review_tool_result_count": 2,
+        "min_preview_gate_feedback_count": 1,
+        "min_rollback_attempt_count": 1,
+        "min_rolled_back_attempt_count": 1
+      }
+    }
+  ]
+}
