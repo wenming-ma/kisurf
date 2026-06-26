@@ -5365,6 +5365,24 @@ nlohmann::json routingCorridorFactJson(
     if( aModeContext.contains( "width" ) && aModeContext["width"].is_number() )
         fact["width"] = aModeContext["width"];
 
+    nlohmann::json toolArgs =
+            { { "current_position", fact["start"] },
+              { "target_position", fact["end"] } };
+
+    if( fact.contains( "net" ) )
+        toolArgs["net"] = fact["net"];
+
+    if( fact.contains( "layer" ) )
+        toolArgs["layer"] = fact["layer"];
+
+    if( fact.contains( "width" ) )
+        toolArgs["width"] = fact["width"];
+
+    fact["suggested_tool_call"] =
+            { { "name", "routing.repair_segment" },
+              { "purpose", "hidden_attempt_repair_hint" },
+              { "arguments", toolArgs } };
+
     int cursorX = 0;
     int cursorY = 0;
 
