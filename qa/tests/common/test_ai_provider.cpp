@@ -43,6 +43,16 @@ wxString missingModelConfigPath()
     wxRemoveFile( path );
     return path;
 }
+
+
+bool pointSchemaRequiresXY( const nlohmann::json& aSchema )
+{
+    return aSchema.contains( "required" )
+           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
+                         "x" ) != aSchema["required"].end()
+           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
+                         "y" ) != aSchema["required"].end();
+}
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiNativeProvider )
@@ -619,6 +629,30 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      ["expected_surface_revision"].is_object() );
                 BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]
                                      ["expected_schema_version"].is_object() );
+                BOOST_REQUIRE( operationContracts.contains(
+                        "pcb.update_item_geometry" ) );
+                const nlohmann::json& updateGeometryContract =
+                        operationContracts["pcb.update_item_geometry"];
+                BOOST_REQUIRE( updateGeometryContract["properties"].contains(
+                        "geometry_patch" ) );
+                const nlohmann::json& geometryPatchContract =
+                        updateGeometryContract["properties"]["geometry_patch"];
+                BOOST_REQUIRE( geometryPatchContract.contains( "properties" ) );
+                const nlohmann::json& geometryPatchProperties =
+                        geometryPatchContract["properties"];
+                BOOST_CHECK( geometryPatchProperties.contains( "start" ) );
+                BOOST_CHECK( geometryPatchProperties.contains( "end" ) );
+                BOOST_CHECK( geometryPatchProperties.contains( "center" ) );
+                BOOST_CHECK( geometryPatchProperties.contains( "mid" ) );
+                BOOST_CHECK( geometryPatchProperties.contains( "radius" ) );
+                BOOST_REQUIRE( geometryPatchProperties.contains( "points" ) );
+                BOOST_CHECK_EQUAL( geometryPatchProperties["points"].value(
+                                           "minItems", 0 ),
+                                   3 );
+                BOOST_REQUIRE( geometryPatchProperties["points"].contains(
+                        "items" ) );
+                BOOST_CHECK( pointSchemaRequiresXY(
+                        geometryPatchProperties["points"]["items"] ) );
                 BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& rollbackParameters =
                         toolByName["kisurf_rollback_to"]["function"]["parameters"];

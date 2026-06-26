@@ -11424,6 +11424,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             };
                         };
 
+                auto geometryPatchSchema =
+                        [&]()
+                        {
+                            nlohmann::json schema = {
+                                { "type", "object" },
+                                { "additionalProperties", true },
+                                { "description",
+                                  "Partial shape geometry patch. Segment/rectangle use "
+                                  "start/end; circle uses center/radius; arc uses "
+                                  "start/mid/end; polygon uses points." }
+                            };
+
+                            schema["properties"] = {
+                                { "start", pointSchema( "Patched start point." ) },
+                                { "end", pointSchema( "Patched end point." ) },
+                                { "center", pointSchema( "Patched circle center." ) },
+                                { "mid", pointSchema( "Patched arc midpoint." ) },
+                                { "radius",
+                                  { { "type", "integer" }, { "minimum", 1 } } },
+                                { "points",
+                                  pointArraySchema(
+                                          "Patched polygon outline points using internal coordinates.",
+                                          3 ) }
+                            };
+
+                            return schema;
+                        };
+
                 auto handleSchema =
                         []()
                         {
@@ -11639,8 +11667,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                     { "properties",
                                       { { "handle", handleSchema() },
                                         { "geometry_patch",
-                                          { { "type", "object" },
-                                            { "additionalProperties", true } } } } },
+                                          geometryPatchSchema() } } },
                                     { "required",
                                       nlohmann::json::array( { "handle",
                                                                "geometry_patch" } ) } } },

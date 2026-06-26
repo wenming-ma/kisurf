@@ -4429,6 +4429,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawScriptShapePolygonContract = false;
+    bool sawScriptGeometryPatchContract = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
@@ -4691,6 +4692,37 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
                     sawScriptShapePolygonContract =
                             hasPolygonKind && hasPolygonPoints;
+                }
+
+                if( contracts.contains( "pcb.update_item_geometry" ) )
+                {
+                    const nlohmann::json& updateGeometryContract =
+                            contracts["pcb.update_item_geometry"];
+
+                    if( updateGeometryContract.contains( "properties" )
+                        && updateGeometryContract["properties"].contains(
+                                   "geometry_patch" )
+                        && updateGeometryContract["properties"]["geometry_patch"]
+                                   .contains( "properties" ) )
+                    {
+                        const nlohmann::json& patchProperties =
+                                updateGeometryContract["properties"]
+                                                      ["geometry_patch"]
+                                                      ["properties"];
+
+                        sawScriptGeometryPatchContract =
+                                patchProperties.contains( "start" )
+                                && patchProperties.contains( "end" )
+                                && patchProperties.contains( "center" )
+                                && patchProperties.contains( "mid" )
+                                && patchProperties.contains( "radius" )
+                                && patchProperties.contains( "points" )
+                                && patchProperties["points"].value(
+                                           "minItems", 0 )
+                                           == 3
+                                && pointSchemaRequiresXY(
+                                           patchProperties["points"]["items"] );
+                    }
                 }
             }
         }
@@ -5260,6 +5292,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawScriptShapePolygonContract );
+    BOOST_CHECK( sawScriptGeometryPatchContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );

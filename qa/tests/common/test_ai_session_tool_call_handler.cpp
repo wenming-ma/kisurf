@@ -562,6 +562,32 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                             pointsContract["items"]["required"].end(), "y" )
                  != pointsContract["items"]["required"].end() );
 
+    BOOST_REQUIRE( operationContracts.contains( "pcb.update_item_geometry" ) );
+    const nlohmann::json& updateGeometryContract =
+            operationContracts["pcb.update_item_geometry"];
+    BOOST_REQUIRE( updateGeometryContract["properties"].contains(
+            "geometry_patch" ) );
+    const nlohmann::json& geometryPatchContract =
+            updateGeometryContract["properties"]["geometry_patch"];
+    BOOST_REQUIRE( geometryPatchContract.contains( "properties" ) );
+    BOOST_CHECK( geometryPatchContract["properties"].contains( "start" ) );
+    BOOST_CHECK( geometryPatchContract["properties"].contains( "end" ) );
+    BOOST_CHECK( geometryPatchContract["properties"].contains( "center" ) );
+    BOOST_CHECK( geometryPatchContract["properties"].contains( "mid" ) );
+    BOOST_CHECK( geometryPatchContract["properties"].contains( "radius" ) );
+    BOOST_REQUIRE( geometryPatchContract["properties"].contains( "points" ) );
+    const nlohmann::json& patchPointsContract =
+            geometryPatchContract["properties"]["points"];
+    BOOST_CHECK_EQUAL( patchPointsContract.value( "minItems", 0 ), 3 );
+    BOOST_REQUIRE( patchPointsContract.contains( "items" ) );
+    BOOST_REQUIRE( patchPointsContract["items"].contains( "required" ) );
+    BOOST_CHECK( std::find( patchPointsContract["items"]["required"].begin(),
+                            patchPointsContract["items"]["required"].end(), "x" )
+                 != patchPointsContract["items"]["required"].end() );
+    BOOST_CHECK( std::find( patchPointsContract["items"]["required"].begin(),
+                            patchPointsContract["items"]["required"].end(), "y" )
+                 != patchPointsContract["items"]["required"].end() );
+
     BOOST_REQUIRE( catalogTool( "kisurf_query_items" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_query_items" )->value( "layer",
                                                                   std::string() ),

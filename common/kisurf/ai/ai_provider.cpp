@@ -262,6 +262,30 @@ nlohmann::json internalPointArraySchema( const char* aDescription, int aMinItems
 }
 
 
+nlohmann::json geometryPatchSchema()
+{
+    nlohmann::json schema = { { "type", "object" },
+                              { "additionalProperties", true },
+                              { "description",
+                                "Partial shape geometry patch. Segment/rectangle use "
+                                "start/end; circle uses center/radius; arc uses "
+                                "start/mid/end; polygon uses points." } };
+
+    schema["properties"] = {
+        { "start", internalPointSchema( "Patched start point." ) },
+        { "end", internalPointSchema( "Patched end point." ) },
+        { "center", internalPointSchema( "Patched circle center." ) },
+        { "mid", internalPointSchema( "Patched arc midpoint." ) },
+        { "radius", { { "type", "integer" }, { "minimum", 1 } } },
+        { "points",
+          internalPointArraySchema(
+                  "Patched polygon outline points using internal coordinates.", 3 ) }
+    };
+
+    return schema;
+}
+
+
 nlohmann::json handleRefSchema( const char* aDescription )
 {
     return { { "description", aDescription },
@@ -431,8 +455,7 @@ nlohmann::json atomicOperationContractSchemas()
             { "additionalProperties", true },
             { "properties",
               { { "handle", handleRefSchema( "Item to update." ) },
-                { "geometry_patch",
-                  { { "type", "object" }, { "additionalProperties", true } } } } },
+                { "geometry_patch", geometryPatchSchema() } } },
             { "required", nlohmann::json::array( { "handle", "geometry_patch" } ) } } },
         { "pcb.set_item_net",
           { { "type", "object" },
