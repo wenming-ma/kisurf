@@ -11452,6 +11452,27 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                             return schema;
                         };
 
+                auto zoneOutlineSchema =
+                        [&]()
+                        {
+                            nlohmann::json schema = {
+                                { "type", "object" },
+                                { "additionalProperties", true },
+                                { "description",
+                                  "Zone outline geometry. Use points for the ordered "
+                                  "polygon outline in internal coordinates." }
+                            };
+
+                            schema["properties"] = {
+                                { "points",
+                                  pointArraySchema(
+                                          "Zone polygon outline points using internal coordinates.",
+                                          3 ) }
+                            };
+
+                            return schema;
+                        };
+
                 auto handleSchema =
                         []()
                         {
@@ -11570,8 +11591,7 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                     { "additionalProperties", true },
                                     { "properties",
                                       { { "outline",
-                                          { { "type", "object" },
-                                            { "additionalProperties", true } } },
+                                          zoneOutlineSchema() },
                                         { "layer_set",
                                           stringArraySchema( "Copper layers for the zone." ) },
                                         { "net", { { "type", "string" } } },

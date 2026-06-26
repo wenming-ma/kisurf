@@ -527,6 +527,26 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                          .contains( "width" ) );
     BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
             "target_positions" ) );
+    BOOST_REQUIRE( operationContracts.contains( "pcb.create_zone" ) );
+    BOOST_REQUIRE( operationContracts["pcb.create_zone"]["properties"].contains(
+            "outline" ) );
+    const nlohmann::json& zoneOutlineContract =
+            operationContracts["pcb.create_zone"]["properties"]["outline"];
+    BOOST_REQUIRE( zoneOutlineContract.contains( "properties" ) );
+    BOOST_REQUIRE( zoneOutlineContract["properties"].contains( "points" ) );
+    const nlohmann::json& zoneOutlinePointsContract =
+            zoneOutlineContract["properties"]["points"];
+    BOOST_CHECK_EQUAL( zoneOutlinePointsContract.value( "minItems", 0 ), 3 );
+    BOOST_REQUIRE( zoneOutlinePointsContract.contains( "items" ) );
+    BOOST_REQUIRE( zoneOutlinePointsContract["items"].contains( "required" ) );
+    BOOST_CHECK( std::find( zoneOutlinePointsContract["items"]["required"].begin(),
+                            zoneOutlinePointsContract["items"]["required"].end(),
+                            "x" )
+                 != zoneOutlinePointsContract["items"]["required"].end() );
+    BOOST_CHECK( std::find( zoneOutlinePointsContract["items"]["required"].begin(),
+                            zoneOutlinePointsContract["items"]["required"].end(),
+                            "y" )
+                 != zoneOutlinePointsContract["items"]["required"].end() );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["required"].dump().find(
                          "surface_id" ) != std::string::npos );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["properties"]

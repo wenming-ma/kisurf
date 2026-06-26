@@ -4430,6 +4430,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawScriptSurfacePatchKind = false;
     bool sawScriptShapePolygonContract = false;
     bool sawScriptGeometryPatchContract = false;
+    bool sawScriptZoneOutlineContract = false;
     bool sawRepairSurfacePatchKind = false;
     bool sawPlacementRepairRequiredPosition = false;
     bool sawPlacementMoveRepairRequiredHandles = false;
@@ -4692,6 +4693,28 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
                     sawScriptShapePolygonContract =
                             hasPolygonKind && hasPolygonPoints;
+                }
+
+                if( contracts.contains( "pcb.create_zone" ) )
+                {
+                    const nlohmann::json& zoneContract =
+                            contracts["pcb.create_zone"];
+
+                    const bool hasOutlinePoints =
+                            zoneContract.contains( "properties" )
+                            && zoneContract["properties"].contains( "outline" )
+                            && zoneContract["properties"]["outline"].contains(
+                                       "properties" )
+                            && zoneContract["properties"]["outline"]["properties"]
+                                       .contains( "points" )
+                            && zoneContract["properties"]["outline"]["properties"]
+                                           ["points"].value( "minItems", 0 )
+                                       == 3
+                            && pointSchemaRequiresXY(
+                                       zoneContract["properties"]["outline"]
+                                                   ["properties"]["points"]["items"] );
+
+                    sawScriptZoneOutlineContract = hasOutlinePoints;
                 }
 
                 if( contracts.contains( "pcb.update_item_geometry" ) )
@@ -5293,6 +5316,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawScriptShapePolygonContract );
     BOOST_CHECK( sawScriptGeometryPatchContract );
+    BOOST_CHECK( sawScriptZoneOutlineContract );
     BOOST_CHECK( sawRepairSurfacePatchKind );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
