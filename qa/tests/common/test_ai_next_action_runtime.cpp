@@ -5301,6 +5301,30 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             320 );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_reachability_facts"].at( 0 )
+                    ["route_head"]["x"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["route_head_to_from_endpoint_manhattan"].get<int>(),
+            0 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["route_head_to_to_endpoint_manhattan"].get<int>(),
+            220 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["nearest_endpoint_role"].get<std::string>(),
+            "from" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_landing_endpoint_role"].get<std::string>(),
+            "to" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_landing_endpoint"]["position"]["x"].get<int>(),
+            320 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
                     ["suggested_render_region"]["source"].get<std::string>(),
             "routing_reachability_swept_bbox" );
     BOOST_CHECK_EQUAL(

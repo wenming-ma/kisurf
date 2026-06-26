@@ -3985,6 +3985,39 @@ nlohmann::json routingReachabilityFactsJson(
                     routingEndpointSweptBBoxJson( startX, startY, endX, endY,
                                                   modeContext );
 
+            int routeHeadX = 0;
+            int routeHeadY = 0;
+
+            if( modeContext.contains( "start" )
+                && jsonPointToInts( modeContext["start"], routeHeadX, routeHeadY ) )
+            {
+                const int fromDistance = std::abs( startX - routeHeadX )
+                                         + std::abs( startY - routeHeadY );
+                const int toDistance = std::abs( endX - routeHeadX )
+                                       + std::abs( endY - routeHeadY );
+
+                fact["route_head"] = modeContext["start"];
+                fact["route_head_to_from_endpoint_manhattan"] = fromDistance;
+                fact["route_head_to_to_endpoint_manhattan"] = toDistance;
+
+                if( fromDistance <= toDistance )
+                {
+                    fact["nearest_endpoint_role"] = "from";
+                    fact["suggested_landing_endpoint_role"] = "to";
+
+                    if( fact.contains( "to_endpoint" ) )
+                        fact["suggested_landing_endpoint"] = fact["to_endpoint"];
+                }
+                else
+                {
+                    fact["nearest_endpoint_role"] = "to";
+                    fact["suggested_landing_endpoint_role"] = "from";
+
+                    if( fact.contains( "from_endpoint" ) )
+                        fact["suggested_landing_endpoint"] = fact["from_endpoint"];
+                }
+            }
+
             fact["suggested_render_region"] =
                     { { "source", "routing_reachability_swept_bbox" },
                       { "mode", "routing_reachability_review" },
