@@ -500,6 +500,8 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersSeededFootprintTransform )
     fixture.m_Footprint->SetPosition( VECTOR2I( 1000, 2000 ) );
     fixture.m_Footprint->SetLayer( F_Cu );
     fixture.m_Footprint->SetOrientation( EDA_ANGLE( 0.0, DEGREES_T ) );
+    fixture.m_Footprint->SetReference( wxS( "U1" ) );
+    fixture.m_Footprint->SetValue( wxS( "MCU" ) );
 
     KIGFX::VIEW         view;
     KISURF_AI_PCB_SESSION_PREVIEW_SERVICE previewService( fixture.m_Board, view );
@@ -538,7 +540,11 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersSeededFootprintTransform )
 
     nlohmann::json propsArgs = {
         { "handle", handle },
-        { "typed_props", { { "orientation_degrees", 90.0 }, { "side", "B.Cu" } } }
+        { "typed_props",
+          { { "orientation_degrees", 90.0 },
+            { "side", "B.Cu" },
+            { "reference", "U42" },
+            { "value", "STM32F4" } } }
     };
     BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
             session, AI_SESSION_OPERATION_KIND::SetItemProperties,
@@ -561,10 +567,14 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersSeededFootprintTransform )
     BOOST_CHECK_EQUAL( previewFootprint->GetPosition().y, 8000 );
     BOOST_CHECK_CLOSE( previewFootprint->GetOrientation().AsDegrees(), 90.0, 1e-6 );
     BOOST_CHECK_EQUAL( previewFootprint->GetLayer(), B_Cu );
+    BOOST_CHECK_EQUAL( previewFootprint->GetReference(), wxString( wxS( "U42" ) ) );
+    BOOST_CHECK_EQUAL( previewFootprint->GetValue(), wxString( wxS( "STM32F4" ) ) );
 
     BOOST_CHECK_EQUAL( fixture.m_Footprint->GetPosition().x, 1000 );
     BOOST_CHECK_EQUAL( fixture.m_Footprint->GetPosition().y, 2000 );
     BOOST_CHECK_EQUAL( fixture.m_Footprint->GetLayer(), F_Cu );
+    BOOST_CHECK_EQUAL( fixture.m_Footprint->GetReference(), wxString( wxS( "U1" ) ) );
+    BOOST_CHECK_EQUAL( fixture.m_Footprint->GetValue(), wxString( wxS( "MCU" ) ) );
 }
 
 

@@ -164,6 +164,24 @@ FOOTPRINT* buildFootprintTransformPreview(
                 EDA_ANGLE( details["orientation_degrees"].get<double>(), DEGREES_T ) );
     }
 
+    if( details.contains( "reference" ) )
+    {
+        if( !details["reference"].is_string() )
+            return nullptr;
+
+        preview->SetReference(
+                wxString::FromUTF8( details["reference"].get<std::string>().c_str() ) );
+    }
+
+    if( details.contains( "value" ) )
+    {
+        if( !details["value"].is_string() )
+            return nullptr;
+
+        preview->SetValue(
+                wxString::FromUTF8( details["value"].get<std::string>().c_str() ) );
+    }
+
     return preview.release();
 }
 

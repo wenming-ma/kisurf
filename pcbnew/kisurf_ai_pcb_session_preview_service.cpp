@@ -366,6 +366,9 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
         if( geometry.contains( "reference" ) && geometry["reference"].is_string() )
             details["reference"] = geometry["reference"];
 
+        if( geometry.contains( "value" ) && geometry["value"].is_string() )
+            details["value"] = geometry["value"];
+
         if( geometry.contains( "fp_id" ) && geometry["fp_id"].is_string() )
             details["fp_id"] = geometry["fp_id"];
 
@@ -383,6 +386,12 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
 
         if( properties.contains( "side" ) && properties["side"].is_string() )
             details["side"] = properties["side"];
+
+        if( properties.contains( "reference" ) && properties["reference"].is_string() )
+            details["reference"] = properties["reference"];
+
+        if( properties.contains( "value" ) && properties["value"].is_string() )
+            details["value"] = properties["value"];
 
         return AI_OBJECT_REF( KIID( liveUuid ), PCB_FOOTPRINT_T,
                               shadowItemPreviewLabel( aItem ), fromJson( details ) );
