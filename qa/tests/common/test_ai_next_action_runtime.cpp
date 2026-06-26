@@ -7784,6 +7784,8 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
             wxS( "surface_fill_inner_loop_smoke.json" ) ) );
     datasetPaths.Add( repositoryGoldenDatasetPath(
             wxS( "accept_context_drift_inner_loop_smoke.json" ) ) );
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "validation_issue_inner_loop_smoke.json" ) ) );
 
     for( const wxString& datasetPath : datasetPaths )
     {
@@ -7797,15 +7799,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
 
     BOOST_CHECK( evaluation.m_Valid );
     BOOST_CHECK( evaluation.m_Passed );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 4 );
-    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 4 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 4 );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 4 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 4 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 5 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 5 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 5 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 5 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 5 );
     BOOST_CHECK_EQUAL( evaluation.m_DatasetPassRate, 1.0 );
     BOOST_CHECK_EQUAL( evaluation.m_RecordPassRate, 1.0 );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
-            wxS( "\"placement\":2" ) ) );
+            wxS( "\"placement\":3" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
             wxS( "\"routing\":1" ) ) );
     BOOST_CHECK( evaluation.m_WorkStateCountsJson.Contains(
@@ -7818,15 +7820,15 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_REQUIRE( summary.is_object() );
     BOOST_CHECK_EQUAL( summary["dataset_pass_rate"].get<double>(), 1.0 );
     BOOST_CHECK_EQUAL( summary["record_pass_rate"].get<double>(), 1.0 );
-    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 3 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
-    BOOST_CHECK_EQUAL( summary["trace_preview_gate_feedback_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL( summary["trace_preview_gate_feedback_count"].get<int>(), 5 );
     BOOST_CHECK_EQUAL(
             summary["trace_preview_gate_feedback_reason_counts"]
                    ["render_validation_fresh"]
                            .get<int>(),
-            4 );
+            5 );
     BOOST_CHECK_EQUAL( summary["trace_budget_tool_round_count"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["trace_budget_mutation_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["trace_budget_render_count"].get<int>(), 1 );
@@ -7837,12 +7839,25 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL(
             summary["trace_accept_gate_reason_counts"]["context_drift"].get<int>(),
             1 );
+    BOOST_CHECK_EQUAL( summary["trace_validation_issue_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_kind_counts"]["clearance"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_kind_counts"]["courtyard_overlap"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_severity_counts"]["warning"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_validation_issue_severity_counts"]["error"].get<int>(),
+            1 );
     BOOST_REQUIRE( summary["error_code_counts"].is_object() );
     BOOST_CHECK( summary["error_code_counts"].empty() );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_dataset_count\":4" ) ) );
+            wxS( "\"total_dataset_count\":5" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_record_count\":4" ) ) );
+            wxS( "\"total_record_count\":5" ) ) );
 }
 
 
