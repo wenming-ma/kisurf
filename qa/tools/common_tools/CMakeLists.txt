@@ -36,6 +36,8 @@ add_executable( qa_common_tools
 
     tools/io_benchmark/io_benchmark.cpp
 
+    tools/next_action_replay/next_action_replay.cpp
+
     tools/sexpr_parser/sexpr_parse.cpp
 )
 
