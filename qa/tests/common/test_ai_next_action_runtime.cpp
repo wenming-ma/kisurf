@@ -5325,6 +5325,32 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             320 );
     BOOST_CHECK_EQUAL(
             routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["name"].get<std::string>(),
+            "routing.repair_segment" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["current_position"]["x"]
+                    .get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["target_position"]["x"]
+                    .get<int>(),
+            320 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["layer"].get<std::string>(),
+            "F.Cu" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["suggested_tool_call"]["arguments"]["width"].get<int>(),
+            30 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
                     ["suggested_render_region"]["source"].get<std::string>(),
             "routing_reachability_swept_bbox" );
     BOOST_CHECK_EQUAL(
