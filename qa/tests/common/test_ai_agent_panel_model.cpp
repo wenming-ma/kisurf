@@ -33,6 +33,8 @@ class TOOL_CALL_AI_PROVIDER : public AI_PROVIDER
 public:
     AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
     {
+        ++m_CallCount;
+
         AI_PROVIDER_RESPONSE response;
         response.m_RequestId = aRequest.m_RequestId;
         response.m_Title = wxS( "tool call" );
@@ -47,6 +49,8 @@ public:
 
         return response;
     }
+
+    int m_CallCount = 0;
 };
 
 
@@ -685,6 +689,59 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptabl
 }
 
 
+BOOST_AUTO_TEST_CASE( BackgroundAgentAcceptIsBlockedWhileChatOwnsDocumentWriteLease )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context, activity,
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    AI_NEXT_ACTION_CONTEXT_VERSION currentContext =
+            AiNextActionContextVersionFromSnapshot( context, activity.m_Sequence );
+    BOOST_CHECK( model.TryAcquireDocumentWriteOwnership( wxS( "chat" ),
+                                                         currentContext ) );
+
+    FAKE_EDIT_ADAPTER blockedAdapter;
+    AI_EDIT_SESSION   blockedEdit( blockedAdapter );
+    BOOST_CHECK( !model.AcceptSuggestion( suggestion->m_Id, blockedEdit,
+                                          currentContext ) );
+    BOOST_CHECK( blockedAdapter.m_Applied.empty() );
+
+    std::optional<AI_SUGGESTION_RECORD> stillPending =
+            model.FindSuggestion( suggestion->m_Id );
+    BOOST_REQUIRE( stillPending.has_value() );
+    BOOST_CHECK( stillPending->m_Status == AI_SUGGESTION_STATUS::Pending );
+
+    BOOST_CHECK( model.ReleaseDocumentWriteOwnership( wxS( "chat" ),
+                                                      currentContext ) );
+
+    FAKE_EDIT_ADAPTER acceptedAdapter;
+    AI_EDIT_SESSION   acceptedEdit( acceptedAdapter );
+    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, acceptedEdit,
+                                         currentContext ) );
+    BOOST_CHECK( !acceptedAdapter.m_Applied.empty() );
+}
+
+
 BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeUsesConfiguredPreviewServiceGate )
 {
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
@@ -929,6 +986,43 @@ BOOST_AUTO_TEST_CASE( SendUserTextUsesInstalledToolCallHandler )
     BOOST_CHECK( response.m_ToolCalls.front().m_Executed );
     BOOST_CHECK_EQUAL( response.m_ToolCalls.front().m_ResultJson,
                        wxString( wxS( "{\"status\":\"panel-executed\"}" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SendUserTextDoesNotRunToolCallsWhileNextActionOwnsDocumentWriteLease )
+{
+    auto* provider = new TOOL_CALL_AI_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_PANEL_TOOL_CALL_HANDLER handler;
+
+    model.SetToolCallHandler( &handler );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext =
+            AiNextActionContextVersionFromSnapshot( context, 1 );
+    BOOST_CHECK( model.TryAcquireDocumentWriteOwnership( wxS( "nextaction" ),
+                                                         ownershipContext ) );
+
+    AI_PROVIDER_RESPONSE blocked =
+            model.SendUserText( wxS( "show agent" ), AI_EDITOR_KIND::Pcb,
+                                context );
+
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 0 );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 0 );
+    BOOST_CHECK( blocked.m_ToolCalls.empty() );
+    BOOST_CHECK( blocked.m_Body.Contains( wxS( "document write ownership" ) ) );
+
+    BOOST_CHECK( model.ReleaseDocumentWriteOwnership( wxS( "nextaction" ),
+                                                      ownershipContext ) );
+
+    AI_PROVIDER_RESPONSE allowed =
+            model.SendUserText( wxS( "show agent" ), AI_EDITOR_KIND::Pcb,
+                                context );
+
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+    BOOST_REQUIRE_EQUAL( allowed.m_ToolCalls.size(), 1 );
+    BOOST_CHECK( allowed.m_ToolCalls.front().m_Executed );
 }
 
 

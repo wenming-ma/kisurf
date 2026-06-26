@@ -83,11 +83,21 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
     const bool chatOwnsDocument =
             TryAcquireDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
 
+    if( !chatOwnsDocument )
+    {
+        AI_PROVIDER_RESPONSE response;
+        response.m_Title = wxS( "Document write ownership unavailable" );
+        response.m_Body =
+                wxS( "Cannot run chat tool calls because document write ownership "
+                     "is currently held by another AI runtime." );
+        m_Messages.push_back( { wxS( "assistant" ), response.m_Body } );
+        return response;
+    }
+
     AI_PROVIDER_RESPONSE response = m_Runtime.Submit( request );
     m_LastRequestId = response.m_RequestId;
 
-    if( chatOwnsDocument )
-        ReleaseDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
+    ReleaseDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
 
     m_Messages.push_back( { wxS( "assistant" ), response.m_Body } );
 
@@ -455,8 +465,18 @@ bool AI_AGENT_PANEL_MODEL::AcceptSuggestion( uint64_t aSuggestionId,
 {
     if( m_NextActionRuntime && m_NextActionRuntime->FindSuggestion( aSuggestionId ) )
     {
-        return m_NextActionRuntime->Accept( aSuggestionId, aEditSession,
-                                            aCurrentContextVersion );
+        if( !TryAcquireDocumentWriteOwnership( wxS( "nextaction" ),
+                                               aCurrentContextVersion ) )
+        {
+            return false;
+        }
+
+        const bool accepted = m_NextActionRuntime->Accept(
+                aSuggestionId, aEditSession, aCurrentContextVersion );
+
+        ReleaseDocumentWriteOwnership( wxS( "nextaction" ),
+                                       aCurrentContextVersion );
+        return accepted;
     }
 
     wxUnusedVar( aEditSession );
