@@ -8564,6 +8564,115 @@ AiEvaluateNextActionReplayTraceBatch(
 }
 
 
+AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
+AiEvaluateNextActionReplayTraceBatchJson( const wxString& aReplayBatchJson )
+{
+    auto finishBatchError =
+            []( const wxString& aBatchId, const wxString& aErrorCode,
+                const wxString& aMessage )
+            {
+                AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result;
+                result.m_Valid = false;
+                result.m_FirstErrorCode = aErrorCode;
+                result.m_FirstErrorMessage = aMessage;
+
+                nlohmann::json summary =
+                        { { "batch_id", toUtf8String( aBatchId ) },
+                          { "valid", false },
+                          { "first_error_code", toUtf8String( aErrorCode ) },
+                          { "first_error_message", toUtf8String( aMessage ) },
+                          { "total_trace_count", 0 },
+                          { "valid_trace_count", 0 },
+                          { "invalid_trace_count", 0 },
+                          { "published_count", 0 },
+                          { "accepted_count", 0 },
+                          { "rejected_count", 0 },
+                          { "expired_count", 0 },
+                          { "superseded_count", 0 },
+                          { "abandoned_count", 0 } };
+
+                result.m_SummaryJson = fromUtf8String( summary.dump() );
+                return result;
+            };
+
+    nlohmann::json batch =
+            nlohmann::json::parse( toUtf8String( aReplayBatchJson ), nullptr,
+                                   false );
+
+    if( batch.is_discarded() || !batch.is_object() )
+    {
+        return finishBatchError( wxEmptyString, wxS( "invalid_batch_json" ),
+                                 wxS( "Replay batch must be a JSON object." ) );
+    }
+
+    wxString batchId;
+
+    if( batch.contains( "id" ) && batch["id"].is_string() )
+        batchId = fromUtf8String( batch["id"].get<std::string>() );
+
+    if( !batch.contains( "schema" ) || !batch["schema"].is_object() )
+    {
+        return finishBatchError( batchId, wxS( "missing_schema" ),
+                                 wxS( "Replay batch schema is required." ) );
+    }
+
+    const nlohmann::json& schema = batch["schema"];
+
+    if( !schema.contains( "name" ) || !schema["name"].is_string()
+        || schema["name"].get<std::string>() != "kisurf.next_action.replay_batch" )
+    {
+        return finishBatchError( batchId, wxS( "unsupported_schema_name" ),
+                                 wxS( "Replay batch schema name is unsupported." ) );
+    }
+
+    if( !schema.contains( "version" ) || !schema["version"].is_number_unsigned() )
+    {
+        return finishBatchError( batchId, wxS( "missing_schema_version" ),
+                                 wxS( "Replay batch schema version is required." ) );
+    }
+
+    if( schema["version"].get<unsigned>()
+        != AI_NEXT_ACTION_REPLAY_BATCH_SCHEMA_VERSION )
+    {
+        return finishBatchError( batchId, wxS( "unsupported_schema_version" ),
+                                 wxS( "Replay batch schema version is unsupported." ) );
+    }
+
+    if( !batch.contains( "traces" ) || !batch["traces"].is_array() )
+    {
+        return finishBatchError( batchId, wxS( "missing_traces" ),
+                                 wxS( "Replay batch traces array is required." ) );
+    }
+
+    wxArrayString traces;
+
+    for( const nlohmann::json& trace : batch["traces"] )
+    {
+        if( !trace.is_object() )
+        {
+            return finishBatchError( batchId, wxS( "invalid_trace_entry" ),
+                                     wxS( "Replay batch trace entries must be JSON objects." ) );
+        }
+
+        traces.Add( fromUtf8String( trace.dump() ) );
+    }
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result =
+            AiEvaluateNextActionReplayTraceBatch( traces );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( toUtf8String( result.m_SummaryJson ), nullptr,
+                                   false );
+
+    if( summary.is_discarded() || !summary.is_object() )
+        summary = nlohmann::json::object();
+
+    summary["batch_id"] = toUtf8String( batchId );
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
 AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT
 AiEvaluateNextActionReplayGoldenRecordJson( const wxString& aGoldenRecordJson )
 {

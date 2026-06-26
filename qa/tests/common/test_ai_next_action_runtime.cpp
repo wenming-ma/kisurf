@@ -6593,6 +6593,69 @@ BOOST_AUTO_TEST_CASE( ReplayTraceBatchEvaluationAggregatesValidAndInvalidTraces 
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceBatchJsonEvaluationUsesVersionedBatchSchema )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json batch =
+            { { "schema",
+                { { "name", "kisurf.next_action.replay_batch" },
+                  { "version", AI_NEXT_ACTION_REPLAY_BATCH_SCHEMA_VERSION } } },
+              { "id", "placement-replay-batch" },
+              { "traces", nlohmann::json::array( { trace } ) } };
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceBatchJson(
+                    wxString::FromUTF8( batch.dump().c_str() ) );
+
+    BOOST_CHECK( evaluation.m_Valid );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalTraceCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidTraceCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_PublishedCount, 1 );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"batch_id\":\"placement-replay-batch\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayTraceBatchJsonEvaluationRejectsNonObjectTraces )
+{
+    nlohmann::json batch =
+            { { "schema",
+                { { "name", "kisurf.next_action.replay_batch" },
+                  { "version", AI_NEXT_ACTION_REPLAY_BATCH_SCHEMA_VERSION } } },
+              { "id", "bad-replay-batch" },
+              { "traces", nlohmann::json::array( { 17 } ) } };
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT evaluation =
+            AiEvaluateNextActionReplayTraceBatchJson(
+                    wxString::FromUTF8( batch.dump().c_str() ) );
+
+    BOOST_CHECK( !evaluation.m_Valid );
+    BOOST_CHECK( evaluation.m_FirstErrorCode == wxS( "invalid_trace_entry" ) );
+    BOOST_CHECK( evaluation.m_SummaryJson.Contains(
+            wxS( "\"batch_id\":\"bad-replay-batch\"" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksExpectedTraceOutcome )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
