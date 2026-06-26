@@ -305,6 +305,7 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
     size_t   m_ValidationResultCount = 0;
     size_t   m_ToolResultCount = 0;
     size_t   m_PreviewGateAllowedCount = 0;
+    size_t   m_WorkStateInteractionSemanticsPresentCount = 0;
     size_t   m_BlockingValidationCount = 0;
     wxString m_SummaryJson;
 };

@@ -6778,10 +6778,13 @@ BOOST_AUTO_TEST_CASE( ReplayTraceBatchEvaluationAggregatesValidAndInvalidTraces 
     BOOST_CHECK_GE( batch.m_HiddenOperationCount, 1 );
     BOOST_CHECK_EQUAL( batch.m_RenderResultCount, 1 );
     BOOST_CHECK_EQUAL( batch.m_ValidationResultCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_WorkStateInteractionSemanticsPresentCount, 1 );
     BOOST_CHECK( batch.m_SummaryJson.Contains(
             wxS( "\"invalid_trace_count\":1" ) ) );
     BOOST_CHECK( batch.m_SummaryJson.Contains(
             wxS( "\"published_count\":1" ) ) );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"work_state_interaction_semantics_present_count\":1" ) ) );
 }
 
 
