@@ -5569,6 +5569,8 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "\"net_name\":\"GND\",\"visible\":true}],"
                  "\"unconnected_edge_sample_truncated\":false},"
                  "\"net_facts\":[{\"code\":1,\"name\":\"GND\","
+                 "\"routed_track_length\":780,\"routed_track_segment_count\":3,"
+                 "\"routed_via_count\":2,"
                  "\"netclass\":{\"name\":\"Default\",\"clearance\":90000,"
                  "\"track_width\":150000,\"via_diameter\":450000,"
                  "\"via_drill\":250000},"
@@ -5670,6 +5672,44 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["active_net_summary"]["component_graph_edges"]
                     .at( 0 )["from"].get<std::string>(),
             "U1.1" );
+    BOOST_REQUIRE( routingPacket.contains( "routing_progress_facts" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["source"].get<std::string>(),
+            "active_net_summary.component_graph_edges" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["active_net"].get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["remaining_component_edge_count"]
+                    .get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["visible_remaining_component_edge_count"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["remaining_estimated_manhattan_length"].get<int>(),
+            520 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]
+                    ["shortest_remaining_estimated_manhattan_length"].get<int>(),
+            100 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_track_length"].get<int>(),
+            780 );
+    BOOST_REQUIRE( routingPacket["routing_progress_facts"].contains(
+            "routed_track_segment_count" ) );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_track_segment_count"].get<int>(),
+            3 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["routed_via_count"].get<int>(),
+            2 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_progress_facts"]["estimated_total_work_length"]
+                    .get<int>(),
+            1300 );
     BOOST_REQUIRE( routingPacket.contains( "routing_reachability_facts" ) );
     BOOST_REQUIRE_EQUAL( routingPacket["routing_reachability_facts"].size(), 2 );
     BOOST_CHECK_EQUAL(

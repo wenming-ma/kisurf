@@ -1607,6 +1607,41 @@ wxString makeNetTopologyJson( const BOARD& aBoard,
 }
 
 
+struct ROUTED_NET_LENGTH_FACTS
+{
+    int m_TrackLength = 0;
+    int m_TrackSegmentCount = 0;
+    int m_ViaCount = 0;
+};
+
+
+ROUTED_NET_LENGTH_FACTS routedNetLengthFacts( const BOARD& aBoard,
+                                              int aNetCode )
+{
+    ROUTED_NET_LENGTH_FACTS facts;
+
+    for( PCB_TRACK* track : aBoard.Tracks() )
+    {
+        if( !track || track->GetNetCode() != aNetCode )
+            continue;
+
+        if( track->Type() == PCB_VIA_T )
+        {
+            ++facts.m_ViaCount;
+            continue;
+        }
+
+        if( track->Type() == PCB_TRACE_T || track->Type() == PCB_ARC_T )
+        {
+            ++facts.m_TrackSegmentCount;
+            facts.m_TrackLength += static_cast<int>( track->GetLength() );
+        }
+    }
+
+    return facts;
+}
+
+
 wxString makeNetFactsJson( const BOARD& aBoard )
 {
     std::shared_ptr<CONNECTIVITY_DATA> connectivity = aBoard.GetConnectivity();
@@ -1617,9 +1652,16 @@ wxString makeNetFactsJson( const BOARD& aBoard )
         if( net->GetNetCode() == NETINFO_LIST::UNCONNECTED )
             continue;
 
+        const ROUTED_NET_LENGTH_FACTS lengthFacts =
+                routedNetLengthFacts( aBoard, net->GetNetCode() );
+
         netEntries.push_back( wxString::Format(
-                wxS( "{\"code\":%d,\"name\":%s,\"netclass\":%s,\"topology\":%s}" ),
+                wxS( "{\"code\":%d,\"name\":%s,\"routed_track_length\":%d,"
+                     "\"routed_track_segment_count\":%d,\"routed_via_count\":%d,"
+                     "\"netclass\":%s,\"topology\":%s}" ),
                 net->GetNetCode(), quotedJson( net->GetNetname() ),
+                lengthFacts.m_TrackLength, lengthFacts.m_TrackSegmentCount,
+                lengthFacts.m_ViaCount,
                 makeNetclassJson( net->GetNetClass() ),
                 makeNetTopologyJson( aBoard, connectivity, net->GetNetCode() ) ) );
     }

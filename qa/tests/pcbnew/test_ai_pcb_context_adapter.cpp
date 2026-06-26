@@ -557,6 +557,11 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
     track->SetNetCode( 1 );
     board.Add( track );
 
+    PCB_VIA* via = new PCB_VIA( &board );
+    via->SetPosition( VECTOR2I( 50000, 0 ) );
+    via->SetNetCode( 1 );
+    board.Add( via );
+
     BOOST_REQUIRE( board.BuildConnectivity() );
 
     KISURF_AI_PCB_CONTEXT_ADAPTER adapter( board );
@@ -566,6 +571,12 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
     const nlohmann::json* sigFact = findNetByCode( summary["net_facts"], 1 );
 
     BOOST_REQUIRE( sigFact );
+    BOOST_REQUIRE( sigFact->contains( "routed_track_length" ) );
+    BOOST_REQUIRE( sigFact->contains( "routed_track_segment_count" ) );
+    BOOST_REQUIRE( sigFact->contains( "routed_via_count" ) );
+    BOOST_CHECK_EQUAL( ( *sigFact )["routed_track_length"].get<int>(), 100000 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["routed_track_segment_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( ( *sigFact )["routed_via_count"].get<int>(), 1 );
 
     nlohmann::json topology = ( *sigFact )["topology"];
     BOOST_CHECK_EQUAL( topology["component_count"].get<int>(), 2 );
@@ -579,7 +590,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
 
     BOOST_REQUIRE( routedComponent );
     BOOST_REQUIRE( isolatedComponent );
-    BOOST_CHECK_EQUAL( ( *routedComponent )["item_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( ( *routedComponent )["item_count"].get<int>(), 4 );
     BOOST_CHECK_EQUAL( ( *isolatedComponent )["item_count"].get<int>(), 1 );
 
     BOOST_REQUIRE_EQUAL( topology["ratsnest_component_edges"].size(), 1u );
@@ -612,7 +623,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
             findComponentContainingLabel( ( *sigSummary )["components"], "track:0,0->100000,0" );
 
     BOOST_REQUIRE( summaryRoutedComponent );
-    BOOST_CHECK_EQUAL( ( *summaryRoutedComponent )["item_count"].get<int>(), 3 );
+    BOOST_CHECK_EQUAL( ( *summaryRoutedComponent )["item_count"].get<int>(), 4 );
 
     BOOST_REQUIRE( connectivity.contains( "component_graph_nodes" ) );
     BOOST_REQUIRE( connectivity.contains( "component_graph_edges" ) );
@@ -639,7 +650,7 @@ BOOST_AUTO_TEST_CASE( AdapterAddsConnectivityGraphComponentFacts )
             graphNodeLabels.insert( item["label"].get<std::string>() );
     }
 
-    BOOST_CHECK( graphNodeItemCounts == std::set<int>( { 1, 3 } ) );
+    BOOST_CHECK( graphNodeItemCounts == std::set<int>( { 1, 4 } ) );
     BOOST_CHECK( graphNodeLabels.find( "U1.1" ) != graphNodeLabels.end() );
     BOOST_CHECK( graphNodeLabels.find( "U2.1" ) != graphNodeLabels.end() );
     BOOST_CHECK( graphNodeLabels.find( "U3.1" ) != graphNodeLabels.end() );

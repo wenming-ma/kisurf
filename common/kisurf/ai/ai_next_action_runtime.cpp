@@ -3968,6 +3968,103 @@ nlohmann::json routingEndpointSweptBBoxJson(
 }
 
 
+nlohmann::json routingProgressFactsJson(
+        const nlohmann::json& aActiveNetSummary )
+{
+    if( !aActiveNetSummary.is_object()
+        || !aActiveNetSummary.contains( "component_graph_edges" )
+        || !aActiveNetSummary["component_graph_edges"].is_array() )
+    {
+        return nlohmann::json::object();
+    }
+
+    int  remainingEdgeCount = 0;
+    int  visibleRemainingEdgeCount = 0;
+    int  remainingLength = 0;
+    int  shortestRemainingLength = 2147483647;
+    bool hasRemainingLength = false;
+
+    for( const nlohmann::json& edge :
+         aActiveNetSummary["component_graph_edges"] )
+    {
+        if( !edge.is_object() )
+            continue;
+
+        ++remainingEdgeCount;
+
+        if( edge.contains( "visible" ) && edge["visible"].is_boolean()
+            && edge["visible"].get<bool>() )
+        {
+            ++visibleRemainingEdgeCount;
+        }
+
+        int edgeLength = 0;
+
+        if( jsonNumberAsInt( edge, "estimated_manhattan_length", edgeLength )
+            && edgeLength >= 0 )
+        {
+            hasRemainingLength = true;
+            remainingLength += edgeLength;
+            shortestRemainingLength =
+                    std::min( shortestRemainingLength, edgeLength );
+        }
+    }
+
+    nlohmann::json facts = {
+        { "source", "active_net_summary.component_graph_edges" },
+        { "purpose", "routing_progress_review" },
+        { "remaining_component_edge_count", remainingEdgeCount },
+        { "visible_remaining_component_edge_count",
+          visibleRemainingEdgeCount } };
+
+    if( aActiveNetSummary.contains( "name" )
+        && aActiveNetSummary["name"].is_string() )
+    {
+        facts["active_net"] = aActiveNetSummary["name"];
+    }
+
+    if( hasRemainingLength )
+    {
+        facts["remaining_estimated_manhattan_length"] = remainingLength;
+        facts["shortest_remaining_estimated_manhattan_length"] =
+                shortestRemainingLength;
+    }
+
+    int routedTrackLength = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_track_length",
+                         routedTrackLength )
+        && routedTrackLength >= 0 )
+    {
+        facts["routed_track_length"] = routedTrackLength;
+
+        if( hasRemainingLength )
+            facts["estimated_total_work_length"] =
+                    routedTrackLength + remainingLength;
+    }
+
+    int routedTrackSegmentCount = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_track_segment_count",
+                         routedTrackSegmentCount )
+        && routedTrackSegmentCount >= 0 )
+    {
+        facts["routed_track_segment_count"] = routedTrackSegmentCount;
+    }
+
+    int routedViaCount = 0;
+
+    if( jsonNumberAsInt( aActiveNetSummary, "routed_via_count",
+                         routedViaCount )
+        && routedViaCount >= 0 )
+    {
+        facts["routed_via_count"] = routedViaCount;
+    }
+
+    return facts;
+}
+
+
 nlohmann::json routingReachabilityFactsJson(
         const nlohmann::json& aActiveNetSummary,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
@@ -5570,6 +5667,7 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["connectivity_summary"] = std::move( connectivity );
 
     nlohmann::json activeNet = activeNetSummaryJson( context );
+    nlohmann::json routingProgress = routingProgressFactsJson( activeNet );
     nlohmann::json routingReachability =
             routingReachabilityFactsJson( activeNet, context.m_ToolState,
                                           context.m_VisibleObjects );
@@ -5599,6 +5697,9 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["routing_corridor_facts"] =
                 routingCorridorFactsJson( context.m_Anchors, context.m_ToolState,
                                           context.m_VisibleObjects );
+
+        if( !routingProgress.empty() )
+            packet["routing_progress_facts"] = std::move( routingProgress );
 
         if( !routingReachability.empty() )
             packet["routing_reachability_facts"] =
