@@ -26,6 +26,8 @@
 #include <string>
 #include <utility>
 
+#include <wx/ffile.h>
+
 namespace
 {
 std::string toUtf8String( const wxString& aText )
@@ -9419,6 +9421,67 @@ AiEvaluateNextActionReplayGoldenDatasetJson( const wxString& aGoldenDatasetJson 
         summary = nlohmann::json::object();
 
     summary["dataset_id"] = toUtf8String( datasetId );
+    result.m_SummaryJson = fromUtf8String( summary.dump() );
+    return result;
+}
+
+
+AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
+AiEvaluateNextActionReplayGoldenDatasetFile( const wxString& aGoldenDatasetPath )
+{
+    auto finishFileError =
+            []( const wxString& aDatasetPath, const wxString& aErrorCode,
+                const wxString& aMessage )
+            {
+                AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result;
+                result.m_Valid = false;
+                result.m_Passed = false;
+                result.m_FirstErrorCode = aErrorCode;
+                result.m_FirstErrorMessage = aMessage;
+
+                nlohmann::json summary =
+                        { { "dataset_path", toUtf8String( aDatasetPath ) },
+                          { "valid", false },
+                          { "passed", false },
+                          { "first_error_code", toUtf8String( aErrorCode ) },
+                          { "first_error_message", toUtf8String( aMessage ) },
+                          { "total_record_count", 0 },
+                          { "valid_record_count", 0 },
+                          { "invalid_record_count", 0 },
+                          { "passed_record_count", 0 },
+                          { "failed_record_count", 0 } };
+
+                result.m_SummaryJson = fromUtf8String( summary.dump() );
+                return result;
+            };
+
+    wxFFile datasetFile( aGoldenDatasetPath, wxS( "rb" ) );
+
+    if( !datasetFile.IsOpened() )
+    {
+        return finishFileError( aGoldenDatasetPath, wxS( "dataset_file_unreadable" ),
+                                wxS( "Golden dataset file could not be opened." ) );
+    }
+
+    wxString datasetJson;
+
+    if( !datasetFile.ReadAll( &datasetJson ) )
+    {
+        return finishFileError( aGoldenDatasetPath, wxS( "dataset_file_read_failed" ),
+                                wxS( "Golden dataset file could not be read." ) );
+    }
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT result =
+            AiEvaluateNextActionReplayGoldenDatasetJson( datasetJson );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( toUtf8String( result.m_SummaryJson ), nullptr,
+                                   false );
+
+    if( summary.is_discarded() || !summary.is_object() )
+        summary = nlohmann::json::object();
+
+    summary["dataset_path"] = toUtf8String( aGoldenDatasetPath );
     result.m_SummaryJson = fromUtf8String( summary.dump() );
     return result;
 }
