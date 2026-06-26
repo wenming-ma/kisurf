@@ -1,0 +1,110 @@
+{
+  "schema": {
+    "name": "kisurf.next_action.golden_dataset",
+    "version": 1
+  },
+  "id": "next-action-surface-fill-inner-loop-smoke",
+  "records": [
+    {
+      "schema": {
+        "name": "kisurf.next_action.golden_trace",
+        "version": 1
+      },
+      "id": "surface-fill-inner-loop-smoke",
+      "replay_trace": {
+        "schema": {
+          "name": "kisurf.next_action.replay_trace",
+          "version": 1
+        },
+        "runtime": "next_action",
+        "runtime_step_id": 3,
+        "terminal_state": "published",
+        "semantic_event": {
+          "slot_id": "surface/focused-cell",
+          "kind": "panel_focus_changed"
+        },
+        "observation_packet": {
+          "structured_facts": {
+            "work_state_packet": {
+              "kind": "structured_surface",
+              "interaction_semantics": {
+                "planning_target": {
+                  "kind": "fill_focused_surface_value"
+                },
+                "materialization": "accept_preview"
+              }
+            }
+          }
+        },
+        "llm_decision": {
+          "decision_kind": "attempt",
+          "opportunity_type": "structured_surface",
+          "reason_code": "likely_helpful"
+        },
+        "tool_results": {
+          "decision": [
+            {
+              "tool_name": "surface_generate_fill_candidates",
+              "result": {
+                "candidate_count": 1
+              }
+            }
+          ],
+          "review": [
+            {
+              "tool_name": "preview_gate_feedback",
+              "result": {
+                "preview_gate_result": {
+                  "allowed": true,
+                  "reasons": [
+                    "render_validation_fresh"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "llm_review_decision": {
+          "decision_kind": "publish",
+          "reason_code": "review_passed"
+        },
+        "attempts": [
+          {
+            "attempt_id": 1,
+            "hidden_attempt_journal": {
+              "operations": [
+                {
+                  "kind": "surface.apply_patch",
+                  "alias": "SURFACE_PATCH1"
+                }
+              ]
+            },
+            "render_outputs": {
+              "visual_frame_id": "frame-surface-fill-1"
+            },
+            "validation_facts": {
+              "accept_validation_sufficient": true,
+              "preview_state_exact": true,
+              "issues": []
+            }
+          }
+        ],
+        "publish_decision": {
+          "preview_gate_result": {
+            "allowed": true,
+            "reasons": []
+          }
+        },
+        "published_suggestion_id": 3
+      },
+      "expected": {
+        "terminal_state": "published",
+        "published": true,
+        "min_hidden_operation_count": 1,
+        "min_decision_tool_result_count": 1,
+        "min_review_tool_result_count": 1,
+        "min_preview_gate_feedback_count": 1
+      }
+    }
+  ]
+}
