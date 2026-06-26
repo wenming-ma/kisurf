@@ -3850,6 +3850,100 @@ nlohmann::json activeNetSummaryJson( const AI_CONTEXT_SNAPSHOT& aContext )
 }
 
 
+std::optional<nlohmann::json> componentGraphNodeByIdJson(
+        const nlohmann::json& aNodes,
+        const std::string& aId )
+{
+    if( !aNodes.is_array() || aId.empty() )
+        return std::nullopt;
+
+    for( const nlohmann::json& node : aNodes )
+    {
+        if( node.is_object() && node.contains( "id" ) && node["id"].is_string()
+            && node["id"].get<std::string>() == aId )
+        {
+            return node;
+        }
+    }
+
+    return std::nullopt;
+}
+
+
+nlohmann::json routingReachabilityFactsJson(
+        const nlohmann::json& aActiveNetSummary )
+{
+    nlohmann::json facts = nlohmann::json::array();
+
+    if( !aActiveNetSummary.is_object()
+        || !aActiveNetSummary.contains( "component_graph_edges" )
+        || !aActiveNetSummary["component_graph_edges"].is_array() )
+    {
+        return facts;
+    }
+
+    const nlohmann::json nodes =
+            aActiveNetSummary.value( "component_graph_nodes",
+                                     nlohmann::json::array() );
+    const std::string activeNet =
+            aActiveNetSummary.contains( "name" )
+                            && aActiveNetSummary["name"].is_string()
+                    ? aActiveNetSummary["name"].get<std::string>()
+                    : std::string();
+
+    for( const nlohmann::json& edge :
+         aActiveNetSummary["component_graph_edges"] )
+    {
+        if( !edge.is_object() )
+            continue;
+
+        nlohmann::json fact = {
+            { "source", "active_net_summary.component_graph_edges" },
+            { "purpose", "route_remaining_connection" } };
+
+        if( !activeNet.empty() )
+            fact["active_net"] = activeNet;
+
+        copyJsonFieldIfPresent( fact, edge, "from" );
+        copyJsonFieldIfPresent( fact, edge, "to" );
+        copyJsonFieldIfPresent( fact, edge, "net_code" );
+        copyJsonFieldIfPresent( fact, edge, "net_name" );
+        copyJsonFieldIfPresent( fact, edge, "visible" );
+        copyJsonFieldIfPresent( fact, edge, "estimated_manhattan_length" );
+
+        if( edge.contains( "kind" ) )
+            fact["edge_kind"] = edge["kind"];
+
+        if( fact.contains( "from" ) && fact["from"].is_string() )
+        {
+            if( std::optional<nlohmann::json> node =
+                        componentGraphNodeByIdJson( nodes,
+                                                    fact["from"].get<std::string>() ) )
+            {
+                fact["from_node"] = *node;
+            }
+        }
+
+        if( fact.contains( "to" ) && fact["to"].is_string() )
+        {
+            if( std::optional<nlohmann::json> node =
+                        componentGraphNodeByIdJson( nodes,
+                                                    fact["to"].get<std::string>() ) )
+            {
+                fact["to_node"] = *node;
+            }
+        }
+
+        facts.push_back( std::move( fact ) );
+
+        if( facts.size() >= 16 )
+            break;
+    }
+
+    return facts;
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -5113,6 +5207,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["connectivity_summary"] = std::move( connectivity );
 
     nlohmann::json activeNet = activeNetSummaryJson( context );
+    nlohmann::json routingReachability =
+            routingReachabilityFactsJson( activeNet );
 
     if( !activeNet.empty() )
         packet["active_net_summary"] = std::move( activeNet );
@@ -5139,6 +5235,10 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["routing_corridor_facts"] =
                 routingCorridorFactsJson( context.m_Anchors, context.m_ToolState,
                                           context.m_VisibleObjects );
+
+        if( !routingReachability.empty() )
+            packet["routing_reachability_facts"] =
+                    std::move( routingReachability );
 
         if( !context.m_ToolState.m_ModeContextJson.IsEmpty() )
             packet["mode_context_json"] =

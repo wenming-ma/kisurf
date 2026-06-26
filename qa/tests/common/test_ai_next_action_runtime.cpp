@@ -5100,7 +5100,8 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                  "{\"id\":\"U2.1\",\"net_code\":1,\"net_name\":\"GND\"}],"
                  "\"component_graph_edges\":[{\"from\":\"U1.1\","
                  "\"to\":\"U2.1\",\"net_code\":1,\"net_name\":\"GND\","
-                 "\"kind\":\"ratsnest\"}],"
+                 "\"kind\":\"ratsnest\",\"visible\":true,"
+                 "\"estimated_manhattan_length\":420}],"
                  "\"unconnected_edges\":[{\"net_code\":1,"
                  "\"net_name\":\"GND\",\"visible\":true}],"
                  "\"unconnected_edge_sample_truncated\":false},"
@@ -5206,6 +5207,43 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             routingPacket["active_net_summary"]["component_graph_edges"]
                     .at( 0 )["from"].get<std::string>(),
             "U1.1" );
+    BOOST_REQUIRE( routingPacket.contains( "routing_reachability_facts" ) );
+    BOOST_REQUIRE_EQUAL( routingPacket["routing_reachability_facts"].size(), 1 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["source"]
+                    .get<std::string>(),
+            "active_net_summary.component_graph_edges" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["active_net"]
+                    .get<std::string>(),
+            "GND" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["from"]
+                    .get<std::string>(),
+            "U1.1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["to"]
+                    .get<std::string>(),
+            "U2.1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["edge_kind"]
+                    .get<std::string>(),
+            "ratsnest" );
+    BOOST_CHECK(
+            routingPacket["routing_reachability_facts"].at( 0 )["visible"]
+                    .get<bool>() );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )
+                    ["estimated_manhattan_length"].get<int>(),
+            420 );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["from_node"]
+                    ["id"].get<std::string>(),
+            "U1.1" );
+    BOOST_CHECK_EQUAL(
+            routingPacket["routing_reachability_facts"].at( 0 )["to_node"]
+                    ["id"].get<std::string>(),
+            "U2.1" );
     BOOST_REQUIRE( routingPacket.contains( "active_route_segment" ) );
     BOOST_CHECK_EQUAL(
             routingPacket["active_route_segment"]["start"]["x"].get<int>(),
