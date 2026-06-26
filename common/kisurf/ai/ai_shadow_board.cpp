@@ -297,6 +297,23 @@ void moveGeometryCoordinates( nlohmann::json& aGeometry, long long aDx, long lon
     if( aGeometry.contains( "outline" ) && aGeometry["outline"].is_object() )
         moveGeometryCoordinates( aGeometry["outline"], aDx, aDy );
 }
+
+
+void mergeObjectPatch( nlohmann::json& aTarget, const nlohmann::json& aPatch )
+{
+    for( const auto& [key, value] : aPatch.items() )
+    {
+        if( value.is_object() && aTarget.contains( key )
+            && aTarget[key].is_object() )
+        {
+            mergeObjectPatch( aTarget[key], value );
+        }
+        else
+        {
+            aTarget[key] = value;
+        }
+    }
+}
 } // namespace
 
 
@@ -472,7 +489,20 @@ bool AI_SHADOW_BOARD::UpdateGeometry( const AI_SESSION_HANDLE& aHandle,
     if( !item )
         return false;
 
-    item->m_GeometryJson = std::move( aGeometryJson );
+    nlohmann::json existing =
+            nlohmann::json::parse( toUtf8String( item->m_GeometryJson ), nullptr, false );
+    nlohmann::json patch =
+            nlohmann::json::parse( toUtf8String( aGeometryJson ), nullptr, false );
+
+    if( patch.is_discarded() || !patch.is_object() )
+        return false;
+
+    if( existing.is_discarded() || !existing.is_object() )
+        existing = nlohmann::json::object();
+
+    mergeObjectPatch( existing, patch );
+
+    item->m_GeometryJson = fromJson( existing );
     item->m_UpdatedEpoch = aEpoch;
     return true;
 }

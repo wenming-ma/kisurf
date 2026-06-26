@@ -628,7 +628,7 @@ std::vector<PCB_TRACK*> boardTracksOfType( BOARD& aBoard, KICAD_T aType )
 BOOST_AUTO_TEST_SUITE( AiPcbSuggestionReview )
 
 
-BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesRoutePreviewToOperationEditAdapter )
+BOOST_AUTO_TEST_CASE( LegacyRoutePreviewSuggestionCannotAcceptWithoutRuntimeJournal )
 {
     PCB_REVIEW_FIXTURE fixture;
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
@@ -641,14 +641,13 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesRoutePreviewToOperationEditAdapt
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
-                                        nextActionContextForSuggestion( *suggestion ) ) );
-    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                         nextActionContextForSuggestion( *suggestion ) ) );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 0 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
 
     std::vector<PCB_TRACK*> tracks = boardTracksOfType( fixture.m_Board, PCB_TRACE_T );
-    BOOST_REQUIRE_EQUAL( tracks.size(), 1 );
-    BOOST_CHECK_EQUAL( tracks.front()->GetNetCode(), fixture.m_Gnd->GetNetCode() );
+    BOOST_CHECK( tracks.empty() );
 }
 
 
@@ -969,7 +968,7 @@ BOOST_AUTO_TEST_CASE( RejectSuggestionLeavesBoardUnchanged )
 }
 
 
-BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesCopperZonePreviewToOperationEditAdapter )
+BOOST_AUTO_TEST_CASE( LegacyZonePreviewSuggestionCannotAcceptWithoutRuntimeJournal )
 {
     PCB_REVIEW_FIXTURE fixture;
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
@@ -982,17 +981,15 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesCopperZonePreviewToOperationEdit
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
-                                        nextActionContextForSuggestion( *suggestion ) ) );
-    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                         nextActionContextForSuggestion( *suggestion ) ) );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 0 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
-    BOOST_REQUIRE_EQUAL( fixture.m_Board.Zones().size(), 1 );
-    BOOST_CHECK_EQUAL( fixture.m_Board.Zones().front()->GetNetCode(),
-                       fixture.m_Gnd->GetNetCode() );
+    BOOST_CHECK( fixture.m_Board.Zones().empty() );
 }
 
 
-BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesShapePreviewToOperationEditAdapter )
+BOOST_AUTO_TEST_CASE( LegacyShapePreviewSuggestionCannotAcceptWithoutRuntimeJournal )
 {
     PCB_REVIEW_FIXTURE fixture;
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
@@ -1005,15 +1002,11 @@ BOOST_AUTO_TEST_CASE( AcceptSuggestionDispatchesShapePreviewToOperationEditAdapt
     KISURF_AI_PCB_OBJECT_RESOLVER resolver( fixture.m_Board );
     PCB_ADD_SPY_COMMIT            commit( fixture.m_Board );
 
-    BOOST_CHECK( AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
-                                        nextActionContextForSuggestion( *suggestion ) ) );
-    BOOST_CHECK_EQUAL( commit.m_PushCount, 1 );
+    BOOST_CHECK( !AcceptAiPcbSuggestion( model, suggestion->m_Id, resolver, commit,
+                                         nextActionContextForSuggestion( *suggestion ) ) );
+    BOOST_CHECK_EQUAL( commit.m_PushCount, 0 );
     BOOST_CHECK_EQUAL( commit.m_RevertCount, 0 );
-    BOOST_REQUIRE_EQUAL( fixture.m_Board.Drawings().size(), 1 );
-
-    BOARD_ITEM* drawing = fixture.m_Board.Drawings().front();
-    BOOST_REQUIRE_EQUAL( drawing->Type(), PCB_SHAPE_T );
-    BOOST_CHECK( static_cast<PCB_SHAPE*>( drawing )->GetShape() == SHAPE_T::RECTANGLE );
+    BOOST_CHECK( fixture.m_Board.Drawings().empty() );
 }
 
 

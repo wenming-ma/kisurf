@@ -1195,6 +1195,9 @@ bool AI_AGENT_PANEL::acceptActionPreviewSuggestion( uint64_t aSuggestionId )
     if( !m_ActionRunner )
         return false;
 
+    if( !m_Model->CanAcceptSuggestion( aSuggestionId ) )
+        return false;
+
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             m_Model->FindSuggestion( aSuggestionId );
 

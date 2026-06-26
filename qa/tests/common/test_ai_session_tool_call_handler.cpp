@@ -1599,6 +1599,99 @@ BOOST_AUTO_TEST_CASE( QueryItemToolResolvesSessionAliasWithoutMutatingLiveBoard 
 }
 
 
+BOOST_AUTO_TEST_CASE( UpdateItemGeometryPatchesWithoutDroppingExistingGeometry )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "patch via geometry" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"patch-target\",\"net\":\"GND\","
+                   "\"position\":{\"x\":25,\"y\":50},\"diameter\":500000}" ) } );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::UpdateItemGeometry,
+              wxS( "{\"handle\":\"patch-target\","
+                   "\"geometry_patch\":{\"diameter\":700000}}" ) } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ) );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"session.create_via(...);"
+                           " session.update_item_geometry(...)\"}" ) ) )
+                           .m_Executed );
+
+    AI_TOOL_INVOCATION_RESULT itemResult = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_item" ),
+                      wxS( "{\"alias\":\"patch-target\"}" ) ) );
+
+    BOOST_REQUIRE( itemResult.m_Allowed );
+    nlohmann::json payload = nlohmann::json::parse( itemResult.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( payload["found"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["item"]["geometry"]["position"]["x"].get<int>(), 25 );
+    BOOST_CHECK_EQUAL( payload["item"]["geometry"]["position"]["y"].get<int>(), 50 );
+    BOOST_CHECK_EQUAL( payload["item"]["geometry"]["diameter"].get<int>(), 700000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( UpdateItemGeometryRejectsInvalidPatchWithoutJournalMutation )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) )
+                           .m_Allowed );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_begin_step" ),
+                      wxS( "{\"label\":\"create patch target\"}" ) ) )
+                           .m_Allowed );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\","
+                           "\"arguments\":{\"alias\":\"bad-patch-target\","
+                           "\"position\":{\"x\":25,\"y\":50}}}" ) ) )
+                           .m_Executed );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_end_step" ), wxS( "{\"step_id\":1}" ) ) )
+                           .m_Allowed );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_begin_step" ),
+                      wxS( "{\"label\":\"invalid geometry patch\"}" ) ) )
+                           .m_Allowed );
+
+    const uint64_t epochBefore = handler.ActiveSession()->Epoch();
+    const size_t operationCountBefore =
+            handler.ActiveSession()->Journal().Operations().size();
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.update_item_geometry\","
+                           "\"arguments\":{\"handle\":\"bad-patch-target\","
+                           "\"geometry_patch\":\"not an object\"}}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "invalid_arguments" ) ) );
+    BOOST_REQUIRE( handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Epoch(), epochBefore );
+    BOOST_CHECK_EQUAL( handler.ActiveSession()->Journal().Operations().size(),
+                       operationCountBefore );
+}
+
+
 BOOST_AUTO_TEST_CASE( QueryItemToolReturnsCreateZoneTypedProperties )
 {
     AI_PYTHON_CELL_RESULT workerResult;

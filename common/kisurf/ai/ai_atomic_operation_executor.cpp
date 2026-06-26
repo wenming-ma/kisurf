@@ -658,6 +658,15 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
 
     for( size_t i = 0; i < handles.size(); ++i )
     {
+        if( aKind == AI_SESSION_OPERATION_KIND::UpdateItemGeometry )
+        {
+            if( !aArgs.contains( "geometry_patch" ) || !aArgs["geometry_patch"].is_object() )
+            {
+                return errorResult( wxS( "invalid_arguments" ),
+                                    wxS( "UpdateItemGeometry requires geometry_patch object." ) );
+            }
+        }
+
         if( aKind == AI_SESSION_OPERATION_KIND::SetItemProperties )
         {
             if( !aArgs.contains( "typed_props" ) )

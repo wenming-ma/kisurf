@@ -227,6 +227,32 @@ BOOST_AUTO_TEST_CASE( SetItemPropertiesRejectsInvalidZoneTypedPropsBeforeJournal
 }
 
 
+BOOST_AUTO_TEST_CASE( UpdateGeometryRejectsNonObjectPatchBeforeJournalAppend )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+    session.BeginStep( wxS( "create geometry patch target" ) );
+
+    AI_ATOMIC_EXECUTION_RESULT created = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"patch-target\",\"net\":\"GND\","
+                 "\"position\":{\"x\":100,\"y\":200}}" ) );
+    BOOST_REQUIRE( created.m_Ok );
+
+    const uint64_t epochBefore = session.Epoch();
+    const size_t operationCountBefore = session.Journal().Operations().size();
+
+    AI_ATOMIC_EXECUTION_RESULT patch = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::UpdateItemGeometry,
+            wxS( "{\"handle\":\"patch-target\","
+                 "\"geometry_patch\":\"not an object\"}" ) );
+
+    BOOST_CHECK( !patch.m_Ok );
+    BOOST_CHECK_EQUAL( patch.m_ErrorCode, wxString( wxS( "invalid_arguments" ) ) );
+    BOOST_CHECK_EQUAL( session.Epoch(), epochBefore );
+    BOOST_CHECK_EQUAL( session.Journal().Operations().size(), operationCountBefore );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunValidationStoresStructuredResultInJournal )
 {
     AI_EXECUTION_SESSION session = makeSession();

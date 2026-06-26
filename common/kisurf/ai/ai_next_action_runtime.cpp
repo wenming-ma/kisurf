@@ -14340,19 +14340,12 @@ bool AI_NEXT_ACTION_RUNTIME::CanAccept( uint64_t aSuggestionId ) const
     if( !suggestion || !isActive( *suggestion ) )
         return false;
 
-    if( hasValidRuntimeAcceptToken( *suggestion ) )
-    {
-        return !suggestion->m_Validation.HasBlockingIssue()
-               && ( !suggestion->m_EditObjects.empty()
-                    || hasPreviewableOperation( *suggestion )
-                    || hasActionPreviewOperation( *suggestion )
-                    || hasNextActionRuntimePreviewArtifact( *suggestion ) );
-    }
-
-    return !suggestion->m_PreviewOnly
+    return hasValidRuntimeAcceptToken( *suggestion )
+           && !suggestion->m_Validation.HasBlockingIssue()
            && ( !suggestion->m_EditObjects.empty()
-                || hasActionPreviewOperation( *suggestion ) )
-           && suggestion->m_RuntimeProvenanceJson.IsEmpty();
+                || hasPreviewableOperation( *suggestion )
+                || hasActionPreviewOperation( *suggestion )
+                || hasNextActionRuntimePreviewArtifact( *suggestion ) );
 }
 
 

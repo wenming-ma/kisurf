@@ -797,7 +797,7 @@ BOOST_AUTO_TEST_CASE( ModelCanMarkActionPreviewSuggestionAccepted )
             model.AddSuggestion( makeActionPreviewSuggestion() );
     BOOST_REQUIRE( suggestion.has_value() );
 
-    BOOST_CHECK( model.CanAcceptSuggestion( suggestion->m_Id ) );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
     BOOST_CHECK( model.MarkSuggestionAccepted( suggestion->m_Id ) );
 
     std::optional<AI_SUGGESTION_RECORD> updated =
@@ -1142,11 +1142,10 @@ BOOST_AUTO_TEST_CASE( SuggestionLifecycleUsesRuntimeSuggestionStore )
 
     FAKE_EDIT_ADAPTER editAdapter;
     AI_EDIT_SESSION   edit( editAdapter );
-    BOOST_CHECK( model.AcceptSuggestion( suggestion->m_Id, edit,
-                                         nextActionContextForSuggestion( *suggestion ) ) );
-    BOOST_REQUIRE_EQUAL( editAdapter.m_Applied.size(), 1 );
-    BOOST_CHECK( model.FindSuggestion( suggestion->m_Id )->m_Status
-                 == AI_SUGGESTION_STATUS::Accepted );
+    BOOST_CHECK( !model.AcceptSuggestion( suggestion->m_Id, edit,
+                                          nextActionContextForSuggestion( *suggestion ) ) );
+    BOOST_CHECK( editAdapter.m_Applied.empty() );
+    BOOST_CHECK( !model.CanAcceptSuggestion( suggestion->m_Id ) );
 }
 
 
