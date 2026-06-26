@@ -5176,6 +5176,67 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationRejectsInvalidTrace )
 }
 
 
+BOOST_AUTO_TEST_CASE( ReplayTraceMigrationKeepsCurrentSchemaTraceUnchanged )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT migration =
+            AiMigrateNextActionReplayTraceJson(
+                    traces.front().m_ReplayJson,
+                    AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+
+    BOOST_CHECK( migration.m_Valid );
+    BOOST_CHECK( !migration.m_Migrated );
+    BOOST_CHECK_EQUAL( migration.m_SourceSchemaVersion,
+                       AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+    BOOST_CHECK_EQUAL( migration.m_TargetSchemaVersion,
+                       AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION );
+    BOOST_CHECK_EQUAL( migration.m_ReplayJson, traces.front().m_ReplayJson );
+    BOOST_CHECK( AiValidateNextActionReplayTraceJson(
+                         migration.m_ReplayJson )
+                         .m_Valid );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayTraceMigrationRejectsUnsupportedTargetVersion )
+{
+    AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT migration =
+            AiMigrateNextActionReplayTraceJson(
+                    wxS( "{\"schema\":{\"name\":\"kisurf.next_action.replay_trace\","
+                         "\"version\":1},"
+                         "\"runtime\":\"next_action\","
+                         "\"runtime_step_id\":1,"
+                         "\"terminal_state\":\"published\","
+                         "\"semantic_event\":{},"
+                         "\"observation_packet\":{},"
+                         "\"llm_decision\":{},"
+                         "\"tool_results\":{},"
+                         "\"attempts\":[],"
+                         "\"llm_review_decision\":{}}" ),
+                    AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION + 1 );
+
+    BOOST_CHECK( !migration.m_Valid );
+    BOOST_CHECK_EQUAL( migration.m_ErrorCode,
+                       wxString( wxS( "unsupported_target_schema_version" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ReplayTraceBatchEvaluationAggregatesValidAndInvalidTraces )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(

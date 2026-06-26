@@ -7038,6 +7038,62 @@ AiValidateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 }
 
 
+AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT
+AiMigrateNextActionReplayTraceJson( const wxString& aReplayTraceJson,
+                                    unsigned aTargetSchemaVersion )
+{
+    AI_NEXT_ACTION_REPLAY_TRACE_MIGRATION_RESULT result;
+    result.m_TargetSchemaVersion = aTargetSchemaVersion;
+
+    nlohmann::json trace =
+            nlohmann::json::parse( toUtf8String( aReplayTraceJson ), nullptr, false );
+
+    if( trace.is_object() && trace.contains( "schema" )
+        && trace["schema"].is_object()
+        && trace["schema"].contains( "version" )
+        && trace["schema"]["version"].is_number_unsigned() )
+    {
+        result.m_SourceSchemaVersion = trace["schema"]["version"].get<unsigned>();
+    }
+
+    auto fail =
+            [&result]( const wxString& aErrorCode,
+                       const wxString& aMessage )
+            {
+                result.m_Valid = false;
+                result.m_ErrorCode = aErrorCode;
+                result.m_Message = aMessage;
+                return result;
+            };
+
+    if( aTargetSchemaVersion != AI_NEXT_ACTION_REPLAY_TRACE_SCHEMA_VERSION )
+    {
+        return fail( wxS( "unsupported_target_schema_version" ),
+                     wxS( "Replay trace target schema version is unsupported." ) );
+    }
+
+    AI_NEXT_ACTION_REPLAY_TRACE_VALIDATION_RESULT validation =
+            AiValidateNextActionReplayTraceJson( aReplayTraceJson );
+
+    if( !validation.m_Valid )
+    {
+        return fail( wxS( "invalid_source_replay_trace" ),
+                     validation.m_Message );
+    }
+
+    if( result.m_SourceSchemaVersion != aTargetSchemaVersion )
+    {
+        return fail( wxS( "unsupported_source_schema_version" ),
+                     wxS( "Replay trace source schema version has no migration path." ) );
+    }
+
+    result.m_Valid = true;
+    result.m_Migrated = false;
+    result.m_ReplayJson = aReplayTraceJson;
+    return result;
+}
+
+
 AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
 AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 {
