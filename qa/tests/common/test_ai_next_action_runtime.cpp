@@ -7142,7 +7142,9 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksInnerLoopMetrics )
                 { { "terminal_state", "published" },
                   { "published", true },
                   { "min_review_tool_result_count", 4 },
-                  { "min_preview_gate_feedback_count", 1 } } } };
+                  { "min_preview_gate_feedback_count", 1 },
+                  { "min_preview_gate_feedback_reason_counts",
+                    { { "validation_freshness_failed", 1 } } } } } };
 
     AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT passEvaluation =
             AiEvaluateNextActionReplayGoldenRecordJson(
@@ -7154,6 +7156,8 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksInnerLoopMetrics )
             wxS( "\"trace_review_tool_result_count\":4" ) ) );
     BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
             wxS( "\"trace_preview_gate_feedback_count\":1" ) ) );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_preview_gate_feedback_reason_counts\":{\"validation_freshness_failed\":1}" ) ) );
 
     nlohmann::json failing = passing;
     failing["id"] = "placement-gate-feedback-loop-too-high";
@@ -7168,6 +7172,21 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksInnerLoopMetrics )
     BOOST_CHECK_EQUAL(
             failEvaluation.m_ErrorCode,
             wxString( wxS( "preview_gate_feedback_count_below_minimum" ) ) );
+
+    failing = passing;
+    failing["id"] = "placement-gate-feedback-loop-reason-too-high";
+    failing["expected"]["min_preview_gate_feedback_reason_counts"]
+           ["validation_freshness_failed"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failReasonEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failReasonEvaluation.m_Valid );
+    BOOST_CHECK( !failReasonEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL(
+            failReasonEvaluation.m_ErrorCode,
+            wxString( wxS( "preview_gate_feedback_reason_count_below_minimum" ) ) );
 }
 
 
@@ -7802,6 +7821,12 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["placement"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["routing"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["work_state_counts"]["structured_surface"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( summary["trace_preview_gate_feedback_count"].get<int>(), 4 );
+    BOOST_CHECK_EQUAL(
+            summary["trace_preview_gate_feedback_reason_counts"]
+                   ["render_validation_fresh"]
+                           .get<int>(),
+            4 );
     BOOST_CHECK_EQUAL( summary["trace_budget_tool_round_count"].get<int>(), 2 );
     BOOST_CHECK_EQUAL( summary["trace_budget_mutation_count"].get<int>(), 1 );
     BOOST_CHECK_EQUAL( summary["trace_budget_render_count"].get<int>(), 1 );

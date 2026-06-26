@@ -382,6 +382,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_EVALUATION_RESULT
     size_t   m_TraceBudgetValidationCount = 0;
     size_t   m_TraceBudgetCreatedObjectCount = 0;
     size_t   m_TraceBudgetTouchedObjectCount = 0;
+    size_t   m_TracePreviewGateFeedbackCount = 0;
+    wxString m_TracePreviewGateFeedbackReasonCountsJson;
     size_t   m_TraceAcceptGateResultCount = 0;
     wxString m_TraceAcceptGateReasonCountsJson;
     size_t   m_TraceValidationIssueCount = 0;
@@ -426,6 +428,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT
     size_t   m_TraceBudgetValidationCount = 0;
     size_t   m_TraceBudgetCreatedObjectCount = 0;
     size_t   m_TraceBudgetTouchedObjectCount = 0;
+    size_t   m_TracePreviewGateFeedbackCount = 0;
+    wxString m_TracePreviewGateFeedbackReasonCountsJson;
     size_t   m_TraceAcceptGateResultCount = 0;
     wxString m_TraceAcceptGateReasonCountsJson;
     size_t   m_TraceValidationIssueCount = 0;
