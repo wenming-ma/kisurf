@@ -6663,15 +6663,39 @@ BOOST_AUTO_TEST_CASE( ReplayTraceEvaluationSummarizesPublishedAttempt )
     BOOST_CHECK_GE( evaluation.m_HiddenOperationCount, 1 );
     BOOST_CHECK_EQUAL( evaluation.m_RenderResultCount, 1 );
     BOOST_CHECK_EQUAL( evaluation.m_ValidationResultCount, 1 );
+    BOOST_CHECK_GE( evaluation.m_BudgetToolRoundCount, 1 );
+    BOOST_CHECK_GE( evaluation.m_BudgetMutationCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_BudgetRenderCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_BudgetValidationCount, 1 );
+    BOOST_CHECK_GE( evaluation.m_BudgetCreatedObjectCount, 1 );
+    BOOST_CHECK_GE( evaluation.m_BudgetTouchedObjectCount, 1 );
     BOOST_CHECK( evaluation.m_PreviewGateAllowed );
     BOOST_CHECK( evaluation.m_WorkStateInteractionSemanticsPresent );
     BOOST_CHECK( !evaluation.m_HasBlockingValidationIssue );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"hidden_operation_count\"" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"budget_mutation_count\"" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
+            wxS( "\"budget_render_count\":1" ) ) );
+    BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"preview_gate_allowed\":true" ) ) );
     BOOST_CHECK( evaluation.m_QualityMetricJson.Contains(
             wxS( "\"work_state_interaction_semantics_present\":true" ) ) );
+
+    wxArrayString batchInput;
+    batchInput.Add( traces.front().m_ReplayJson );
+
+    AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT batch =
+            AiEvaluateNextActionReplayTraceBatch( batchInput );
+
+    BOOST_REQUIRE( batch.m_Valid );
+    BOOST_CHECK_GE( batch.m_BudgetToolRoundCount, 1 );
+    BOOST_CHECK_GE( batch.m_BudgetMutationCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_BudgetRenderCount, 1 );
+    BOOST_CHECK_EQUAL( batch.m_BudgetValidationCount, 1 );
+    BOOST_CHECK( batch.m_SummaryJson.Contains(
+            wxS( "\"budget_render_count\":1" ) ) );
 }
 
 
@@ -7226,6 +7250,68 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksAcceptGateMetrics )
     BOOST_CHECK_EQUAL(
             failReasonEvaluation.m_ErrorCode,
             wxString( wxS( "accept_gate_reason_count_below_minimum" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ReplayGoldenRecordEvaluationChecksBudgetMetrics )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+
+    std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> traces =
+            runtime.ReplayTraceRecords();
+
+    BOOST_REQUIRE_EQUAL( traces.size(), 1 );
+
+    nlohmann::json trace =
+            nlohmann::json::parse( traces.front().m_ReplayJson.ToStdString() );
+
+    nlohmann::json passing =
+            { { "schema",
+                { { "name", "kisurf.next_action.golden_trace" },
+                  { "version", AI_NEXT_ACTION_REPLAY_GOLDEN_SCHEMA_VERSION } } },
+              { "id", "placement-via-budget-metrics" },
+              { "replay_trace", trace },
+              { "expected",
+                { { "terminal_state", "published" },
+                  { "published", true },
+                  { "min_budget_mutation_count", 1 },
+                  { "min_budget_render_count", 1 },
+                  { "min_budget_validation_count", 1 },
+                  { "min_budget_created_object_count", 1 },
+                  { "min_budget_touched_object_count", 1 } } } };
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT passEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( passing.dump().c_str() ) );
+
+    BOOST_CHECK( passEvaluation.m_Valid );
+    BOOST_CHECK( passEvaluation.m_Passed );
+    BOOST_CHECK( passEvaluation.m_SummaryJson.Contains(
+            wxS( "\"trace_budget_render_count\":1" ) ) );
+
+    nlohmann::json failing = passing;
+    failing["id"] = "placement-via-budget-render-too-high";
+    failing["expected"]["min_budget_render_count"] = 2;
+
+    AI_NEXT_ACTION_REPLAY_GOLDEN_EVALUATION_RESULT failEvaluation =
+            AiEvaluateNextActionReplayGoldenRecordJson(
+                    wxString::FromUTF8( failing.dump().c_str() ) );
+
+    BOOST_CHECK( failEvaluation.m_Valid );
+    BOOST_CHECK( !failEvaluation.m_Passed );
+    BOOST_CHECK_EQUAL( failEvaluation.m_ErrorCode,
+                       wxString( wxS( "budget_render_count_below_minimum" ) ) );
 }
 
 
