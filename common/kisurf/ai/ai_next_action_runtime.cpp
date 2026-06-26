@@ -8755,6 +8755,7 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
     result.m_Abandoned = terminalState == "abandoned";
 
     nlohmann::json feedbackReasonCounts = nlohmann::json::object();
+    nlohmann::json acceptGateReasonCounts = nlohmann::json::object();
     nlohmann::json validationIssueKindCounts = nlohmann::json::object();
     nlohmann::json validationIssueSeverityCounts = nlohmann::json::object();
 
@@ -8819,6 +8820,26 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
     {
         result.m_PreviewGateAllowed =
                 trace["publish_decision"]["preview_gate_result"]["allowed"].get<bool>();
+    }
+
+    if( trace.contains( "publish_decision" )
+        && trace["publish_decision"].is_object()
+        && trace["publish_decision"].contains( "accept_gate_result" )
+        && trace["publish_decision"]["accept_gate_result"].is_object() )
+    {
+        const nlohmann::json& gate =
+                trace["publish_decision"]["accept_gate_result"];
+        ++result.m_AcceptGateResultCount;
+
+        if( gate.contains( "reasons" ) && gate["reasons"].is_array() )
+        {
+            for( const nlohmann::json& reason : gate["reasons"] )
+            {
+                if( reason.is_string() )
+                    incrementJsonCounter( acceptGateReasonCounts,
+                                          reason.get<std::string>() );
+            }
+        }
     }
 
     if( trace.contains( "observation_packet" )
@@ -8904,6 +8925,8 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
 
     result.m_PreviewGateFeedbackReasonCountsJson =
             fromUtf8String( feedbackReasonCounts.dump() );
+    result.m_AcceptGateReasonCountsJson =
+            fromUtf8String( acceptGateReasonCounts.dump() );
     result.m_ValidationIssueKindCountsJson =
             fromUtf8String( validationIssueKindCounts.dump() );
     result.m_ValidationIssueSeverityCountsJson =
@@ -8932,6 +8955,10 @@ AiEvaluateNextActionReplayTraceJson( const wxString& aReplayTraceJson )
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
                 feedbackReasonCounts },
+              { "accept_gate_result_count",
+                result.m_AcceptGateResultCount },
+              { "accept_gate_reason_counts",
+                acceptGateReasonCounts },
               { "validation_issue_count",
                 result.m_ValidationIssueCount },
               { "validation_issue_kind_counts",
@@ -8956,6 +8983,7 @@ AiEvaluateNextActionReplayTraceBatch(
     AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT result;
     result.m_TotalTraceCount = aReplayTraceJsons.size();
     nlohmann::json feedbackReasonCounts = nlohmann::json::object();
+    nlohmann::json acceptGateReasonCounts = nlohmann::json::object();
     nlohmann::json validationIssueKindCounts = nlohmann::json::object();
     nlohmann::json validationIssueSeverityCounts = nlohmann::json::object();
 
@@ -9017,6 +9045,7 @@ AiEvaluateNextActionReplayTraceBatch(
                 evaluation.m_ReviewToolResultCount;
         result.m_PreviewGateFeedbackCount +=
                 evaluation.m_PreviewGateFeedbackCount;
+        result.m_AcceptGateResultCount += evaluation.m_AcceptGateResultCount;
         result.m_ValidationIssueCount += evaluation.m_ValidationIssueCount;
 
         nlohmann::json traceFeedbackReasons =
@@ -9041,6 +9070,13 @@ AiEvaluateNextActionReplayTraceBatch(
             }
         }
 
+        nlohmann::json traceAcceptGateReasons =
+                nlohmann::json::parse(
+                        toUtf8String( evaluation.m_AcceptGateReasonCountsJson ),
+                        nullptr, false );
+
+        mergeJsonCounters( acceptGateReasonCounts, traceAcceptGateReasons );
+
         nlohmann::json traceValidationIssueKinds =
                 nlohmann::json::parse(
                         toUtf8String(
@@ -9063,6 +9099,8 @@ AiEvaluateNextActionReplayTraceBatch(
     result.m_Valid = result.m_InvalidTraceCount == 0;
     result.m_PreviewGateFeedbackReasonCountsJson =
             fromUtf8String( feedbackReasonCounts.dump() );
+    result.m_AcceptGateReasonCountsJson =
+            fromUtf8String( acceptGateReasonCounts.dump() );
     result.m_ValidationIssueKindCountsJson =
             fromUtf8String( validationIssueKindCounts.dump() );
     result.m_ValidationIssueSeverityCountsJson =
@@ -9091,6 +9129,10 @@ AiEvaluateNextActionReplayTraceBatch(
                 result.m_PreviewGateFeedbackCount },
               { "preview_gate_feedback_reason_counts",
                 feedbackReasonCounts },
+              { "accept_gate_result_count",
+                result.m_AcceptGateResultCount },
+              { "accept_gate_reason_counts",
+                acceptGateReasonCounts },
               { "validation_issue_count",
                 result.m_ValidationIssueCount },
               { "validation_issue_kind_counts",
@@ -12770,6 +12812,9 @@ std::vector<AI_NEXT_ACTION_REPLAY_TRACE_RECORD> AI_NEXT_ACTION_RUNTIME::ReplayTr
 
             if( provenance.contains( "preview_gate_result" ) )
                 publishDecision["preview_gate_result"] = provenance["preview_gate_result"];
+
+            if( provenance.contains( "accept_gate_result" ) )
+                publishDecision["accept_gate_result"] = provenance["accept_gate_result"];
         }
 
         nlohmann::json trace =

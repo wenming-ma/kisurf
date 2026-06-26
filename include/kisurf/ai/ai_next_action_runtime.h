@@ -280,6 +280,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_EVALUATION_RESULT
     size_t   m_ReviewToolResultCount = 0;
     size_t   m_PreviewGateFeedbackCount = 0;
     wxString m_PreviewGateFeedbackReasonCountsJson;
+    size_t   m_AcceptGateResultCount = 0;
+    wxString m_AcceptGateReasonCountsJson;
     size_t   m_ValidationIssueCount = 0;
     wxString m_ValidationIssueKindCountsJson;
     wxString m_ValidationIssueSeverityCountsJson;
@@ -315,6 +317,8 @@ struct KICOMMON_API AI_NEXT_ACTION_REPLAY_BATCH_EVALUATION_RESULT
     size_t   m_ReviewToolResultCount = 0;
     size_t   m_PreviewGateFeedbackCount = 0;
     wxString m_PreviewGateFeedbackReasonCountsJson;
+    size_t   m_AcceptGateResultCount = 0;
+    wxString m_AcceptGateReasonCountsJson;
     size_t   m_ValidationIssueCount = 0;
     wxString m_ValidationIssueKindCountsJson;
     wxString m_ValidationIssueSeverityCountsJson;
