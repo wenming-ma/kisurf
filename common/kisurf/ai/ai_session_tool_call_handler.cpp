@@ -647,6 +647,10 @@ nlohmann::json sessionToolCatalogJson()
         {
             tool["filter_contract"] = catalogQueryItemsFilterSchema();
         }
+        else if( name == "kisurf_query_item" )
+        {
+            tool["handle_contract"] = catalogQueryHandleFilterSchema();
+        }
         else if( name == "kisurf_accept_session" )
         {
             tool["requires_accept_gate"] = true;

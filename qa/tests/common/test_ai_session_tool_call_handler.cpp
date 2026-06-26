@@ -173,6 +173,48 @@ bool queryFilterSchemaSupportsShadowFilters( const nlohmann::json& aSchema )
 }
 
 
+bool queryHandleSchemaSupportsTypedReferences( const nlohmann::json& aSchema )
+{
+    if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+        || !aSchema["anyOf"].is_array() )
+    {
+        return false;
+    }
+
+    bool sawAlias = false;
+    bool sawHandleId = false;
+    bool sawHandleObject = false;
+
+    for( const nlohmann::json& variant : aSchema["anyOf"] )
+    {
+        if( !variant.is_object() )
+            continue;
+
+        const std::string type = variant.value( "type", std::string() );
+
+        if( type == "string" )
+            sawAlias = true;
+
+        if( type == "integer" )
+            sawHandleId = true;
+
+        if( type == "object" && variant.value( "additionalProperties", true ) == false
+            && variant.contains( "properties" )
+            && variant["properties"].contains( "handle_id" )
+            && variant["properties"].contains( "generation" )
+            && variant["properties"].contains( "alias" )
+            && variant.contains( "required" )
+            && std::find( variant["required"].begin(), variant["required"].end(),
+                          "handle_id" ) != variant["required"].end() )
+        {
+            sawHandleObject = true;
+        }
+    }
+
+    return sawAlias && sawHandleId && sawHandleObject;
+}
+
+
 AI_TOOL_CALL_RECORD toolCall( const wxString& aToolName, const wxString& aArguments )
 {
     AI_TOOL_CALL_RECORD call;
@@ -762,6 +804,11 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             "filter_contract" ) );
     BOOST_CHECK( queryFilterSchemaSupportsShadowFilters(
             ( *catalogTool( "kisurf_query_items" ) )["filter_contract"] ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_query_item" ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_query_item" )->contains(
+            "handle_contract" ) );
+    BOOST_CHECK( queryHandleSchemaSupportsTypedReferences(
+            ( *catalogTool( "kisurf_query_item" ) )["handle_contract"] ) );
     BOOST_REQUIRE( catalogTool( "kisurf_render_preview" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_render_preview" )->value( "side_effect",
                                                                      std::string() ),

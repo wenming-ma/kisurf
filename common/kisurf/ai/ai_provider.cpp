@@ -739,19 +739,9 @@ nlohmann::json sessionQueryItemsToolParameters()
 
 nlohmann::json sessionQueryItemToolParameters()
 {
-    nlohmann::json handleSchema = {
-        { "description",
-          "Session handle object, handle id, or alias returned by a prior session step." },
-        { "oneOf",
-          nlohmann::json::array(
-                  { { { "type", "integer" }, { "minimum", 1 } },
-                    { { "type", "string" } },
-                    { { "type", "object" }, { "additionalProperties", true } } } ) }
-    };
-
     return { { "type", "object" },
              { "properties",
-               { { "handle", handleSchema },
+               { { "handle", queryHandleFilterSchema() },
                  { "alias",
                    { { "type", "string" },
                      { "description", "Optional session item alias to resolve." } } } } },
