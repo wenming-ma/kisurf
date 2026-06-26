@@ -3920,6 +3920,7 @@ AI_OBJECT_REF footprintRef()
     return AI_OBJECT_REF(
             KIID(), PCB_FOOTPRINT_T, wxS( "footprint:U1" ),
             wxS( "{\"kind\":\"footprint\",\"reference\":\"U1\","
+                 "\"value\":\"LDO-3V3\","
                  "\"bbox\":{\"x\":150,\"y\":40,\"width\":100,\"height\":80},"
                  "\"courtyard_bbox\":{\"x\":140,\"y\":30,\"width\":120,\"height\":100},"
                  "\"layer\":\"F.Cu\"}" ) );
@@ -5813,6 +5814,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 
         if( fact.value( "kind", "" ) == "footprint_obstacle"
             && fact.value( "reference", "" ) == "U1"
+            && fact.value( "value", "" ) == "LDO-3V3"
             && fact["bbox"]["x"].get<int>() == 150 )
         {
             sawFootprintObstacle = true;
@@ -5841,6 +5843,10 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
             placementPacket["placement_footprint_geometry_facts"].at( 0 )["reference"]
                     .get<std::string>(),
             "U1" );
+    BOOST_CHECK_EQUAL(
+            placementPacket["placement_footprint_geometry_facts"].at( 0 )["value"]
+                    .get<std::string>(),
+            "LDO-3V3" );
     BOOST_CHECK_EQUAL(
             placementPacket["placement_footprint_geometry_facts"].at( 0 )
                     ["courtyard_bbox"]["width"].get<int>(),
