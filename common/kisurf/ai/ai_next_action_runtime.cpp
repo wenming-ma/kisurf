@@ -5029,6 +5029,7 @@ std::optional<nlohmann::json> placementCandidateRenderRegionJson(
 nlohmann::json placementCandidateFactJson(
         const AI_CONTEXT_ANCHOR& aAnchor,
         const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        const std::vector<AI_OBJECT_REF>& aVisibleObjects,
         int aReferenceX,
         int aReferenceY )
 {
@@ -5059,6 +5060,15 @@ nlohmann::json placementCandidateFactJson(
                                                     aAnchor.m_Position.y ) )
     {
         fact["suggested_render_region"] = std::move( *renderRegion );
+
+        if( fact["suggested_render_region"].contains( "bbox" )
+            && fact["suggested_render_region"]["bbox"].is_object() )
+        {
+            fact["candidate_obstacle_facts"] =
+                    obstacleFactsInBBoxJson( aVisibleObjects,
+                                             fact["suggested_render_region"]["bbox"],
+                                             "placement_candidate_region" );
+        }
     }
 
     nlohmann::json details = objectFromJsonText( aAnchor.m_DetailsJson );
@@ -5075,7 +5085,8 @@ nlohmann::json placementCandidateFactJson(
 
 nlohmann::json placementCandidateFactsJson(
         const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
-        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+        const AI_TOOL_STATE_SNAPSHOT& aToolState,
+        const std::vector<AI_OBJECT_REF>& aVisibleObjects )
 {
     int referenceX = 0;
     int referenceY = 0;
@@ -5107,7 +5118,8 @@ nlohmann::json placementCandidateFactsJson(
             continue;
 
         facts.push_back(
-                placementCandidateFactJson( anchor, aToolState, referenceX, referenceY ) );
+                placementCandidateFactJson( anchor, aToolState, aVisibleObjects,
+                                            referenceX, referenceY ) );
     }
 
     return facts;
@@ -5356,7 +5368,8 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
         packet["placement_anchors"] =
                 anchorRecordsJson( context.m_Anchors, isPlacementPacketAnchor );
         packet["placement_candidate_facts"] =
-                placementCandidateFactsJson( context.m_Anchors, context.m_ToolState );
+                placementCandidateFactsJson( context.m_Anchors, context.m_ToolState,
+                                             context.m_VisibleObjects );
         packet["placement_obstacle_facts"] =
                 placementObstacleFactsJson( context.m_VisibleObjects );
         packet["placement_keepout_facts"] =
