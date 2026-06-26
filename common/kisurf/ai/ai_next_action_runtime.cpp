@@ -4604,6 +4604,96 @@ nlohmann::json routingReachabilityFactsJson(
 }
 
 
+nlohmann::json routingReachabilitySummaryJson( const nlohmann::json& aFacts )
+{
+    if( !aFacts.is_array() || aFacts.empty() )
+        return nlohmann::json::object();
+
+    nlohmann::json summary =
+            { { "source", "routing_reachability_facts" },
+              { "candidate_count", static_cast<int>( aFacts.size() ) },
+              { "visible_candidate_count", 0 } };
+
+    bool hasShortest = false;
+    int  shortest = 0;
+    bool hasVisibleShortest = false;
+    int  visibleShortest = 0;
+
+    for( const nlohmann::json& fact : aFacts )
+    {
+        if( !summary.contains( "active_net" )
+            && fact.contains( "active_net" )
+            && fact["active_net"].is_string() )
+        {
+            summary["active_net"] = fact["active_net"];
+        }
+
+        const bool visible = fact.contains( "visible" )
+                             && fact["visible"].is_boolean()
+                             && fact["visible"].get<bool>();
+
+        if( visible )
+            summary["visible_candidate_count"] =
+                    summary["visible_candidate_count"].get<int>() + 1;
+
+        int estimatedLength = 0;
+
+        if( jsonNumberAsInt( fact, "estimated_manhattan_length",
+                             estimatedLength ) )
+        {
+            if( !hasShortest || estimatedLength < shortest )
+                shortest = estimatedLength;
+
+            hasShortest = true;
+
+            if( visible )
+            {
+                if( !hasVisibleShortest || estimatedLength < visibleShortest )
+                    visibleShortest = estimatedLength;
+
+                hasVisibleShortest = true;
+            }
+        }
+    }
+
+    if( hasShortest )
+        summary["shortest_estimated_manhattan_length"] = shortest;
+
+    if( hasVisibleShortest )
+        summary["visible_shortest_estimated_manhattan_length"] = visibleShortest;
+
+    const nlohmann::json& top = aFacts.at( 0 );
+
+    if( top.contains( "priority_rank" ) )
+        summary["top_priority_rank"] = top["priority_rank"];
+
+    if( top.contains( "priority_reason" ) )
+        summary["top_priority_reason"] = top["priority_reason"];
+
+    if( top.contains( "from" ) )
+        summary["top_from"] = top["from"];
+
+    if( top.contains( "to" ) )
+        summary["top_to"] = top["to"];
+
+    if( top.contains( "estimated_manhattan_length" ) )
+        summary["top_estimated_manhattan_length"] =
+                top["estimated_manhattan_length"];
+
+    if( top.contains( "suggested_landing_endpoint" ) )
+        summary["top_suggested_landing_endpoint"] =
+                top["suggested_landing_endpoint"];
+
+    if( top.contains( "suggested_tool_call" ) )
+        summary["top_suggested_tool_call"] = top["suggested_tool_call"];
+
+    if( top.contains( "router_cost_hint" ) )
+        summary["top_router_cost_hint"] = top["router_cost_hint"];
+
+    return summary;
+}
+
+
 bool detailsKindEquals( const nlohmann::json& aDetails,
                         const char* aKind )
 {
@@ -6187,8 +6277,12 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
                     std::move( routingLayerReachability );
 
         if( !routingReachability.empty() )
+        {
+            packet["routing_reachability_summary"] =
+                    routingReachabilitySummaryJson( routingReachability );
             packet["routing_reachability_facts"] =
                     std::move( routingReachability );
+        }
 
         if( !context.m_ToolState.m_ModeContextJson.IsEmpty() )
             packet["mode_context_json"] =
