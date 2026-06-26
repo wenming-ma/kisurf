@@ -7287,21 +7287,32 @@ BOOST_AUTO_TEST_CASE( ReplayGoldenDatasetFilesEvaluationAggregatesRepositoryFixt
     wxArrayString datasetPaths;
     datasetPaths.Add( repositoryGoldenDatasetPath(
             wxS( "placement_via_inner_loop_smoke.json" ) ) );
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "routing_segment_inner_loop_smoke.json" ) ) );
+    datasetPaths.Add( repositoryGoldenDatasetPath(
+            wxS( "surface_fill_inner_loop_smoke.json" ) ) );
+
+    for( const wxString& datasetPath : datasetPaths )
+    {
+        BOOST_REQUIRE_MESSAGE( wxFileName::FileExists( datasetPath ),
+                               "Missing repository golden dataset fixture: "
+                                       << datasetPath );
+    }
 
     AI_NEXT_ACTION_REPLAY_GOLDEN_DATASET_BATCH_EVALUATION_RESULT evaluation =
             AiEvaluateNextActionReplayGoldenDatasetFiles( datasetPaths );
 
     BOOST_CHECK( evaluation.m_Valid );
     BOOST_CHECK( evaluation.m_Passed );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 1 );
-    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 1 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 1 );
-    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 1 );
-    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 1 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalDatasetCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_ValidDatasetCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedDatasetCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_TotalRecordCount, 3 );
+    BOOST_CHECK_EQUAL( evaluation.m_PassedRecordCount, 3 );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_dataset_count\":1" ) ) );
+            wxS( "\"total_dataset_count\":3" ) ) );
     BOOST_CHECK( evaluation.m_SummaryJson.Contains(
-            wxS( "\"total_record_count\":1" ) ) );
+            wxS( "\"total_record_count\":3" ) ) );
 }
 
 
