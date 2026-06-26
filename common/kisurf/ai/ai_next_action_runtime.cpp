@@ -3132,8 +3132,32 @@ bool attemptHasReviewToolRoundsRemaining(
 }
 
 
+bool reviewDeclaresRepairableGateFailure( const wxString& aReviewJson,
+                                          const wxString& aReason )
+{
+    nlohmann::json review = parseObjectBody( aReviewJson );
+
+    if( !review.contains( "repairable_gate_failures" )
+        || !review["repairable_gate_failures"].is_array() )
+    {
+        return false;
+    }
+
+    const std::string reason = toUtf8String( aReason );
+
+    for( const nlohmann::json& entry : review["repairable_gate_failures"] )
+    {
+        if( entry.is_string() && entry.get<std::string>() == reason )
+            return true;
+    }
+
+    return false;
+}
+
+
 bool previewGateFailureCanReenterReview(
-        const AI_NEXT_ACTION_GATE_RESULT& aGate )
+        const AI_NEXT_ACTION_GATE_RESULT& aGate,
+        const wxString& aReviewJson )
 {
     if( aGate.m_Allowed )
         return false;
@@ -3156,6 +3180,14 @@ bool previewGateFailureCanReenterReview(
             || reason == wxS( "validation_hint_not_satisfied" ) )
         {
             hasRepairableReason = true;
+        }
+
+        if( reason == wxS( "validation_gate_failed" ) )
+        {
+            if( reviewDeclaresRepairableGateFailure( aReviewJson, reason ) )
+                hasRepairableReason = true;
+            else
+                return false;
         }
     }
 
@@ -10324,7 +10356,8 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
 
                 if( !publish.IsValid() )
                 {
-                    if( previewGateFailureCanReenterReview( publish.m_GateResult )
+                    if( previewGateFailureCanReenterReview( publish.m_GateResult,
+                                                            publish.m_RawJson )
                         && gateFeedbackRounds < 2
                         && attemptHasReviewToolRoundsRemaining( attempt ) )
                     {

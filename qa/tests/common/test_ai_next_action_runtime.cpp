@@ -2440,6 +2440,84 @@ public:
 };
 
 
+class VALIDATION_GATE_REPAIR_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "validation gate repair next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"reason_code\":\"validation_gate_repair_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            bool hasGateFeedback = false;
+            bool hasValidation = false;
+
+            for( const AI_TOOL_CALL_RECORD& result : aRequest.m_ToolResults )
+            {
+                if( result.m_ToolName == wxS( "preview_gate_feedback" )
+                    && result.m_ResultJson.Contains(
+                               wxS( "validation_gate_failed" ) ) )
+                {
+                    hasGateFeedback = true;
+                }
+
+                if( result.m_ToolName == wxS( "validate_hidden_attempt" ) )
+                    hasValidation = true;
+            }
+
+            if( hasGateFeedback && !hasValidation )
+            {
+                response.m_Body =
+                        wxS( "Gate feedback requires validation repair evidence." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_validate_after_validation_gate" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( hasValidation )
+            {
+                response.m_Body = publishReview();
+                return response;
+            }
+
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"publish\","
+                         "\"reason_code\":\"validation_gate_is_repairable\","
+                         "\"repairable_gate_failures\":[\"validation_gate_failed\"],"
+                         "\"review_basis\":{\"render_valid\":true,"
+                         "\"validation_passed\":true,"
+                         "\"budget_within_limits\":true,"
+                         "\"self_review_passed\":true}}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 bool previewGateFeedbackHasReason( const wxString& aFeedbackJson,
                                    const std::string& aReason )
 {
@@ -2954,6 +3032,43 @@ public:
                      "\"severity\":\"warning\","
                      "\"blocking\":true,"
                      "\"message\":\"candidate overlaps existing footprint\"}]}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class FIRST_BLOCKING_THEN_PASSING_SESSION_VALIDATION_SERVICE :
+        public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+
+        if( m_RunCount == 1 )
+        {
+            result.m_ResultJson =
+                    wxS( "{\"validation\":{\"status\":\"validated\","
+                         "\"issue_count\":1,"
+                         "\"issues\":[{\"kind\":\"geometry_overlap\","
+                         "\"severity\":\"warning\","
+                         "\"blocking\":true,"
+                         "\"message\":\"candidate overlaps existing footprint\"}]}}" );
+        }
+        else
+        {
+            result.m_ResultJson =
+                    wxS( "{\"validation\":{\"status\":\"validated\","
+                         "\"issue_count\":0}}" );
+        }
+
         return result;
     }
 
@@ -7799,6 +7914,47 @@ BOOST_AUTO_TEST_CASE( RuntimeFeedsPreviewGateFailureBackIntoReviewLoop )
     BOOST_CHECK_EQUAL(
             publishRequest.m_ToolResults.at( 3 ).m_ToolCallId,
             wxString( wxS( "call_validate_after_gate_feedback" ) ) );
+
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Published );
+    BOOST_CHECK_EQUAL( runtime.Suggestions().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
+            wxS( "\"allowed\":true" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeFeedsRepairableValidationGateFailureBackIntoReviewLoop )
+{
+    auto* provider = new VALIDATION_GATE_REPAIR_NEXT_ACTION_PROVIDER();
+
+    FIRST_BLOCKING_THEN_PASSING_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE                        previewService;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+    BOOST_CHECK_EQUAL( validationService.m_RunCount, 2 );
+
+    const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
+    BOOST_CHECK( publishRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 2 );
+
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 0 ).m_ToolName,
+                       wxString( wxS( "preview_gate_feedback" ) ) );
+    BOOST_CHECK( publishRequest.m_ToolResults.at( 0 ).m_ResultJson.Contains(
+            wxS( "validation_gate_failed" ) ) );
+    BOOST_CHECK_EQUAL( publishRequest.m_ToolResults.at( 1 ).m_ToolName,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+    BOOST_CHECK_EQUAL(
+            publishRequest.m_ToolResults.at( 1 ).m_ToolCallId,
+            wxString( wxS( "call_validate_after_validation_gate" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
