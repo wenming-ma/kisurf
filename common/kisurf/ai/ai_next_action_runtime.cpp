@@ -5720,6 +5720,85 @@ nlohmann::json surfaceGuardFactsJson( const AI_PANEL_STATE_RECORD& aPanel,
 }
 
 
+nlohmann::json structuredSurfaceWorkSummaryJson(
+        const AI_PANEL_STATE_RECORD& aPanel,
+        const nlohmann::json& aState,
+        const nlohmann::json& aNormalizedSchema,
+        const nlohmann::json& aFieldOriginFacts,
+        const nlohmann::json& aSurfaceGuardFacts,
+        size_t aSurfaceCount )
+{
+    nlohmann::json summary =
+            { { "source", "structured_surface_work_state" },
+              { "surface_count", static_cast<int>( aSurfaceCount ) },
+              { "focused_surface_id", toUtf8String( aPanel.m_Id ) },
+              { "focused_surface_title", toUtf8String( aPanel.m_Title ) },
+              { "focused_control_id", toUtf8String( aPanel.m_FocusedControlId ) },
+              { "focused_control_label",
+                toUtf8String( aPanel.m_FocusedControlLabel ) },
+              { "has_target_scope", aState.contains( "target_scope" )
+                                            && aState["target_scope"].is_object() },
+              { "field_origin_fact_count",
+                aFieldOriginFacts.is_array()
+                        ? static_cast<int>( aFieldOriginFacts.size() )
+                        : 0 },
+              { "has_complete_accept_guard",
+                aSurfaceGuardFacts.contains( "has_complete_accept_guard" )
+                        && aSurfaceGuardFacts["has_complete_accept_guard"].is_boolean()
+                        && aSurfaceGuardFacts["has_complete_accept_guard"].get<bool>() },
+              { "validation_state_present",
+                aState.contains( "validation_state" )
+                        && aState["validation_state"].is_object() } };
+
+    copyJsonFieldIfPresent( summary, aState, "schema_version" );
+
+    if( aNormalizedSchema.contains( "fields" )
+        && aNormalizedSchema["fields"].is_array() )
+    {
+        summary["normalized_field_count"] =
+                static_cast<int>( aNormalizedSchema["fields"].size() );
+    }
+    else
+    {
+        summary["normalized_field_count"] = 0;
+    }
+
+    if( aNormalizedSchema.contains( "tables" )
+        && aNormalizedSchema["tables"].is_array() )
+    {
+        summary["normalized_table_count"] =
+                static_cast<int>( aNormalizedSchema["tables"].size() );
+    }
+    else
+    {
+        summary["normalized_table_count"] = 0;
+    }
+
+    if( aState.contains( "neighbor_values" )
+        && aState["neighbor_values"].is_array() )
+    {
+        summary["neighbor_value_count"] =
+                static_cast<int>( aState["neighbor_values"].size() );
+    }
+
+    if( aState.contains( "validation_state" )
+        && aState["validation_state"].is_object() )
+    {
+        const nlohmann::json& validation = aState["validation_state"];
+
+        copyJsonFieldIfPresent( summary, validation, "status" );
+
+        if( summary.contains( "status" ) )
+        {
+            summary["validation_status"] = summary["status"];
+            summary.erase( "status" );
+        }
+    }
+
+    return summary;
+}
+
+
 void copySurfaceStateField( nlohmann::json& aPacket,
                             const nlohmann::json& aState,
                             const char* aField )
@@ -6441,12 +6520,23 @@ nlohmann::json workStatePacketJson( const AI_SEMANTIC_EVENT& aEvent )
             copySurfaceStateField( packet, state, "neighbor_values" );
             copySurfaceStateField( packet, state, "value_provenance" );
             copySurfaceStateField( packet, state, "validation_state" );
-            packet["normalized_schema"] =
+
+            nlohmann::json normalizedSchema =
                     normalizedSurfaceSchemaJson( *panel, state );
-            packet["field_origin_facts"] =
+            nlohmann::json fieldOrigins =
                     fieldOriginFactsJson( *panel, state );
-            packet["surface_guard_facts"] =
+            nlohmann::json guardFacts =
                     surfaceGuardFactsJson( *panel, state );
+
+            packet["normalized_schema"] = normalizedSchema;
+            packet["field_origin_facts"] = fieldOrigins;
+            packet["surface_guard_facts"] = guardFacts;
+            packet["structured_surface_work_summary"] =
+                    structuredSurfaceWorkSummaryJson( *panel, state,
+                                                      normalizedSchema,
+                                                      fieldOrigins,
+                                                      guardFacts,
+                                                      context.m_PanelStates.size() );
         }
     }
 
