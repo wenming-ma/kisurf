@@ -3931,7 +3931,7 @@ AI_OBJECT_REF padRef()
 {
     return AI_OBJECT_REF(
             KIID(), PCB_PAD_T, wxS( "pad:U4.1" ),
-            wxS( "{\"kind\":\"pad\",\"footprint\":\"U4\",\"pad_name\":\"1\","
+            wxS( "{\"kind\":\"pad\",\"footprint_reference\":\"U4\",\"number\":\"1\","
                  "\"position\":{\"x\":240,\"y\":210},"
                  "\"bbox\":{\"x\":220,\"y\":190,\"width\":40,\"height\":40},"
                  "\"layer\":\"F.Cu\",\"net_name\":\"GND\"}" ) );
@@ -5539,6 +5539,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
                            AI_CONTEXT_ANCHOR_KIND::PlacementCandidate,
                            wxS( "Place candidate 1" ), 220, 90 ) );
     placementTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( footprintRef() );
+    placementTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( padRef() );
     placementTrigger.m_ContextSnapshot.m_VisibleObjects.push_back( keepoutRef() );
 
     BOOST_CHECK( !placementRuntime.Update( placementTrigger ).has_value() );
@@ -5550,7 +5551,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
             wxS( "\"placeable_kind\":\"via\"" ) ) );
     BOOST_CHECK( placementProvider->m_Requests.front().m_UserText.Contains(
-            wxS( "\"visible_object_count\":5" ) ) );
+            wxS( "\"visible_object_count\":6" ) ) );
 
     nlohmann::json placementRequest =
             providerRequestJson( placementProvider->m_Requests.front() );
@@ -5789,7 +5790,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
     BOOST_CHECK( placementCandidateObstacleLabels.find( "via:300,50" )
                  == placementCandidateObstacleLabels.end() );
     BOOST_REQUIRE( placementPacket.contains( "visible_object_summaries" ) );
-    BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 5 );
+    BOOST_REQUIRE_EQUAL( placementPacket["visible_object_summaries"].size(), 6 );
     BOOST_CHECK_EQUAL(
             placementPacket["visible_object_summaries"].at( 0 )["label"].get<std::string>(),
             "via:100,50" );
@@ -5802,6 +5803,7 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
 
     bool sawViaObstacle = false;
     bool sawFootprintObstacle = false;
+    bool sawPadObstacle = false;
 
     for( const nlohmann::json& fact : placementPacket["placement_obstacle_facts"] )
     {
@@ -5819,9 +5821,18 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStatePackets )
         {
             sawFootprintObstacle = true;
         }
+
+        if( fact.value( "kind", "" ) == "pad_obstacle"
+            && fact.value( "footprint_reference", "" ) == "U4"
+            && fact.value( "pad_number", "" ) == "1"
+            && fact["position"]["x"].get<int>() == 240 )
+        {
+            sawPadObstacle = true;
+        }
     }
 
     BOOST_CHECK( sawViaObstacle );
+    BOOST_CHECK( sawPadObstacle );
     BOOST_CHECK( sawFootprintObstacle );
     BOOST_REQUIRE( placementPacket.contains( "placement_keepout_facts" ) );
     BOOST_REQUIRE_EQUAL( placementPacket["placement_keepout_facts"].size(), 1 );

@@ -4755,12 +4755,33 @@ nlohmann::json placementObstacleFactJson( const AI_OBJECT_REF& aObject )
         nlohmann::json fact = visibleObjectBaseFact( aObject );
         fact["kind"] = "pad_obstacle";
         copyJsonFieldIfPresent( fact, details, "footprint" );
+        copyJsonFieldIfPresent( fact, details, "footprint_reference" );
         copyJsonFieldIfPresent( fact, details, "pad_name" );
+        copyJsonFieldIfPresent( fact, details, "pad_number" );
+        copyJsonFieldIfPresent( fact, details, "number" );
         copyJsonFieldIfPresent( fact, details, "position" );
         copyJsonFieldIfPresent( fact, details, "bbox" );
         copyJsonFieldIfPresent( fact, details, "net_name" );
         copyJsonFieldIfPresent( fact, details, "layer" );
         copyJsonFieldIfPresent( fact, details, "layer_set" );
+
+        if( !fact.contains( "footprint" ) && details.contains( "footprint_reference" ) )
+            fact["footprint"] = details["footprint_reference"];
+
+        if( !fact.contains( "footprint_reference" ) && details.contains( "footprint" ) )
+            fact["footprint_reference"] = details["footprint"];
+
+        if( !fact.contains( "pad_name" ) && details.contains( "number" ) )
+            fact["pad_name"] = details["number"];
+
+        if( !fact.contains( "pad_number" ) )
+        {
+            if( details.contains( "number" ) )
+                fact["pad_number"] = details["number"];
+            else if( details.contains( "pad_name" ) )
+                fact["pad_number"] = details["pad_name"];
+        }
+
         return fact;
     }
 
