@@ -5785,7 +5785,17 @@ nlohmann::json routingCorridorFactJson(
               { "manhattan_length", absDx + absDy },
               { "segment_style", toUtf8String( routingSegmentStyle( dx, dy ) ) },
               { "confidence", aAnchor.m_Confidence },
-              { "manual_click_to_materialize", true } };
+              { "manual_click_to_materialize", true },
+              { "interaction_semantics",
+                { { "mode", "active_interactive_routing" },
+                  { "planning_target",
+                    "next_landing_from_current_route_head" },
+                  { "route_head_source", "mode_context.start" },
+                  { "landing_anchor_source", "route_anchor" },
+                  { "cursor_is_sorting_hint", true },
+                  { "manual_click_to_materialize", true },
+                  { "manual_click_supersedes_attempt", true },
+                  { "preview_must_be_rebased_after_click", true } } } };
 
     if( aModeContext.contains( "net" ) && aModeContext["net"].is_string() )
         fact["net"] = aModeContext["net"];
