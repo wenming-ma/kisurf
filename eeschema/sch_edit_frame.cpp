@@ -373,7 +373,8 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 AI_PREVIEW_MANAGER            session( adapter );
                 return aModel.PreviewSuggestion( aSuggestionId, session );
             },
-            [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )
+            [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+                    const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentContextVersion )
             {
                 std::optional<AI_SUGGESTION_RECORD> suggestion =
                         aModel.FindSuggestion( aSuggestionId );
@@ -391,7 +392,8 @@ SCH_EDIT_FRAME::SCH_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 KISURF_AI_SCH_OBJECT_RESOLVER resolver( *GetScreen() );
                 KISURF_AI_SCH_MOVE_EDIT_ADAPTER adapter( resolver, commit, *GetScreen(), *delta );
                 AI_EDIT_SESSION                  session( adapter );
-                return aModel.AcceptSuggestion( aSuggestionId, session );
+                return aModel.AcceptSuggestion( aSuggestionId, session,
+                                                aCurrentContextVersion );
             } );
 
     if( GetToolManager() )
