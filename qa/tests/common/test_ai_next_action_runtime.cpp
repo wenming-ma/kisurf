@@ -1,17 +1,24 @@
 #include <boost/test/unit_test.hpp>
 
+#include <kisurf/ai/ai_artifact_store.h>
 #include <kisurf/ai/ai_edit_session.h>
+#include <kisurf/ai/ai_next_action_session_store.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
+#include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_preview_manager.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
+#include <kisurf/ai/ai_visual_snapshot.h>
 
 #include <json_common.h>
 #include <qa_utils/wx_utils/unit_test_utils.h>
 
+#include <wx/filefn.h>
 #include <wx/ffile.h>
 #include <wx/filename.h>
+#include <wx/image.h>
+#include <wx/utils.h>
 
 #include <chrono>
 #include <deque>
@@ -22,6 +29,96 @@
 namespace
 {
 wxString publishReview();
+
+
+wxString uniqueNextActionPromptTracePath( const wxString& aSuffix )
+{
+    wxString base = wxFileName::CreateTempFileName( wxS( "kst" ) );
+
+    if( wxFileExists( base ) )
+        wxRemoveFile( base );
+
+    wxFileName path( base );
+    path.SetFullName( wxString::Format(
+            wxS( "kisurf_next_action_prompt_trace_%s_%lu.jsonl" ),
+            aSuffix,
+            static_cast<unsigned long>( wxGetProcessId() ) ) );
+
+    if( wxFileExists( path.GetFullPath() ) )
+        wxRemoveFile( path.GetFullPath() );
+
+    return path.GetFullPath();
+}
+
+
+wxString uniqueNextActionArtifactManifestPath( const wxString& aSuffix )
+{
+    wxString base = wxFileName::CreateTempFileName( wxS( "ksa" ) );
+
+    if( wxFileExists( base ) )
+        wxRemoveFile( base );
+
+    wxFileName path( base );
+    path.SetFullName( wxString::Format(
+            wxS( "kisurf_next_action_artifacts_%s_%lu.jsonl" ),
+            aSuffix,
+            static_cast<unsigned long>( wxGetProcessId() ) ) );
+
+    if( wxFileExists( path.GetFullPath() ) )
+        wxRemoveFile( path.GetFullPath() );
+
+    return path.GetFullPath();
+}
+
+
+wxString uniqueNextActionSessionDirectory( const wxString& aSuffix )
+{
+    wxString base = wxFileName::CreateTempFileName( wxS( "ksn" ) );
+
+    if( wxFileExists( base ) )
+        wxRemoveFile( base );
+
+    wxFileName path( base );
+    path.SetFullName( wxString::Format(
+            wxS( "kisurf_next_action_sessions_%s_%lu" ),
+            aSuffix,
+            static_cast<unsigned long>( wxGetProcessId() ) ) );
+
+    if( wxDirExists( path.GetFullPath() ) )
+        wxFileName::Rmdir( path.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
+
+    return path.GetFullPath();
+}
+
+
+AI_VISUAL_SNAPSHOT makeValidationIssueSourceVisualSnapshot()
+{
+    wxImage image( 96, 64 );
+    image.SetRGB( wxRect( 0, 0, 96, 64 ), 245, 245, 245 );
+    image.SetRGB( wxRect( 30, 20, 16, 12 ), 220, 48, 48 );
+
+    AI_VISUAL_SNAPSHOT snapshot = MakeAiVisualSnapshotFromImage(
+            image, wxS( "pcbnew.canvas.annotated_roi" ) );
+    snapshot.m_FrameId = wxS( "frame-validation-source" );
+    snapshot.m_FrameKind = wxS( "annotated_roi" );
+    snapshot.m_SidecarJson =
+            wxS( "{\"frame_id\":\"frame-validation-source\","
+                 "\"frame_kind\":\"annotated_roi\","
+                 "\"pixel_world_transform\":{"
+                 "\"world_origin\":{\"x\":1000,\"y\":2000},"
+                 "\"world_x_per_pixel_x\":10,"
+                 "\"world_x_per_pixel_y\":0,"
+                 "\"world_y_per_pixel_x\":0,"
+                 "\"world_y_per_pixel_y\":10},"
+                 "\"anchors\":[{\"anchor_id\":\"near-pad-A\","
+                 "\"object_id\":\"pad-A\","
+                 "\"handle\":\"handle-pad-A\","
+                 "\"pixel_bounds\":{\"left\":28,\"top\":18,"
+                 "\"right\":48,\"bottom\":36},"
+                 "\"world_bounds\":{\"left\":1280,\"top\":2180,"
+                 "\"right\":1480,\"bottom\":2360}}]}" );
+    return snapshot;
+}
 
 
 class SCRIPTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
@@ -307,6 +404,126 @@ public:
     int                              m_CallCount = 0;
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
     wxString                         m_RenderArgumentsJson;
+};
+
+
+class LARGE_UNKNOWN_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "large unknown tool next action" );
+
+        if( aRequest.m_RequestKind != AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = publishReview();
+            return response;
+        }
+
+        if( aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Need oversized unknown tool failure." );
+
+            AI_TOOL_CALL_RECORD call;
+            call.m_RequestId = aRequest.m_RequestId;
+            call.m_ToolCallId = wxS( "call_large_unknown" );
+
+            wxString toolName = wxS( "unknown_tool_" );
+
+            for( int i = 0; i < 6000; ++i )
+                toolName << wxS( "x" );
+
+            call.m_ToolName = toolName;
+            call.m_ArgumentsJson = wxS( "{}" );
+            response.m_ToolCalls.push_back( call );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\","
+                              "\"reason_code\":\"large_tool_result_archived\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+wxString largeBoundedScriptPlanArguments()
+{
+    nlohmann::json operations = nlohmann::json::array();
+
+    for( int i = 0; i < 7; ++i )
+    {
+        std::string alias = "script_output_via_" + std::to_string( i ) + "_";
+        alias.append( 700, 's' );
+
+        operations.push_back(
+                { { "kind", "pcb.create_via" },
+                  { "arguments",
+                    { { "position", { { "x", 1000 + i * 100 }, { "y", 2000 } } },
+                      { "net", "GND" },
+                      { "diameter", 600 },
+                      { "drill", 300 },
+                      { "layer_pair", { { "top", "F.Cu" }, { "bottom", "B.Cu" } } },
+                      { "alias", alias } } } } );
+    }
+
+    nlohmann::json args = {
+        { "plan", { { "operations", std::move( operations ) } } },
+        { "max_steps", 7 },
+        { "plan_id", "large-script-output-plan" }
+    };
+
+    return wxString::FromUTF8( args.dump().c_str() );
+}
+
+
+class LARGE_SCRIPT_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "large script tool next action" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"large_script_output_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview
+            && aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Need oversized script output." );
+
+            AI_TOOL_CALL_RECORD call;
+            call.m_RequestId = aRequest.m_RequestId;
+            call.m_ToolCallId = wxS( "call_large_script" );
+            call.m_ToolName = wxS( "script_run_bounded_plan" );
+            call.m_ArgumentsJson = largeBoundedScriptPlanArguments();
+            response.m_ToolCalls.push_back( call );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\","
+                              "\"reason_code\":\"large_script_output_archived\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
 };
 
 
@@ -713,6 +930,67 @@ public:
             return response;
         }
 
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class REVIEW_TOOL_ERROR_AFTER_EXECUTED_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Title = wxS( "decision before review failure" );
+            response.m_Body = wxS( "{\"decision_kind\":\"attempt\","
+                                  "\"opportunity_type\":\"placement\","
+                                  "\"selected_candidate_index\":0,"
+                                  "\"reason_code\":\"review_failure_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Title = wxS( "review requests hidden mutation" );
+                response.m_Body = wxS( "Need hidden mutation facts before failure." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_script_before_failure" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{\"kind\":\"pcb.create_via\","
+                             "\"arguments\":{\"position\":{\"x\":1600000,\"y\":2400000},"
+                             "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                             "\"layer_pair\":{\"start\":\"F.Cu\",\"end\":\"B.Cu\"},"
+                             "\"alias\":\"script_before_failure\"}}]},"
+                             "\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Title = wxS( "AI Provider Error" );
+            response.m_Body = wxS( "AI provider request failed after hidden mutation." );
+            response.m_ProviderTraceJson =
+                    wxS( "{\"retry_history\":[{\"reason\":\"transient_gateway\","
+                         "\"action\":\"failed_after_retry\"}]}" );
+            return response;
+        }
+
+        response.m_Title = wxS( "unexpected" );
         response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
         return response;
     }
@@ -3600,7 +3878,6 @@ public:
     {
         ++m_CallCount;
         m_Requests.push_back( aRequest );
-
         AI_PROVIDER_RESPONSE response;
         response.m_RequestId = aRequest.m_RequestId;
         response.m_Title = wxS( "invalid rollback after script next action" );
@@ -3966,6 +4243,70 @@ public:
                      "\"geometry\":{\"bbox\":{\"x\":10,\"y\":20,\"w\":30,\"h\":40},"
                      "\"layer\":\"F.Cu\","
                      "\"net\":\"GND\"}}]}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class PIXEL_BOUNDS_ISSUE_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"grade\":\"preview\","
+                     "\"issue_count\":1,"
+                     "\"issues\":[{\"kind\":\"clearance\","
+                     "\"key\":\"clearance\","
+                     "\"title\":\"Clearance violation\","
+                     "\"severity\":\"warning\","
+                     "\"message\":\"candidate is too close to pad A\","
+                     "\"pixel_bounds\":{\"left\":30,\"top\":20,"
+                     "\"right\":46,\"bottom\":32},"
+                     "\"world_bounds\":{\"left\":1300,\"top\":2200,"
+                     "\"right\":1460,\"bottom\":2320},"
+                     "\"layer_name\":\"F.Cu\"}]}}" );
+        return result;
+    }
+
+    int m_RunCount = 0;
+};
+
+
+class WORLD_BOUNDS_ISSUE_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
+{
+public:
+    AI_SESSION_VALIDATION_RESULT RunValidation(
+            const AI_EXECUTION_SESSION&, const wxString&,
+            const wxString& ) override
+    {
+        ++m_RunCount;
+
+        AI_SESSION_VALIDATION_RESULT result;
+        result.m_Ok = true;
+        result.m_ResultJson =
+                wxS( "{\"validation\":{\"status\":\"validated\","
+                     "\"backend\":\"native_drc\","
+                     "\"grade\":\"preview\","
+                     "\"issue_count\":1,"
+                     "\"issues\":[{\"kind\":\"clearance\","
+                     "\"key\":\"clearance\","
+                     "\"title\":\"Clearance violation\","
+                     "\"severity\":\"warning\","
+                     "\"message\":\"candidate is too close to pad A\","
+                     "\"world_bounds\":{\"left\":1300,\"top\":2200,"
+                     "\"right\":1460,\"bottom\":2320},"
+                     "\"layer_name\":\"F.Cu\"}]}}" );
         return result;
     }
 
@@ -4495,7 +4836,7 @@ BOOST_AUTO_TEST_CASE( SchedulerDebouncesSameSemanticSlot )
 }
 
 
-BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish )
+BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredMutationToolsAndNoDirectPublish )
 {
     AI_NEXT_ACTION_TOOL_REGISTRY tools;
     const wxString catalog = tools.ToolCatalogJson();
@@ -4517,51 +4858,8 @@ BOOST_AUTO_TEST_CASE( ToolCatalogDeclaresLayeredCandidateToolsAndNoDirectPublish
                 return nullptr;
             };
 
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"placement.generate_via_pattern_candidates\"" ) ) );
-    BOOST_REQUIRE( catalogTool( "placement.generate_via_pattern_candidates" ) );
-    BOOST_CHECK_EQUAL(
-            catalogTool( "placement.generate_via_pattern_candidates" )
-                    ->value( "namespace", std::string() ),
-            "placement" );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"placement.generate_footprint_transform_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_footprint_transform_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"placement.generate_footprint_orientation_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_footprint_orientation_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"routing.generate_segment_candidates\"" ) ) );
-    BOOST_REQUIRE( catalogTool( "routing.generate_segment_candidates" ) );
-    BOOST_CHECK_EQUAL(
-            catalogTool( "routing.generate_segment_candidates" )
-                    ->value( "namespace", std::string() ),
-            "routing" );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"routing.generate_parallel_segment_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_parallel_routing_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"routing.generate_bus_segment_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_bus_routing_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"routing.generate_replace_path_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_replace_path_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"routing.generate_constraint_aware_reroute_candidates\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"candidate_source\":\"internal_constraint_aware_reroute_library\"" ) ) );
-    BOOST_CHECK( catalog.Contains(
-            wxS( "\"name\":\"surface.generate_fill_candidates\"" ) ) );
-    BOOST_REQUIRE( catalogTool( "surface.generate_fill_candidates" ) );
-    BOOST_CHECK_EQUAL(
-            catalogTool( "surface.generate_fill_candidates" )
-                    ->value( "namespace", std::string() ),
-            "surface" );
+    BOOST_CHECK( !catalog.Contains( wxS( ".generate_" ) ) );
+    BOOST_CHECK( !catalog.Contains( wxS( "_candidates" ) ) );
     BOOST_REQUIRE( catalogTool( "render.hidden_attempt" ) );
     BOOST_CHECK_EQUAL(
             catalogTool( "render.hidden_attempt" )->value( "namespace", std::string() ),
@@ -4644,6 +4942,9 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( !callable.empty() );
 
     bool sawScriptTool = false;
+    bool sawVisualReferenceTool = false;
+    bool sawVisualReferenceRequiredReference = false;
+    bool sawVisualReferenceOptionalSidecarJson = false;
     bool sawAtomicRunTool = false;
     bool sawAtomicRunCreateViaKind = false;
     bool sawAtomicRunOperationContracts = false;
@@ -5317,6 +5618,34 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
         if( functionName == "script_run_bounded_plan" )
             sawScriptTool = true;
 
+        if( functionName == "observation_resolve_visual_reference" )
+        {
+            sawVisualReferenceTool = true;
+            sawVisualReferenceOptionalSidecarJson =
+                    function["parameters"].contains( "properties" )
+                    && function["parameters"]["properties"].contains(
+                               "sidecar_json" )
+                    && function["parameters"]["properties"]["sidecar_json"].value(
+                               "type", std::string() ) == "string";
+
+            const nlohmann::json& required =
+                    function["parameters"].contains( "required" )
+                            ? function["parameters"]["required"]
+                            : nlohmann::json::array();
+
+            if( required.is_array() )
+            {
+                for( const nlohmann::json& value : required )
+                {
+                    if( value.is_string()
+                        && value.get<std::string>() == "reference" )
+                    {
+                        sawVisualReferenceRequiredReference = true;
+                    }
+                }
+            }
+        }
+
         if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
 
@@ -5858,29 +6187,19 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     }
 
     BOOST_CHECK( sawScriptTool );
+    BOOST_CHECK( sawVisualReferenceTool );
+    BOOST_CHECK( sawVisualReferenceRequiredReference );
+    BOOST_CHECK( sawVisualReferenceOptionalSidecarJson );
     BOOST_CHECK( sawAtomicRunTool );
     BOOST_CHECK( sawAtomicRunCreateViaKind );
     BOOST_CHECK( sawAtomicRunOperationContracts );
     BOOST_CHECK( sawRepairTool );
-    BOOST_CHECK( sawPlacementFootprintTransformTool );
-    BOOST_CHECK( sawPlacementFootprintTransformRequiredPoints );
-    BOOST_CHECK( sawPlacementFootprintTransformPointSchema );
-    BOOST_CHECK( sawPlacementFootprintOrientationTool );
-    BOOST_CHECK( sawPlacementFootprintOrientationRequiredFacts );
     BOOST_CHECK( sawPlacementRepairTool );
     BOOST_CHECK( sawPlacementMoveRepairTool );
     BOOST_CHECK( sawPlacementOrientationRepairTool );
     BOOST_CHECK( sawRoutingRepairTool );
     BOOST_CHECK( sawRoutingPolylineRepairTool );
     BOOST_CHECK( sawRoutingBusRepairTool );
-    BOOST_CHECK( sawRoutingParallelCandidateTool );
-    BOOST_CHECK( sawRoutingParallelRequiredReference );
-    BOOST_CHECK( sawRoutingBusCandidateTool );
-    BOOST_CHECK( sawRoutingBusRequiredReference );
-    BOOST_CHECK( sawRoutingReplacePathCandidateTool );
-    BOOST_CHECK( sawRoutingReplacePathRequiredPlan );
-    BOOST_CHECK( sawRoutingConstraintRerouteCandidateTool );
-    BOOST_CHECK( sawRoutingConstraintRerouteRequiredFacts );
     BOOST_CHECK( sawSurfaceRepairTool );
     BOOST_CHECK( sawScriptSurfacePatchKind );
     BOOST_CHECK( sawScriptShapePolygonContract );
@@ -5908,15 +6227,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawRoutingRepairSegmentPointSchema );
     BOOST_CHECK( sawRoutingPolylinePointSchema );
     BOOST_CHECK( sawRoutingBusSegmentPointSchema );
-    BOOST_CHECK( sawRoutingParallelPointSchema );
-    BOOST_CHECK( sawRoutingBusOffsetPointSchema );
-    BOOST_CHECK( sawRoutingReplacePathPointSchema );
-    BOOST_CHECK( sawRoutingConstraintReroutePointSchema );
-    BOOST_CHECK( sawPlacementFootprintOrientationHandleSchema );
     BOOST_CHECK( sawPlacementMoveHandleSchema );
     BOOST_CHECK( sawPlacementOrientationRepairHandleSchema );
-    BOOST_CHECK( sawRoutingReplacePathHandleSchema );
-    BOOST_CHECK( sawRoutingConstraintRerouteHandleSchema );
     BOOST_CHECK( sawRoutingNamespaceDescription );
     BOOST_CHECK( sawScriptNamespaceDescription );
     BOOST_CHECK( sawSurfaceNamespaceDescription );
@@ -5930,6 +6242,10 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
             wxS( "publish_preview" ) ) );
     BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
             wxS( "publish.preview" ) ) );
+    BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
+            wxS( "generate_" ) ) );
+    BOOST_CHECK( !tools.CallableToolCatalogJson().Contains(
+            wxS( "_candidates" ) ) );
 }
 
 
@@ -7542,8 +7858,12 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
     BOOST_CHECK_GE( provider->m_Requests.at( 0 ).m_MaxToolRounds, 3 );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_DisableDefaultTools );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( ".generate_" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "_candidates" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
-            wxS( "placement.generate_via_pattern_candidates" ) ) );
+            wxS( "atomic.run_operation" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
             wxS( "context_snapshot" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
@@ -7601,6 +7921,456 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( operation->IsPlaceViaPreview() );
     BOOST_CHECK_EQUAL( operation->m_Position.x, 400 );
     BOOST_CHECK_EQUAL( operation->m_Position.y, 50 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeWritesPromptTraceForDecisionAndReviewTurns )
+{
+    wxString path = uniqueNextActionPromptTracePath( wxS( "decision_review" ) );
+
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"likely_helpful\"}" ),
+              publishReview() } );
+
+    AI_PROMPT_TRACE_STORE traceStore( path );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    runtime.SetPromptTraceStore( &traceStore );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    wxString error;
+    std::vector<AI_PROMPT_TRACE_ENTRY> entries = traceStore.LoadAll( error );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( entries.size(), 2 );
+    BOOST_CHECK( entries.at( 0 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionDecision );
+    BOOST_CHECK( entries.at( 1 ).m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK_EQUAL( entries.at( 0 ).m_ProviderStatus,
+                       wxString( wxS( "provider_response" ) ) );
+    BOOST_CHECK( entries.at( 0 ).m_PromptTraceJson.Contains( wxS( "user.request" ) ) );
+    BOOST_CHECK( entries.at( 1 ).m_PromptTraceJson.Contains( wxS( "user.request" ) ) );
+
+    if( wxFileExists( path ) )
+        wxRemoveFile( path );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeMarksNextActionProviderFailureAfterExecutedReviewTool )
+{
+    wxString path = uniqueNextActionPromptTracePath( wxS( "post_side_effect" ) );
+
+    auto* provider = new REVIEW_TOOL_ERROR_AFTER_EXECUTED_NEXT_ACTION_PROVIDER();
+    AI_PROMPT_TRACE_STORE traceStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetPromptTraceStore( &traceStore );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+
+    wxString error;
+    std::vector<AI_PROMPT_TRACE_ENTRY> entries = traceStore.LoadAll( error );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 3 );
+    BOOST_CHECK( entries.back().m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_CHECK_EQUAL( entries.back().m_ProviderStatus,
+                       wxString( wxS( "provider_error" ) ) );
+    BOOST_CHECK( entries.back().m_ProviderTraceJson.Contains(
+            wxS( "post_side_effect_ambiguity" ) ) );
+    BOOST_CHECK( entries.back().m_ProviderTraceJson.Contains(
+            wxS( "call_script_before_failure" ) ) );
+    BOOST_CHECK( entries.back().m_ProviderTraceJson.Contains(
+            wxS( "do_not_blindly_reexecute_tools" ) ) );
+
+    nlohmann::json trace = nlohmann::json::parse(
+            entries.back().m_ProviderTraceJson.ToStdString() );
+    BOOST_REQUIRE( trace.contains( "runtime_guard" ) );
+    const nlohmann::json& guard = trace["runtime_guard"];
+    BOOST_REQUIRE( guard.contains( "recovery_basis" ) );
+    const nlohmann::json& recovery = guard["recovery_basis"];
+    BOOST_CHECK( recovery["requires_checkpoint_resume"].get<bool>() );
+    BOOST_CHECK_EQUAL( recovery["executed_tool_result_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( recovery["board_state_version"]["document_revision"].get<int>(), 12 );
+    BOOST_CHECK_EQUAL( recovery["board_state_version"]["view_revision"].get<int>(), 5 );
+    BOOST_REQUIRE_EQUAL( recovery["tool_results"].size(), 1 );
+    BOOST_CHECK_EQUAL( recovery["tool_results"].at( 0 )["tool_call_id"].get<std::string>(),
+                       "call_script_before_failure" );
+    BOOST_CHECK( recovery["tool_results"].at( 0 ).contains( "checkpoint_id" ) );
+    BOOST_CHECK_GT( recovery["tool_results"].at( 0 )["journal_operation_count"].get<int>(),
+                    0 );
+
+    if( wxFileExists( path ) )
+        wxRemoveFile( path );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesProviderRecoveryArtifactAfterExecutedReviewToolFailure )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "provider_recovery" ) );
+
+    auto* provider = new REVIEW_TOOL_ERROR_AFTER_EXECUTED_NEXT_ACTION_PROVIDER();
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetArtifactStore( &artifactStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+
+    wxString error;
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "provider_recovery" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_ProjectId, wxString( wxS( "project-a" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_DocumentId, wxString( wxS( "board-1" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind,
+                       wxString( wxS( "next_action" ) ) );
+    BOOST_CHECK( artifacts.front().m_MetadataJson.Contains(
+            wxS( "post_side_effect_ambiguity" ) ) );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "provider_recovery" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "recovery_basis" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "call_script_before_failure" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "checkpoint_id" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "session_journal" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( artifacts.front().m_BlobPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesLargeProviderToolResults )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "tool_result" ) );
+    wxString tracePath = uniqueNextActionPromptTracePath( wxS( "tool_result" ) );
+
+    auto* provider = new LARGE_UNKNOWN_TOOL_NEXT_ACTION_PROVIDER();
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_PROMPT_TRACE_STORE traceStore( tracePath );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetArtifactStore( &artifactStore );
+    runtime.SetPromptTraceStore( &traceStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 2 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
+
+    nlohmann::json rawToolResult = nlohmann::json::parse(
+            provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.ToStdString() );
+    BOOST_CHECK( !rawToolResult.contains( "artifact_ref" ) );
+    BOOST_CHECK_EQUAL( rawToolResult["status"].get<std::string>(),
+                       "unknown_tool" );
+
+    wxString error;
+    std::vector<AI_ARTIFACT_RECORD> artifacts = artifactStore.LoadAll( error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_Kind, wxString( wxS( "tool_result" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_ProjectId, wxString( wxS( "project-a" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_DocumentId, wxString( wxS( "board-1" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind, wxString( wxS( "next_action" ) ) );
+
+    std::vector<AI_PROMPT_TRACE_ENTRY> traces = traceStore.LoadAll( error );
+    bool sawCompiledArtifactRef = false;
+
+    for( const AI_PROMPT_TRACE_ENTRY& trace : traces )
+    {
+        if( trace.m_PromptTraceJson.Contains( artifacts.front().m_Uri )
+            && trace.m_PromptTraceJson.Contains( wxS( "\"artifact_ref\"" ) )
+            && trace.m_PromptTraceJson.Contains( wxS( "\"tool_result\"" ) ) )
+        {
+            sawCompiledArtifactRef = true;
+        }
+    }
+
+    BOOST_CHECK( sawCompiledArtifactRef );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "\"status\"" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "unknown_tool_" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( tracePath );
+    wxRemoveFile( artifacts.front().m_BlobPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesLargeScriptToolResultsAsScriptOutput )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "script_output" ) );
+    wxString tracePath = uniqueNextActionPromptTracePath( wxS( "script_output" ) );
+
+    auto* provider = new LARGE_SCRIPT_TOOL_NEXT_ACTION_PROVIDER();
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_PROMPT_TRACE_STORE traceStore( tracePath );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetArtifactStore( &artifactStore );
+    runtime.SetPromptTraceStore( &traceStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.back().m_ToolResults.size(), 1 );
+
+    nlohmann::json rawToolResult = nlohmann::json::parse(
+            provider->m_Requests.back().m_ToolResults.front().m_ResultJson.ToStdString() );
+    BOOST_CHECK( !rawToolResult.contains( "artifact_ref" ) );
+    BOOST_CHECK_EQUAL( rawToolResult["status"].get<std::string>(),
+                       "script_plan_executed" );
+
+    wxString error;
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "script_output" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_Kind, wxString( wxS( "script_output" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_ProjectId, wxString( wxS( "project-a" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_DocumentId, wxString( wxS( "board-1" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind,
+                       wxString( wxS( "next_action" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_Source,
+                       wxString( wxS( "script_run_bounded_plan" ) ) );
+    BOOST_CHECK( artifacts.front().m_MetadataJson.Contains(
+            wxS( "large-script-output-plan" ) ) );
+
+    std::vector<AI_PROMPT_TRACE_ENTRY> traces = traceStore.LoadAll( error );
+    bool sawCompiledArtifactRef = false;
+
+    for( const AI_PROMPT_TRACE_ENTRY& trace : traces )
+    {
+        if( trace.m_PromptTraceJson.Contains( artifacts.front().m_Uri )
+            && trace.m_PromptTraceJson.Contains( wxS( "\"artifact_ref\"" ) )
+            && trace.m_PromptTraceJson.Contains( wxS( "\"script_output\"" ) ) )
+        {
+            sawCompiledArtifactRef = true;
+        }
+    }
+
+    BOOST_CHECK( sawCompiledArtifactRef );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "script_plan_executed" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "script_output_via_0" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( tracePath );
+    wxRemoveFile( artifacts.front().m_BlobPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesAbandonedHiddenAttemptAuditArtifact )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "failed_attempt" ) );
+
+    auto* provider = new APPLY_CANDIDATE_TOOL_NEXT_ACTION_PROVIDER();
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetArtifactStore( &artifactStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Steps().back().m_Status
+                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
+
+    wxString error;
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "failed_hidden_attempt" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_ProjectId, wxString( wxS( "project-a" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_DocumentId, wxString( wxS( "board-1" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind,
+                       wxString( wxS( "next_action" ) ) );
+    BOOST_CHECK( artifacts.front().m_MetadataJson.Contains( wxS( "abandoned" ) ) );
+    BOOST_CHECK( artifacts.front().m_MetadataJson.Contains(
+            wxS( "render_freshness_failed" ) ) );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "failed_hidden_attempt" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "attempt_journal" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "review_decision" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "call_apply_candidate" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( artifacts.front().m_BlobPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesOversizedVisualObservationBeforeNextActionDecision )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "visual" ) );
+
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"abandon\","
+                   "\"reason_code\":\"visual_artifact_recorded\"}" ) } );
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    runtime.SetArtifactStore( &artifactStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+    trigger.m_ContextSnapshot.m_Visual.m_Source = wxS( "pcbnew.canvas.annotated_roi" );
+    trigger.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
+    trigger.m_ContextSnapshot.m_Visual.m_DataUri =
+            wxS( "data:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789" );
+    trigger.m_ContextSnapshot.m_Visual.m_FrameId = wxS( "frame-next-1" );
+    trigger.m_ContextSnapshot.m_Visual.m_FrameKind = wxS( "annotated_roi" );
+    trigger.m_ContextSnapshot.m_Visual.m_WidthPx = 640;
+    trigger.m_ContextSnapshot.m_Visual.m_HeightPx = 480;
+    trigger.m_ContextSnapshot.m_Visual.m_ByteSize = 4096;
+    trigger.m_ContextSnapshot.m_Visual.m_SidecarJson =
+            wxS( "{\"frame_id\":\"frame-next-1\","
+                 "\"frame_kind\":\"annotated_roi\","
+                 "\"attempt_id\":\"attempt-next\","
+                 "\"preview_id\":\"preview-next\","
+                 "\"anchors\":[{\"anchor_id\":\"route-A\"}]}" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion = runtime.Update( trigger );
+
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 1 );
+
+    wxString error;
+    std::vector<AI_ARTIFACT_RECORD> artifacts = artifactStore.LoadAll( error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_Kind,
+                       wxString( wxS( "visual_observation" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind,
+                       wxString( wxS( "next_action" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_ProjectId,
+                       wxString( wxS( "project-a" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_DocumentId,
+                       wxString( wxS( "board-1" ) ) );
+    BOOST_CHECK( provider->m_Requests.front().m_ContextSnapshot.m_Visual.m_SidecarJson
+                         .Contains( artifacts.front().m_Uri ) );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains(
+            wxS( "data:image/png;base64,abcdefghijklmnopqrstuvwxyz0123456789" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "frame-next-1" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "route-A" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( artifacts.front().m_BlobPath );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeArchivesValidationToolResultAsValidationReportArtifact )
+{
+    wxString path = uniqueNextActionArtifactManifestPath( wxS( "validation_report" ) );
+
+    auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    runtime.SetServices( &services.m_Validation, &services.m_Preview );
+    runtime.SetArtifactStore( &artifactStore );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    wxString error;
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "validation_report" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    BOOST_REQUIRE_EQUAL( artifacts.size(), 1 );
+    BOOST_CHECK_EQUAL( artifacts.front().m_AgentKind,
+                       wxString( wxS( "next_action" ) ) );
+    BOOST_CHECK_EQUAL( artifacts.front().m_Source,
+                       wxString( wxS( "validate_hidden_attempt" ) ) );
+
+    bool sawValidationArtifactRef = false;
+
+    for( const AI_PROVIDER_REQUEST& request : provider->m_Requests )
+    {
+        for( const AI_TOOL_CALL_RECORD& result : request.m_ToolResults )
+        {
+            if( result.m_ToolName != wxS( "validate_hidden_attempt" ) )
+                continue;
+
+            nlohmann::json parsed = nlohmann::json::parse(
+                    result.m_ResultJson.ToStdString(), nullptr, false );
+
+            if( parsed.is_discarded() || !parsed.is_object()
+                || !parsed.contains( "artifact_ref" ) )
+            {
+                continue;
+            }
+
+            sawValidationArtifactRef = true;
+            BOOST_CHECK_EQUAL( parsed["artifact_ref"]["kind"].get<std::string>(),
+                               "validation_report" );
+            BOOST_CHECK_EQUAL( parsed["artifact_ref"]["uri"].get<std::string>(),
+                               artifacts.front().m_Uri.ToStdString() );
+        }
+    }
+
+    BOOST_CHECK( sawValidationArtifactRef );
+
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( artifacts.front().m_Uri,
+                                              archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "validation" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "issue_count" ) ) );
+
+    wxRemoveFile( path );
+    wxRemoveFile( artifacts.front().m_BlobPath );
 }
 
 
@@ -9117,6 +9887,141 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeVisualReferenceToolResolvesObservationAnchor )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY registry;
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 77;
+
+    AI_OBSERVATION_PACKET observation;
+    observation.m_ContextSnapshot.m_Visual.m_SidecarJson =
+            wxS( "{\"anchors\":[{"
+                 "\"anchor_id\":\"A1\","
+                 "\"object_id\":\"via-1\","
+                 "\"handle\":\"ai://session/7/handle/3\","
+                 "\"layer\":\"F.Cu\","
+                 "\"net_name\":\"GND\","
+                 "\"world_xy\":{\"x\":300.0,\"y\":200.0},"
+                 "\"world_bounds\":{\"left\":280.0,\"top\":180.0,"
+                 "\"right\":320.0,\"bottom\":220.0},"
+                 "\"pixel_bounds\":{\"left\":20.0,\"top\":10.0,"
+                 "\"right\":40.0,\"bottom\":30.0}"
+                 "}]}" );
+
+    AI_TOOL_CALL_RECORD call;
+    call.m_ToolCallId = wxS( "call_resolve_anchor" );
+    call.m_ToolName = wxS( "observation_resolve_visual_reference" );
+    call.m_ArgumentsJson = wxS( "{\"reference\":{\"anchor_id\":\"A1\"}}" );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            registry.HandleToolCall( request, call, observation );
+
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ErrorCode.IsEmpty() );
+
+    const nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( payload["tool"].get<std::string>(),
+                       "observation.resolve_visual_reference" );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "resolved" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["kind"].get<std::string>(),
+                       "anchor" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["anchor_id"].get<std::string>(),
+                       "A1" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["handle"].get<std::string>(),
+                       "ai://session/7/handle/3" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["object_id"].get<std::string>(),
+                       "via-1" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["layer"].get<std::string>(),
+                       "F.Cu" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["net_name"].get<std::string>(),
+                       "GND" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["world_xy"]["x"].get<double>(),
+                       300.0 );
+    BOOST_CHECK( !payload.value( "publish_allowed", true ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeVisualReferenceToolResolvesProvidedPreviewSidecarAnchor )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY registry;
+    AI_PROVIDER_REQUEST request;
+    AI_OBSERVATION_PACKET observation;
+
+    AI_TOOL_CALL_RECORD call;
+    call.m_ToolCallId = wxS( "call_resolve_preview_anchor" );
+    call.m_ToolName = wxS( "observation_resolve_visual_reference" );
+    call.m_ArgumentsJson =
+            wxS( "{\"reference\":{\"anchor_id\":\"preview_item:via-1\"},"
+                 "\"sidecar_json\":\"{\\\"anchors\\\":[{"
+                 "\\\"anchor_id\\\":\\\"preview_item:via-1\\\","
+                 "\\\"object_id\\\":\\\"via-1\\\","
+                 "\\\"handle\\\":\\\"session:117/handle:1/gen:1/via-1\\\","
+                 "\\\"layer\\\":\\\"F.Cu\\\","
+                 "\\\"net_name\\\":\\\"GND\\\","
+                 "\\\"world_xy\\\":{\\\"x\\\":400.0,\\\"y\\\":500.0},"
+                 "\\\"world_bounds\\\":{\\\"left\\\":300.0,\\\"top\\\":400.0,"
+                 "\\\"right\\\":500.0,\\\"bottom\\\":600.0},"
+                 "\\\"pixel_bounds\\\":{\\\"left\\\":3.0,\\\"top\\\":4.0,"
+                 "\\\"right\\\":5.0,\\\"bottom\\\":6.0}"
+                 "}]}\"}" );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            registry.HandleToolCall( request, call, observation );
+
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( result.m_ErrorCode.IsEmpty() );
+
+    const nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "resolved" );
+    BOOST_CHECK_EQUAL( payload["visual_anchor_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( payload["resolution"]["anchor_id"].get<std::string>(),
+                       "preview_item:via-1" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["handle"].get<std::string>(),
+                       "session:117/handle:1/gen:1/via-1" );
+    BOOST_CHECK_EQUAL( payload["resolution"]["pixel_bounds"]["right"].get<double>(),
+                       5.0 );
+    BOOST_CHECK( !payload.value( "publish_allowed", true ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeVisualReferenceToolRejectsPixelOnlyReference )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY registry;
+    AI_PROVIDER_REQUEST request;
+    AI_OBSERVATION_PACKET observation;
+
+    AI_TOOL_CALL_RECORD call;
+    call.m_ToolCallId = wxS( "call_resolve_pixel" );
+    call.m_ToolName = wxS( "observation_resolve_visual_reference" );
+    call.m_ArgumentsJson =
+            wxS( "{\"reference\":{\"pixel_position\":{\"x\":21,\"y\":37}}}" );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            registry.HandleToolCall( request, call, observation );
+
+    BOOST_CHECK( result.m_Allowed );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "pixel_only_reference" ) ) );
+
+    const nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "rejected" );
+    BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(),
+                       "pixel_only_reference" );
+    BOOST_CHECK( payload["message"].get<std::string>().find( "anchor" )
+                 != std::string::npos );
+    BOOST_CHECK( !payload.value( "publish_allowed", true ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeRejectsMalformedRenderToolArgumentsBeforeService )
 {
     auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
@@ -9284,7 +10189,9 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"operation\"" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
 
-    BOOST_CHECK( provider->m_Requests.at( 1 ).m_UserText.Contains(
+    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(
+            wxS( "placement_generate_via_pattern_candidates" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(
             wxS( "placement.generate_via_pattern_candidates" ) ) );
     BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
             wxS( "placement.generate_via_pattern_candidates" ) ) );
@@ -11610,6 +12517,137 @@ BOOST_AUTO_TEST_CASE( RuntimeHiddenAttemptExecutesAtomicOperationIntoShadowJourn
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeCarriesRecentStepsInsideActiveNextActionSession )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"first_step\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"second_step\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    BOOST_REQUIRE( runtime.Update( makeViaTrigger() ).has_value() );
+    BOOST_REQUIRE( runtime.Update( makeChangedViaTrigger() ).has_value() );
+
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 4 );
+    const AI_PROVIDER_REQUEST& firstDecision = provider->m_Requests.at( 0 );
+    const AI_PROVIDER_REQUEST& secondDecision = provider->m_Requests.at( 2 );
+
+    BOOST_CHECK_EQUAL( firstDecision.m_ConversationId,
+                       secondDecision.m_ConversationId );
+
+    auto recentStepsBlock = std::find_if(
+            secondDecision.m_ProviderInputBlocks.begin(),
+            secondDecision.m_ProviderInputBlocks.end(),
+            []( const AI_PROVIDER_INPUT_BLOCK& aBlock )
+            {
+                return aBlock.m_Id == wxS( "next_action.recent_steps" );
+            } );
+
+    BOOST_REQUIRE( recentStepsBlock != secondDecision.m_ProviderInputBlocks.end() );
+    BOOST_CHECK( recentStepsBlock->m_Text.Contains( wxS( "first_step" ) ) );
+    BOOST_CHECK( recentStepsBlock->m_Text.Contains( wxS( "published" ) ) );
+    BOOST_CHECK( !recentStepsBlock->m_Text.Contains( wxS( "second_step" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeWritesNextActionSessionJsonPerActiveActionState )
+{
+    wxString directory = uniqueNextActionSessionDirectory( wxS( "active_state" ) );
+
+    AI_NEXT_ACTION_SESSION_STORE store( directory );
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"placement_first\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"placement_second\"}" ),
+              publishReview(),
+              wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"routing\","
+                   "\"reason_code\":\"routing_first\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+    runtime.SetSessionStore( &store );
+
+    AI_SUGGESTION_TRIGGER firstPlacement = makeViaTrigger();
+    firstPlacement.m_ContextSnapshot.m_ProjectId = wxS( "project-session" );
+    firstPlacement.m_ContextSnapshot.m_DocumentId = wxS( "board-session" );
+    AI_SUGGESTION_TRIGGER secondPlacement = makeChangedViaTrigger();
+    secondPlacement.m_ContextSnapshot.m_ProjectId = wxS( "project-session" );
+    secondPlacement.m_ContextSnapshot.m_DocumentId = wxS( "board-session" );
+
+    BOOST_REQUIRE( runtime.Update( firstPlacement ).has_value() );
+    BOOST_REQUIRE( runtime.Update( secondPlacement ).has_value() );
+    BOOST_REQUIRE_GE( runtime.Steps().size(), 2 );
+
+    const uint64_t placementConversationId =
+            runtime.Steps().at( 0 ).m_ConversationId;
+    BOOST_CHECK_EQUAL( runtime.Steps().at( 1 ).m_ConversationId,
+                       placementConversationId );
+    BOOST_CHECK( wxFileExists( store.SessionPath( placementConversationId ) ) );
+
+    wxFFile placementFile( store.SessionPath( placementConversationId ),
+                           wxS( "rb" ) );
+    BOOST_REQUIRE( placementFile.IsOpened() );
+    wxString placementContent;
+    BOOST_REQUIRE( placementFile.ReadAll( &placementContent, wxConvUTF8 ) );
+    placementFile.Close();
+
+    BOOST_CHECK( placementContent.Contains(
+            wxS( "kisurf.ai.next_action_session" ) ) );
+    nlohmann::json placementJson =
+            nlohmann::json::parse( placementContent.ToStdString() );
+    BOOST_CHECK_EQUAL( placementJson["session_type"].get<std::string>(),
+                       std::string( "placement" ) );
+    BOOST_CHECK( placementContent.Contains( wxS( "placement_first" ) ) );
+    BOOST_CHECK( placementContent.Contains( wxS( "placement_second" ) ) );
+    BOOST_CHECK_EQUAL( placementJson["step_count"].get<int>(), 2 );
+
+    AI_SUGGESTION_TRIGGER routing = makeRoutingTrigger();
+    routing.m_ContextSnapshot.m_ProjectId = wxS( "project-session" );
+    routing.m_ContextSnapshot.m_DocumentId = wxS( "board-session" );
+
+    BOOST_REQUIRE( runtime.Update( routing ).has_value() );
+    BOOST_REQUIRE_GE( runtime.Steps().size(), 3 );
+
+    const uint64_t routingConversationId =
+            runtime.Steps().at( 2 ).m_ConversationId;
+    BOOST_CHECK_NE( routingConversationId, placementConversationId );
+    BOOST_CHECK( wxFileExists( store.SessionPath( routingConversationId ) ) );
+
+    wxFFile routingFile( store.SessionPath( routingConversationId ),
+                         wxS( "rb" ) );
+    BOOST_REQUIRE( routingFile.IsOpened() );
+    wxString routingContent;
+    BOOST_REQUIRE( routingFile.ReadAll( &routingContent, wxConvUTF8 ) );
+    routingFile.Close();
+
+    nlohmann::json routingJson =
+            nlohmann::json::parse( routingContent.ToStdString() );
+    BOOST_CHECK_EQUAL( routingJson["session_type"].get<std::string>(),
+                       std::string( "routing" ) );
+    BOOST_CHECK( routingContent.Contains( wxS( "routing_first" ) ) );
+    BOOST_CHECK( !routingContent.Contains( wxS( "placement_first" ) ) );
+
+    wxFileName::Rmdir( directory, wxPATH_RMDIR_RECURSIVE );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeDoesNotPublishWhenNativeBudgetCountersExceedPolicy )
 {
     auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
@@ -12747,6 +13785,129 @@ BOOST_AUTO_TEST_CASE( RuntimeValidationFactsExposeIssueGeometryForReview )
                     .get<std::string>(),
             "F.Cu" );
     BOOST_CHECK_EQUAL( validationService.m_RunCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidationIssueGeometryCreatesVisualCropArtifact )
+{
+    wxString path = uniqueNextActionArtifactManifestPath(
+            wxS( "validation_issue_crop" ) );
+
+    auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
+    PIXEL_BOUNDS_ISSUE_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE              previewService;
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+    runtime.SetArtifactStore( &artifactStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+    trigger.m_ContextSnapshot.m_Visual = makeValidationIssueSourceVisualSnapshot();
+
+    BOOST_REQUIRE( runtime.Update( trigger ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    nlohmann::json facts = nlohmann::json::parse(
+            runtime.Attempts().front().m_ValidationFactsJson.ToStdString() );
+
+    BOOST_REQUIRE( facts.contains( "issue_visual_artifacts" ) );
+    BOOST_REQUIRE( facts["issue_visual_artifacts"].is_array() );
+    BOOST_REQUIRE_EQUAL( facts["issue_visual_artifacts"].size(), 1 );
+
+    const nlohmann::json& cropRef = facts["issue_visual_artifacts"].at( 0 );
+    BOOST_CHECK_EQUAL( cropRef["kind"].get<std::string>(),
+                       "visual_observation" );
+    BOOST_CHECK_EQUAL( cropRef["frame_kind"].get<std::string>(),
+                       "issue_crop" );
+    BOOST_CHECK_EQUAL( cropRef["source_issue"]["kind"].get<std::string>(),
+                       "clearance" );
+
+    wxString cropUri = wxString::FromUTF8(
+            cropRef["uri"].get<std::string>().c_str() );
+
+    wxString error;
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( cropUri, archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "issue_crop" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "Clearance violation" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "frame-validation-source" ) ) );
+
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "visual_observation" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    for( const AI_ARTIFACT_RECORD& artifact : artifacts )
+    {
+        if( wxFileExists( artifact.m_BlobPath ) )
+            wxRemoveFile( artifact.m_BlobPath );
+    }
+
+    wxRemoveFile( path );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeValidationWorldBoundsIssueCreatesVisualCropArtifact )
+{
+    wxString path = uniqueNextActionArtifactManifestPath(
+            wxS( "validation_world_issue_crop" ) );
+
+    auto* provider = new TOOL_CALLING_NEXT_ACTION_PROVIDER();
+    WORLD_BOUNDS_ISSUE_SESSION_VALIDATION_SERVICE validationService;
+    PASSING_SESSION_PREVIEW_SERVICE              previewService;
+    AI_ARTIFACT_STORE artifactStore( path );
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &validationService,
+                                    &previewService };
+    runtime.SetArtifactStore( &artifactStore );
+
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_ProjectId = wxS( "project-a" );
+    trigger.m_ContextSnapshot.m_DocumentId = wxS( "board-1" );
+    trigger.m_ContextSnapshot.m_Visual = makeValidationIssueSourceVisualSnapshot();
+
+    BOOST_REQUIRE( runtime.Update( trigger ).has_value() );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+
+    nlohmann::json facts = nlohmann::json::parse(
+            runtime.Attempts().front().m_ValidationFactsJson.ToStdString() );
+
+    BOOST_REQUIRE( facts.contains( "issue_visual_artifacts" ) );
+    BOOST_REQUIRE( facts["issue_visual_artifacts"].is_array() );
+    BOOST_REQUIRE_EQUAL( facts["issue_visual_artifacts"].size(), 1 );
+
+    const nlohmann::json& cropRef = facts["issue_visual_artifacts"].at( 0 );
+    BOOST_CHECK_EQUAL( cropRef["frame_kind"].get<std::string>(),
+                       "issue_crop" );
+    BOOST_CHECK_EQUAL( cropRef["pixel_bounds"]["left"].get<int>(), 30 );
+    BOOST_CHECK_EQUAL( cropRef["pixel_bounds"]["top"].get<int>(), 20 );
+    BOOST_CHECK_EQUAL( cropRef["pixel_bounds"]["right"].get<int>(), 46 );
+    BOOST_CHECK_EQUAL( cropRef["pixel_bounds"]["bottom"].get<int>(), 32 );
+
+    wxString cropUri = wxString::FromUTF8(
+            cropRef["uri"].get<std::string>().c_str() );
+
+    wxString error;
+    wxString archivedPayload;
+    BOOST_REQUIRE( artifactStore.ReadPayload( cropUri, archivedPayload, error ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "issue_crop" ) ) );
+    BOOST_CHECK( archivedPayload.Contains( wxS( "Clearance violation" ) ) );
+
+    AI_ARTIFACT_QUERY query;
+    query.m_Kind = wxS( "visual_observation" );
+    std::vector<AI_ARTIFACT_RECORD> artifacts =
+            artifactStore.Query( query, error );
+
+    for( const AI_ARTIFACT_RECORD& artifact : artifacts )
+    {
+        if( wxFileExists( artifact.m_BlobPath ) )
+            wxRemoveFile( artifact.m_BlobPath );
+    }
+
+    wxRemoveFile( path );
 }
 
 

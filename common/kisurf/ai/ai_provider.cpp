@@ -1,9 +1,13 @@
 #include <kisurf/ai/ai_provider.h>
 
+#include <kisurf/ai/ai_provider_input_compiler.h>
+#include <kisurf/ai/ai_token_budget_manager.h>
+
 #include <curl/curl.h>
 #include <kicad_curl/kicad_curl_easy.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <utility>
 #include <wx/utils.h>
 
@@ -29,18 +33,6 @@ wxString joinUrl( const wxString& aBaseUrl, const wxString& aPath )
         return base + aPath;
 
     return base + wxS( "/" ) + aPath;
-}
-
-
-bool envValue( const wxString& aName, wxString& aValue )
-{
-    if( wxGetEnv( aName, &aValue ) )
-    {
-        aValue.Trim( true ).Trim( false );
-        return !aValue.IsEmpty();
-    }
-
-    return false;
 }
 
 
@@ -89,6 +81,120 @@ AI_PROVIDER_RESPONSE providerError( const AI_PROVIDER_REQUEST& aRequest, const w
 }
 
 
+wxString providerHttpFailureMessage( int aStatusCode, wxString aBody )
+{
+    aBody.Trim( true ).Trim( false );
+    aBody.Replace( wxS( "\r" ), wxS( " " ) );
+    aBody.Replace( wxS( "\n" ), wxS( " " ) );
+    aBody.Replace( wxS( "\t" ), wxS( " " ) );
+
+    while( aBody.Replace( wxS( "  " ), wxS( " " ) ) > 0 )
+    {
+    }
+
+    constexpr size_t maxBodyChars = 1200;
+
+    if( aBody.length() > maxBodyChars )
+        aBody = aBody.Left( maxBodyChars ) + wxS( "..." );
+
+    wxString message = wxString::Format(
+            wxS( "AI provider request failed with HTTP %d." ), aStatusCode );
+
+    if( !aBody.IsEmpty() )
+        message << wxS( " Response: " ) << aBody;
+
+    return message;
+}
+
+
+bool containsNoCase( wxString aText, const wxString& aNeedle )
+{
+    aText.MakeLower();
+    wxString needle = aNeedle;
+    needle.MakeLower();
+    return aText.Contains( needle );
+}
+
+
+bool providerFailureSuggestsContextLimit( int aStatusCode, const wxString& aBody )
+{
+    if( aStatusCode == 413 )
+        return true;
+
+    return containsNoCase( aBody, wxS( "context_length_exceeded" ) )
+           || containsNoCase( aBody, wxS( "maximum context" ) )
+           || containsNoCase( aBody, wxS( "context window" ) )
+           || containsNoCase( aBody, wxS( "too many tokens" ) )
+           || containsNoCase( aBody, wxS( "token limit" ) )
+           || containsNoCase( aBody, wxS( "request too large" ) );
+}
+
+
+wxString providerRetryReason( int aStatusCode, const wxString& aBody )
+{
+    if( providerFailureSuggestsContextLimit( aStatusCode, aBody ) )
+        return wxS( "context_limit" );
+
+    if( aStatusCode == 502 || aStatusCode == 503 || aStatusCode == 504 )
+        return wxS( "transient_gateway" );
+
+    return wxS( "not_retryable" );
+}
+
+
+bool providerFailureAllowsShrinkRetry( int aStatusCode, const wxString& aBody,
+                                       const AI_PROVIDER_REQUEST& aRequest,
+                                       size_t aRequestBodyChars )
+{
+    if( providerFailureSuggestsContextLimit( aStatusCode, aBody ) )
+        return true;
+
+    const bool transientGatewayFailure =
+            aStatusCode == 502 || aStatusCode == 503 || aStatusCode == 504;
+
+    if( !transientGatewayFailure )
+        return false;
+
+    constexpr size_t largeProviderRequestChars = 6000;
+    constexpr size_t largeCompiledContextChars = 4000;
+
+    return aRequestBodyChars > largeProviderRequestChars
+           || aRequest.m_ContextEstimatedChars > largeCompiledContextChars
+           || aRequest.m_ContextSnapshot.m_Visual.HasPixels();
+}
+
+
+AI_PROVIDER_REQUEST shrinkProviderRequestForRetry( const AI_PROVIDER_REQUEST& aRequest )
+{
+    const AI_TOKEN_BUDGET_POLICY policy = AiProviderShrinkRetryBudgetPolicy();
+    const AI_TOKEN_BUDGET_PLAN   plan = AiPlanProviderInputBudget( aRequest, policy );
+    AI_PROVIDER_REQUEST          shrunk = AiApplyProviderInputBudgetPlan( aRequest, plan );
+    return AiCompileProviderInput( shrunk );
+}
+
+
+wxString providerTraceJson( const nlohmann::json& aRetryHistory )
+{
+    if( aRetryHistory.empty() )
+        return wxString();
+
+    nlohmann::json trace = {
+        { "schema", { { "name", "kisurf.ai.provider_trace" }, { "version", 1 } } },
+        { "retry_history", aRetryHistory }
+    };
+
+    return wxString::FromUTF8( trace.dump().c_str() );
+}
+
+
+AI_PROVIDER_RESPONSE attachProviderTrace( AI_PROVIDER_RESPONSE aResponse,
+                                          const nlohmann::json& aRetryHistory )
+{
+    aResponse.m_ProviderTraceJson = providerTraceJson( aRetryHistory );
+    return aResponse;
+}
+
+
 class UNSUPPORTED_MODEL_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -115,19 +221,6 @@ std::string toUtf8String( const wxString& aText )
 {
     wxScopedCharBuffer buffer = aText.ToUTF8();
     return buffer.data() ? std::string( buffer.data(), buffer.length() ) : std::string();
-}
-
-
-nlohmann::json makeUserMessageContent( const wxString& aUserContent,
-                                       const AI_VISUAL_SNAPSHOT& aVisual )
-{
-    if( !aVisual.HasPixels() )
-        return toUtf8String( aUserContent );
-
-    return nlohmann::json::array(
-            { { { "type", "text" }, { "text", toUtf8String( aUserContent ) } },
-              { { "type", "image_url" },
-                { "image_url", { { "url", toUtf8String( aVisual.m_DataUri ) } } } } } );
 }
 
 
@@ -1071,56 +1164,6 @@ nlohmann::json functionTool( const char* aName, const char* aDescription,
 }
 
 
-std::string toolResultContent( const AI_TOOL_CALL_RECORD& aToolCall )
-{
-    if( !aToolCall.m_ResultJson.IsEmpty() )
-        return toUtf8String( aToolCall.m_ResultJson );
-
-    nlohmann::json result = { { "allowed", aToolCall.m_Allowed },
-                              { "executed", aToolCall.m_Executed },
-                              { "error_code", toUtf8String( aToolCall.m_ErrorCode ) },
-                              { "message", toUtf8String( aToolCall.m_Message ) } };
-
-    return result.dump();
-}
-
-
-void appendToolResultMessages( nlohmann::json& aMessages,
-                               const std::vector<AI_TOOL_CALL_RECORD>& aToolResults )
-{
-    if( aToolResults.empty() )
-        return;
-
-    nlohmann::json toolCalls = nlohmann::json::array();
-
-    for( const AI_TOOL_CALL_RECORD& toolResult : aToolResults )
-    {
-        std::string arguments = toUtf8String( toolResult.m_ArgumentsJson );
-
-        if( arguments.empty() )
-            arguments = "{}";
-
-        toolCalls.push_back(
-                { { "id", toUtf8String( toolResult.m_ToolCallId ) },
-                  { "type", "function" },
-                  { "function",
-                    { { "name", toUtf8String( toolResult.m_ToolName ) },
-                      { "arguments", arguments } } } } );
-    }
-
-    aMessages.push_back( { { "role", "assistant" },
-                           { "content", nullptr },
-                           { "tool_calls", toolCalls } } );
-
-    for( const AI_TOOL_CALL_RECORD& toolResult : aToolResults )
-    {
-        aMessages.push_back( { { "role", "tool" },
-                               { "tool_call_id", toUtf8String( toolResult.m_ToolCallId ) },
-                               { "content", toolResultContent( toolResult ) } } );
-    }
-}
-
-
 bool parseFunctionToolCall( const nlohmann::json& aToolCall, uint64_t aRequestId,
                             AI_TOOL_CALL_RECORD& aRecord, wxString& aError )
 {
@@ -1232,41 +1275,7 @@ wxString AI_PROVIDER_SETTINGS::DefaultBaseUrl()
 
 wxString AI_PROVIDER_SETTINGS::DefaultModel()
 {
-    return wxS( "gpt-4.1-mini" );
-}
-
-
-AI_PROVIDER_SETTINGS AI_PROVIDER_SETTINGS::FromEnvironment()
-{
-    AI_PROVIDER_SETTINGS settings;
-
-    wxString value;
-
-    if( envValue( wxS( "KISURF_AI_BASE_URL" ), value )
-        || envValue( wxS( "OPENAI_BASE_URL" ), value )
-        || envValue( wxS( "base_url" ), value ) )
-    {
-        settings.m_BaseUrl = normalizedUrl( value );
-    }
-    else
-    {
-        settings.m_BaseUrl = DefaultBaseUrl();
-    }
-
-    if( envValue( wxS( "OPENAI_API_KEY" ), value ) )
-        settings.m_ApiKey = value;
-
-    if( envValue( wxS( "KISURF_AI_MODEL" ), value )
-        || envValue( wxS( "OPENAI_MODEL" ), value ) )
-    {
-        settings.m_Model = value;
-    }
-    else
-    {
-        settings.m_Model = DefaultModel();
-    }
-
-    return settings;
+    return wxS( "gpt-5.5" );
 }
 
 
@@ -1332,9 +1341,38 @@ AI_OPENAI_COMPAT_PROVIDER::AI_OPENAI_COMPAT_PROVIDER( AI_PROVIDER_SETTINGS aSett
 
 AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQUEST& aRequest )
 {
+    nlohmann::json retryHistory = nlohmann::json::array();
+
+    AI_PROVIDER_REQUEST requestForCompile = aRequest;
+    const AI_TOKEN_BUDGET_PLAN preflightPlan =
+            AiPlanProviderInputBudgetForRequest( requestForCompile );
+
+    if( preflightPlan.m_ShouldShrink )
+    {
+        retryHistory.push_back( {
+                { "attempt", 0 },
+                { "reason", "preflight_budget" },
+                { "action", "preflight_budget" },
+                { "budget_reason", toUtf8String( preflightPlan.m_Reason ) },
+                { "max_provider_input_chars", preflightPlan.m_MaxProviderInputChars },
+                { "max_tool_result_chars", preflightPlan.m_MaxToolResultChars },
+                { "max_context_activity_records",
+                  preflightPlan.m_MaxContextActivityRecords },
+                { "max_retrieved_memory_chars",
+                  preflightPlan.m_MaxRetrievedMemoryChars },
+                { "max_visual_data_uri_chars",
+                  preflightPlan.m_MaxVisualDataUriChars },
+                { "allow_visual_pixels", preflightPlan.m_AllowVisualPixels }
+        } );
+        requestForCompile =
+                AiApplyProviderInputBudgetPlan( requestForCompile, preflightPlan );
+    }
+
+    AI_PROVIDER_REQUEST compiledRequest = AiCompileProviderInput( requestForCompile );
+
     if( !m_Settings.HasApiKey() )
     {
-        return providerError( aRequest,
+        return providerError( compiledRequest,
                               wxS( "AI provider is not configured: open Model Settings and "
                                    "enter an API key." ) );
     }
@@ -1345,46 +1383,42 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     if( m_Settings.m_Model.IsEmpty() )
         m_Settings.m_Model = AI_PROVIDER_SETTINGS::DefaultModel();
 
-    wxString userContent;
-    userContent << wxS( "User request:\n" ) << aRequest.m_UserText << wxS( "\n\n" )
-                << wxS( "Editor context:\n" ) << aRequest.m_ContextSnapshot.AsPromptText()
-                << wxS( "\nStructured KiSurf context JSON:\n" )
-                << aRequest.m_ContextSnapshot.AsJsonText();
+    auto buildBody =
+            [&]( const AI_PROVIDER_REQUEST& compiledRequestForBody )
+            {
+    wxString userContent = compiledRequestForBody.m_CompiledUserMessageText;
 
     nlohmann::json body;
     body["model"] = toUtf8String( m_Settings.m_Model );
     body["temperature"] = 0.2;
     const wxString systemPrompt =
-            aRequest.m_SystemPromptOverride.IsEmpty()
+            compiledRequestForBody.m_SystemPromptOverride.IsEmpty()
                     ? wxString( wxS( "You are KiSurf's native KiCad assistant. Use the "
                                       "supplied editor context and tool catalog, propose "
                                       "safe previews before edits, and never assume an edit "
                                       "has been accepted until the user accepts it." ) )
-                    : aRequest.m_SystemPromptOverride;
+                    : compiledRequestForBody.m_SystemPromptOverride;
 
-    nlohmann::json messages = nlohmann::json::array(
-            { { { "role", "system" },
-                { "content", toUtf8String( systemPrompt ) } },
-              { { "role", "user" },
-                { "content",
-                  makeUserMessageContent( userContent, aRequest.m_ContextSnapshot.m_Visual ) } } } );
+    nlohmann::json messages = nlohmann::json::parse(
+            toUtf8String( AiCompileProviderMessagesJson( compiledRequestForBody,
+                                                         systemPrompt ) ),
+            nullptr, false );
 
-    appendToolResultMessages( messages, aRequest.m_ToolResults );
-    body["messages"] = std::move( messages );
+    body["messages"] = messages.is_array() ? std::move( messages ) : nlohmann::json::array();
 
-    if( !aRequest.m_ResponseFormatJson.IsEmpty() )
+    if( !compiledRequestForBody.m_ResponseFormatJson.IsEmpty() )
     {
         nlohmann::json responseFormat = nlohmann::json::parse(
-                toUtf8String( aRequest.m_ResponseFormatJson ), nullptr, false );
+                toUtf8String( compiledRequestForBody.m_ResponseFormatJson ), nullptr, false );
 
         if( responseFormat.is_object() )
             body["response_format"] = std::move( responseFormat );
     }
 
-    if( !aRequest.m_ToolCatalogJson.IsEmpty() )
+    if( !compiledRequestForBody.m_ToolCatalogJson.IsEmpty() )
     {
         nlohmann::json toolCatalog = nlohmann::json::parse(
-                toUtf8String( aRequest.m_ToolCatalogJson ), nullptr, false );
+                toUtf8String( compiledRequestForBody.m_ToolCatalogJson ), nullptr, false );
 
         if( toolCatalog.is_array() )
         {
@@ -1400,7 +1434,7 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
             body["tools"] = nlohmann::json::array();
         }
     }
-    else if( aRequest.m_DisableDefaultTools )
+    else if( compiledRequestForBody.m_DisableDefaultTools )
     {
         body["tools"] = nlohmann::json::array();
     }
@@ -1423,10 +1457,6 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
                             "Preferred single read-only interface for a bounded workspace "
                             "view: structured context, visual frame, and activity timeline.",
                             workspaceViewToolParameters() ),
-              functionTool( "kisurf_get_visual_frame",
-                            "Read current captured editor visual-frame metadata, and "
-                            "optionally the bounded pixel data URI. This is read-only.",
-                            visualFrameToolParameters() ),
               functionTool( "kisurf_get_activity_timeline",
                             "Read a bounded, optionally filtered timeline of recent "
                             "user/model/tool activity. This is read-only.",
@@ -1530,31 +1560,81 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     }
 
     body["parallel_tool_calls"] = false;
-
-    AI_HTTP_REQUEST request;
-    request.m_Method = wxS( "POST" );
-    request.m_Url = joinUrl( m_Settings.m_BaseUrl, wxS( "/chat/completions" ) );
-    request.m_Body = wxString::FromUTF8( body.dump().c_str() );
-    request.m_Headers.push_back( { wxS( "Accept" ), wxS( "application/json" ) } );
-    request.m_Headers.push_back( { wxS( "Content-Type" ), wxS( "application/json" ) } );
-    request.m_Headers.push_back( { wxS( "Authorization" ), wxS( "Bearer " ) + m_Settings.m_ApiKey } );
+    return body;
+            };
 
     AI_HTTP_RESPONSE httpResponse;
     wxString         error;
+    bool             gotHttpResponse = false;
 
-    if( !m_Handler || !m_Handler( request, httpResponse, error ) )
+    for( size_t providerAttempt = 0; providerAttempt < 2; ++providerAttempt )
     {
-        wxString detail = error.IsEmpty() ? wxString( wxS( "request failed" ) ) : error;
+        nlohmann::json body = buildBody( compiledRequest );
 
-        return providerError( aRequest,
-                              wxString( wxS( "AI provider network error: " ) ) + detail );
+        AI_HTTP_REQUEST request;
+        request.m_Method = wxS( "POST" );
+        request.m_Url = joinUrl( m_Settings.m_BaseUrl, wxS( "/chat/completions" ) );
+        request.m_Body = wxString::FromUTF8( body.dump().c_str() );
+        request.m_Headers.push_back( { wxS( "Accept" ), wxS( "application/json" ) } );
+        request.m_Headers.push_back( { wxS( "Content-Type" ), wxS( "application/json" ) } );
+        request.m_Headers.push_back( { wxS( "Authorization" ),
+                                       wxS( "Bearer " ) + m_Settings.m_ApiKey } );
+
+        error.Clear();
+
+        if( !m_Handler || !m_Handler( request, httpResponse, error ) )
+        {
+            wxString detail =
+                    error.IsEmpty() ? wxString( wxS( "request failed" ) ) : error;
+
+            return providerError( compiledRequest,
+                                  wxString( wxS( "AI provider network error: " ) ) + detail );
+        }
+
+        gotHttpResponse = true;
+
+        if( httpResponse.m_StatusCode >= 200 && httpResponse.m_StatusCode < 300 )
+            break;
+
+        const bool canShrinkRetry =
+                providerAttempt == 0
+                && providerFailureAllowsShrinkRetry( httpResponse.m_StatusCode,
+                                                     httpResponse.m_Body,
+                                                     compiledRequest,
+                                                     request.m_Body.length() );
+
+        if( canShrinkRetry )
+        {
+            retryHistory.push_back( {
+                    { "attempt", providerAttempt + 1 },
+                    { "status_code", httpResponse.m_StatusCode },
+                    { "reason", toUtf8String( providerRetryReason(
+                                          httpResponse.m_StatusCode,
+                                          httpResponse.m_Body ) ) },
+                    { "action", "shrunk_retry" },
+                    { "request_body_chars", request.m_Body.length() },
+                    { "estimated_input_chars", compiledRequest.m_ContextEstimatedChars },
+                    { "max_provider_input_chars", compiledRequest.m_MaxProviderInputChars }
+            } );
+            compiledRequest = shrinkProviderRequestForRetry( compiledRequest );
+            continue;
+        }
+
+        return attachProviderTrace(
+                providerError( compiledRequest,
+                               providerHttpFailureMessage( httpResponse.m_StatusCode,
+                                                           httpResponse.m_Body ) ),
+                retryHistory );
     }
 
-    if( httpResponse.m_StatusCode < 200 || httpResponse.m_StatusCode >= 300 )
+    if( !gotHttpResponse || httpResponse.m_StatusCode < 200
+        || httpResponse.m_StatusCode >= 300 )
     {
-        return providerError( aRequest,
-                              wxString::Format( wxS( "AI provider request failed with HTTP %d." ),
-                                                httpResponse.m_StatusCode ) );
+        return attachProviderTrace(
+                providerError( compiledRequest,
+                               providerHttpFailureMessage( httpResponse.m_StatusCode,
+                                                           httpResponse.m_Body ) ),
+                retryHistory );
     }
 
     try
@@ -1580,27 +1660,35 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
 
                 wxString toolError;
 
-                if( !parseToolCalls( message, aRequest.m_RequestId, toolCalls, toolError ) )
-                    return providerError( aRequest, toolError );
+                if( !parseToolCalls( message, compiledRequest.m_RequestId, toolCalls, toolError ) )
+                    return attachProviderTrace( providerError( compiledRequest, toolError ),
+                                                retryHistory );
             }
         }
 
         if( content.IsEmpty() && toolCalls.empty() )
-            return providerError( aRequest, wxS( "AI provider returned no message content." ) );
+            return attachProviderTrace(
+                    providerError( compiledRequest,
+                                   wxS( "AI provider returned no message content." ) ),
+                    retryHistory );
 
         AI_PROVIDER_RESPONSE response;
-        response.m_RequestId = aRequest.m_RequestId;
+        response.m_RequestId = compiledRequest.m_RequestId;
         response.m_Kind = AI_SUGGESTION_KIND::Chat;
         response.m_Title = wxS( "AI Provider" );
         response.m_Body = content.IsEmpty() ? wxString( wxS( "Tool call requested." ) ) : content;
+        response.m_ProviderTraceJson = providerTraceJson( retryHistory );
         response.m_ToolCalls = std::move( toolCalls );
         return response;
     }
     catch( const std::exception& e )
     {
-        return providerError( aRequest,
-                              wxString::Format( wxS( "AI provider returned invalid JSON: %s" ),
-                                                wxString::FromUTF8( e.what() ) ) );
+        return attachProviderTrace(
+                providerError( compiledRequest,
+                               wxString::Format(
+                                       wxS( "AI provider returned invalid JSON: %s" ),
+                                       wxString::FromUTF8( e.what() ) ) ),
+                retryHistory );
     }
 }
 

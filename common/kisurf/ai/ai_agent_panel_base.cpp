@@ -20,6 +20,9 @@ AI_AGENT_PANEL_BASE::AI_AGENT_PANEL_BASE( wxWindow* parent, wxWindowID id, const
 	m_ModelSettingsButton = new wxButton( this, wxID_ANY, _("Model..."), wxDefaultPosition, wxDefaultSize, 0 );
 	m_HeaderSizer->Add( m_ModelSettingsButton, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 6 );
 
+	m_NewChatButton = new wxButton( this, wxID_ANY, _("New Chat"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_HeaderSizer->Add( m_NewChatButton, 0, wxALIGN_CENTER_VERTICAL|wxRIGHT, 6 );
+
 	m_BackgroundAgentToggle = new wxCheckBox( this, wxID_ANY, _("Background Agent"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_HeaderSizer->Add( m_BackgroundAgentToggle, 0, wxALIGN_CENTER_VERTICAL, 0 );
 
@@ -103,6 +106,7 @@ AI_AGENT_PANEL_BASE::AI_AGENT_PANEL_BASE( wxWindow* parent, wxWindowID id, const
 
 	// Connect Events
 	m_ModelSettingsButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnModelSettings ), NULL, this );
+	m_NewChatButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnNewChat ), NULL, this );
 	m_BackgroundAgentToggle->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnBackgroundAgentToggled ), NULL, this );
 	m_Input->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptTextChanged ), NULL, this );
 	m_Input->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptEnter ), NULL, this );
@@ -117,6 +121,7 @@ AI_AGENT_PANEL_BASE::~AI_AGENT_PANEL_BASE()
 {
 	// Disconnect Events
 	m_ModelSettingsButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnModelSettings ), NULL, this );
+	m_NewChatButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnNewChat ), NULL, this );
 	m_BackgroundAgentToggle->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnBackgroundAgentToggled ), NULL, this );
 	m_Input->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptTextChanged ), NULL, this );
 	m_Input->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptEnter ), NULL, this );

@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <wx/filename.h>
 
@@ -91,17 +92,44 @@ nlohmann::json bboxJson( const BOX2I& aBox )
 }
 
 
-void addIssueItemGeometryFacts( const BOARD& aBoard, const KIID& aItemId,
-                                const char* aPrefix, nlohmann::json& aIssue )
+nlohmann::json worldBoundsJson( const BOX2I& aBox )
+{
+    return {
+        { "left", aBox.GetLeft() },
+        { "top", aBox.GetTop() },
+        { "right", aBox.GetRight() },
+        { "bottom", aBox.GetBottom() }
+    };
+}
+
+
+void mergeIssueWorldBounds( std::optional<BOX2I>& aWorldBounds,
+                            const BOX2I& aItemBounds )
+{
+    if( aWorldBounds )
+        aWorldBounds->Merge( aItemBounds );
+    else
+        aWorldBounds = aItemBounds;
+}
+
+
+std::optional<BOX2I> addIssueItemGeometryFacts( const BOARD& aBoard,
+                                                const KIID& aItemId,
+                                                const char* aPrefix,
+                                                nlohmann::json& aIssue )
 {
     BOARD_ITEM* item = aBoard.ResolveItem( aItemId, true );
 
     if( !item )
-        return;
+        return std::nullopt;
 
     const std::string prefix( aPrefix );
-    aIssue[prefix + "_item_bbox"] = bboxJson( item->GetBoundingBox() );
+    const BOX2I       itemBounds = item->GetBoundingBox();
+
+    aIssue[prefix + "_item_bbox"] = bboxJson( itemBounds );
     aIssue[prefix + "_item_type"] = static_cast<int>( item->Type() );
+
+    return itemBounds;
 }
 
 
@@ -397,22 +425,44 @@ AI_SESSION_VALIDATION_RESULT KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::RunValida
                                         static_cast<PCB_LAYER_ID>( aLayer ) ) );
                     }
 
+                    std::optional<BOX2I> issueWorldBounds;
+
                     if( aItem->GetMainItemID() != niluuid )
                     {
                         issue["main_item_uuid"] =
                                 toUtf8String( aItem->GetMainItemID().AsString() );
-                        addIssueItemGeometryFacts( *validationBoard,
-                                                   aItem->GetMainItemID(), "main",
-                                                   issue );
+
+                        if( std::optional<BOX2I> itemBounds =
+                                    addIssueItemGeometryFacts(
+                                            *validationBoard,
+                                            aItem->GetMainItemID(), "main",
+                                            issue ) )
+                        {
+                            mergeIssueWorldBounds( issueWorldBounds,
+                                                   *itemBounds );
+                        }
                     }
 
                     if( aItem->GetAuxItemID() != niluuid )
                     {
                         issue["aux_item_uuid"] =
                                 toUtf8String( aItem->GetAuxItemID().AsString() );
-                        addIssueItemGeometryFacts( *validationBoard,
-                                                   aItem->GetAuxItemID(), "aux",
-                                                   issue );
+
+                        if( std::optional<BOX2I> itemBounds =
+                                    addIssueItemGeometryFacts(
+                                            *validationBoard,
+                                            aItem->GetAuxItemID(), "aux",
+                                            issue ) )
+                        {
+                            mergeIssueWorldBounds( issueWorldBounds,
+                                                   *itemBounds );
+                        }
+                    }
+
+                    if( issueWorldBounds )
+                    {
+                        issue["world_bounds"] = worldBoundsJson( *issueWorldBounds );
+                        issue["bbox"] = bboxJson( *issueWorldBounds );
                     }
 
                     issues.push_back( std::move( issue ) );

@@ -82,6 +82,8 @@ void AI_MODEL_CONFIG::Normalize()
         m_Model = AI_PROVIDER_SETTINGS::DefaultModel();
 
     m_ApiKey.Trim( true ).Trim( false );
+
+    m_ResearchFolder.Trim( true ).Trim( false );
 }
 
 
@@ -181,6 +183,7 @@ bool AI_MODEL_CONFIG_STORE::Load( AI_MODEL_CONFIG& aConfig, wxString* aError ) c
 
             jsonString( parsed, "base_url", aConfig.m_BaseUrl );
             jsonString( parsed, "model", aConfig.m_Model );
+            jsonString( parsed, "research_folder", aConfig.m_ResearchFolder );
             loadedFile = true;
         }
         catch( const std::exception& e )
@@ -230,6 +233,7 @@ bool AI_MODEL_CONFIG_STORE::Save( const AI_MODEL_CONFIG& aConfig, wxString* aErr
         { "provider", toUtf8String( AiModelProviderKindToken( config.m_ProviderKind ) ) },
         { "base_url", toUtf8String( config.m_BaseUrl ) },
         { "model", toUtf8String( config.m_Model ) },
+        { "research_folder", toUtf8String( config.m_ResearchFolder ) },
         { "api_key_ref", toUtf8String( SecretKeyForProvider( config.m_ProviderKind ) ) }
     };
 

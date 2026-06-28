@@ -178,6 +178,23 @@ AI_SEMANTIC_UI_TREE AiAgentPanelSemanticTree(
              wxS( "text" ), wxS( "Log entries" ), true, wxEmptyString,
              AI_SEMANTIC_UI_TEXT_POLICY::Plain, logText );
 
+    if( aView.m_HasProviderRecovery )
+    {
+        if( !aView.m_ProviderRecoveryEpisodeJson.IsEmpty() )
+        {
+            addNode( tree, wxS( "agent.recovery.review" ),
+                     wxS( "agent.tabs.log" ), wxS( "text" ),
+                     wxS( "Recovery review" ), true, wxEmptyString,
+                     AI_SEMANTIC_UI_TEXT_POLICY::Plain,
+                     aView.m_ProviderRecoveryEpisodeJson );
+        }
+
+        addNode( tree, wxS( "agent.recovery.execute" ), wxS( "agent.tabs.log" ),
+                 wxS( "button" ), wxS( "Recover" ),
+                 aView.m_CanExecuteProviderRecovery, wxS( "invoke" ),
+                 AI_SEMANTIC_UI_TEXT_POLICY::None, wxEmptyString, true );
+    }
+
     addNode( tree, wxS( "agent.input" ), wxS( "agent.root" ), wxS( "textbox" ),
              wxS( "Input" ), true, wxS( "set_text" ),
              AI_SEMANTIC_UI_TEXT_POLICY::Redacted );

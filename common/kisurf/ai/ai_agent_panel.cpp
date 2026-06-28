@@ -13,11 +13,14 @@
 
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
+#include <wx/app.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
 #include <wx/defs.h>
+#include <wx/dirdlg.h>
 #include <wx/msgdlg.h>
 #include <wx/notebook.h>
 #include <wx/textctrl.h>
@@ -568,6 +571,7 @@ public:
         m_BaseUrl->SetValue( m_Config.m_BaseUrl );
         m_Model->SetValue( m_Config.m_Model );
         m_ApiKey->SetValue( m_Config.m_ApiKey );
+        m_ResearchFolder->SetValue( m_Config.m_ResearchFolder );
 
         m_ProviderChoice->Bind( wxEVT_CHOICE, [this]( wxCommandEvent& )
         {
@@ -578,6 +582,16 @@ public:
                 m_ApiKey->SetValue( m_Config.m_ApiKey );
             else
                 m_ApiKey->Clear();
+        } );
+
+        m_ResearchFolderBrowse->Bind( wxEVT_BUTTON, [this]( wxCommandEvent& )
+        {
+            wxDirDialog dialog( this, _( "Select research folder" ),
+                                m_ResearchFolder->GetValue(),
+                                wxDD_DEFAULT_STYLE | wxDD_DIR_MUST_EXIST );
+
+            if( dialog.ShowModal() == wxID_OK )
+                m_ResearchFolder->SetValue( dialog.GetPath() );
         } );
 
         SetMinSize( FromDIP( wxSize( 520, -1 ) ) );
@@ -592,6 +606,7 @@ public:
         config.m_BaseUrl = m_BaseUrl->GetValue();
         config.m_Model = m_Model->GetValue();
         config.m_ApiKey = m_ApiKey->GetValue();
+        config.m_ResearchFolder = m_ResearchFolder->GetValue();
         config.Normalize();
         return config;
     }
@@ -756,6 +771,9 @@ wxString AiAgentComposerStatusText( const AI_AGENT_COMPOSER_STATUS_VIEW& aView )
     if( aView.m_HasActiveSuggestion )
         return wxS( "Preview ready" );
 
+    if( aView.m_BackgroundAgentBusy )
+        return wxS( "Background Agent thinking" );
+
     if( aView.m_BackgroundAgentEnabled )
         return wxS( "Background Agent on" );
 
@@ -819,6 +837,19 @@ bool AiAgentShouldAutoPreviewBackgroundSuggestion(
 }
 
 
+AI_AGENT_BACKGROUND_UPDATE_ACTION AiAgentBackgroundUpdateAction(
+        const AI_AGENT_BACKGROUND_UPDATE_VIEW& aView )
+{
+    if( !aView.m_BackgroundAgentEnabled || !aView.m_HasContextProvider )
+        return AI_AGENT_BACKGROUND_UPDATE_ACTION::Ignore;
+
+    if( aView.m_UpdateInFlight )
+        return AI_AGENT_BACKGROUND_UPDATE_ACTION::DropWhileBusy;
+
+    return AI_AGENT_BACKGROUND_UPDATE_ACTION::QueueAsync;
+}
+
+
 bool AiAgentReviewCommandTargetsChatSession(
         bool aHasActiveSuggestion, bool aHasPendingChatSession )
 {
@@ -832,9 +863,12 @@ AI_AGENT_PANEL::AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
         AI_AGENT_PANEL_BASE( aParent ),
         m_EditorKind( aEditorKind ),
         m_ContextProvider( std::move( aContextProvider ) ),
-        m_Model( std::make_unique<AI_AGENT_PANEL_MODEL>( MakeDefaultAiProvider() ) )
+        m_Model( std::make_unique<AI_AGENT_PANEL_MODEL>( MakeDefaultAiProvider() ) ),
+        m_BackgroundUpdateState( std::make_shared<BACKGROUND_UPDATE_STATE>() )
 {
     m_BackgroundAgentToggle->SetValue( m_Model->BackgroundAgentEnabled() );
+
+    loadConfiguredResearchFolder( AI_MODEL_CONFIG_STORE::LoadUserConfig(), false );
 
     updateModeControls();
     RefreshTranscript();
@@ -844,10 +878,24 @@ AI_AGENT_PANEL::AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
 }
 
 
+AI_AGENT_PANEL::~AI_AGENT_PANEL()
+{
+    if( m_BackgroundUpdateState )
+        m_BackgroundUpdateState->m_Alive.store( false );
+}
+
+
 void AI_AGENT_PANEL::OnModelSettings( wxCommandEvent& aEvent )
 {
     aEvent.Skip( false );
     ShowModelSettingsDialog();
+}
+
+
+void AI_AGENT_PANEL::OnNewChat( wxCommandEvent& aEvent )
+{
+    aEvent.Skip( false );
+    StartNewChat();
 }
 
 
@@ -909,6 +957,23 @@ void AI_AGENT_PANEL::OnRejectSuggestion( wxCommandEvent& aEvent )
 }
 
 
+void AI_AGENT_PANEL::StartNewChat()
+{
+    if( HasPendingChatSessionPreview() )
+        rejectActiveChatSession();
+
+    m_Model->StartNewChat();
+
+    if( m_Input )
+        m_Input->Clear();
+
+    RefreshTranscript();
+    RefreshSuggestions();
+    RefreshLog();
+    updateComposerStatus();
+}
+
+
 void AI_AGENT_PANEL::SendCurrentText()
 {
     const wxString text = m_Input->GetValue();
@@ -954,6 +1019,7 @@ void AI_AGENT_PANEL::ConfigureActionToolCalls(
     m_SessionToolCallHandler = nullptr;
     m_HasSessionPreviewService = aPreviewService != nullptr;
     m_HasSessionAcceptAdapter = aAcceptAdapter != nullptr;
+    m_AcceptAdapter = aAcceptAdapter;
     m_ActionRunner = std::move( aRunner );
     m_ToolExecutionPolicy = AI_TOOL_EXECUTION_POLICY();
 
@@ -1047,16 +1113,51 @@ bool AI_AGENT_PANEL::ShowModelSettingsDialog()
     wxString saveError;
     AI_MODEL_CONFIG_STORE store;
 
-    if( !store.Save( dialog.Config(), &saveError ) )
+    AI_MODEL_CONFIG savedConfig = dialog.Config();
+
+    if( !store.Save( savedConfig, &saveError ) )
     {
         wxMessageBox( saveError, _( "Model Settings" ), wxOK | wxICON_ERROR, this );
         return false;
     }
 
+    loadConfiguredResearchFolder( savedConfig, true );
+
     m_Model->ReloadDefaultProviders();
     RefreshLog();
     updateComposerStatus();
     return true;
+}
+
+
+void AI_AGENT_PANEL::loadConfiguredResearchFolder( const AI_MODEL_CONFIG& aConfig,
+                                                  bool aReportErrors )
+{
+    m_Model->SetLocalTextResearchDirectory( aConfig.m_ResearchFolder );
+
+    if( aConfig.m_ResearchFolder.IsEmpty() )
+        return;
+
+    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+
+    if( snapshot.m_ProjectId.IsEmpty() || snapshot.m_DocumentId.IsEmpty() )
+        return;
+
+    wxString loadError;
+
+    if( m_Model->LoadLocalTextResearchDirectory( aConfig.m_ResearchFolder,
+                                                 snapshot.m_ProjectId,
+                                                 snapshot.m_DocumentId,
+                                                 loadError ) )
+    {
+        return;
+    }
+
+    if( aReportErrors && !loadError.IsEmpty() )
+    {
+        wxMessageBox( loadError, _( "Model Settings" ), wxOK | wxICON_WARNING,
+                      this );
+    }
 }
 
 
@@ -1078,6 +1179,36 @@ AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const
             || ( hasPendingChatSession && m_HasSessionAcceptAdapter );
     view.m_MessageCount = m_Model->Messages().size();
     view.m_SuggestionCount = m_Model->Suggestions().size();
+    AI_PROVIDER_RECOVERY_POLICY chatRecovery =
+            m_Model->LatestChatProviderRecoveryPolicy();
+    AI_PROVIDER_RECOVERY_POLICY nextActionRecovery =
+            m_Model->LatestNextActionProviderRecoveryPolicy();
+    view.m_HasProviderRecovery =
+            chatRecovery.m_Available || nextActionRecovery.m_Available;
+    view.m_CanExecuteProviderRecovery =
+            view.m_HasProviderRecovery && m_AcceptAdapter != nullptr;
+
+    if( view.m_HasProviderRecovery )
+    {
+        AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+        AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT recoveryContext;
+        recoveryContext.m_DocumentRevision = snapshot.m_Version.m_DocumentRevision;
+
+        const bool useNextAction =
+                nextActionRecovery.m_Available
+                && ( !chatRecovery.m_Available
+                     || nextActionRecovery.m_RequestId > chatRecovery.m_RequestId );
+
+        AI_PROVIDER_RECOVERY_EPISODE episode =
+                useNextAction
+                        ? m_Model->LatestNextActionProviderRecoveryEpisode(
+                                  recoveryContext )
+                        : m_Model->LatestChatProviderRecoveryEpisode(
+                                  recoveryContext );
+
+        view.m_ProviderRecoveryEpisodeJson = episode.m_EpisodeJson;
+    }
+
     AI_AGENT_COMPOSER_STATUS_VIEW status;
     status.m_BackgroundAgentEnabled = view.m_BackgroundAgentEnabled;
     status.m_InputHasText = view.m_InputHasText;
@@ -1194,7 +1325,82 @@ AI_SEMANTIC_UI_ACTION_RESULT AI_AGENT_PANEL::InvokeSemanticUiAction(
                                         : semanticActionError( wxS( "action_failed" ),
                                                                aRequest.m_NodeId );
 
+    if( aRequest.m_NodeId == wxS( "agent.recovery.execute" ) )
+    {
+        if( !aRequest.m_UserConfirmed )
+            return semanticActionError(
+                    wxS( "confirmation_required" ),
+                    wxS( "agent.recovery.execute requires user confirmation" ) );
+
+        return RecoverLatestProviderFailure()
+                       ? semanticActionOk()
+                       : semanticActionError( wxS( "action_failed" ),
+                                              aRequest.m_NodeId );
+    }
+
     return semanticActionError( wxS( "unsupported_action" ), aRequest.m_NodeId );
+}
+
+
+bool AI_AGENT_PANEL::RecoverLatestProviderFailure()
+{
+    if( !m_AcceptAdapter )
+        return false;
+
+    AI_PROVIDER_RECOVERY_POLICY chatRecovery =
+            m_Model->LatestChatProviderRecoveryPolicy();
+    AI_PROVIDER_RECOVERY_POLICY nextActionRecovery =
+            m_Model->LatestNextActionProviderRecoveryPolicy();
+
+    if( !chatRecovery.m_Available && !nextActionRecovery.m_Available )
+        return false;
+
+    const bool useNextAction =
+            nextActionRecovery.m_Available
+            && ( !chatRecovery.m_Available
+                 || nextActionRecovery.m_RequestId > chatRecovery.m_RequestId );
+
+    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+
+    AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT recoveryContext;
+    recoveryContext.m_DocumentRevision = snapshot.m_Version.m_DocumentRevision;
+
+    AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_OPTIONS options;
+    options.m_UserReviewed = true;
+    options.m_Reviewer = wxS( "agent.panel" );
+    options.m_ReviewNote = wxS( "confirmed semantic provider recovery action" );
+
+    AI_ACTIVITY_RECORD requestRecord;
+    requestRecord.m_Kind = AI_ACTIVITY_KIND::UserAction;
+    requestRecord.m_EditorKind = m_EditorKind;
+    requestRecord.m_ActionName = wxS( "provider_recovery.replay" );
+    requestRecord.m_Allowed = true;
+    requestRecord.m_Message =
+            useNextAction ? wxS( "Next Action provider recovery replay requested." )
+                          : wxS( "Chat provider recovery replay requested." );
+    m_Model->RecordActivity( std::move( requestRecord ) );
+
+    AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_RESULT result =
+            useNextAction
+                    ? m_Model->ExecuteNextActionProviderRecoveryReplayRequest(
+                              recoveryContext, options, *m_AcceptAdapter )
+                    : m_Model->ExecuteChatProviderRecoveryReplayRequest(
+                              recoveryContext, options, *m_AcceptAdapter );
+
+    AI_ACTIVITY_RECORD resultRecord;
+    resultRecord.m_Kind = AI_ACTIVITY_KIND::ToolResult;
+    resultRecord.m_EditorKind = m_EditorKind;
+    resultRecord.m_ActionName = wxS( "provider_recovery.replay" );
+    resultRecord.m_ResultJson = result.m_ResultJson;
+    resultRecord.m_ErrorCode = result.m_ErrorCode;
+    resultRecord.m_Allowed = result.m_Ok;
+    resultRecord.m_Executed = result.m_Ok;
+    resultRecord.m_Message = result.m_Message;
+    m_Model->RecordActivity( std::move( resultRecord ) );
+
+    RefreshLog();
+    updateComposerStatus();
+    return result.m_Ok;
 }
 
 
@@ -1501,28 +1707,10 @@ void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )
                                                         activity.m_Sequence );
         m_Model->ExpireSuggestions( currentContext );
 
-        std::optional<AI_SUGGESTION_RECORD> suggestion =
-                m_Model->UpdateSuggestionsIfBackgroundEnabled( std::move( snapshot ),
-                                                               std::move( activity ),
-                                                               wxS( "activity" ) );
-
-        AI_AGENT_BACKGROUND_PREVIEW_VIEW previewView;
-        previewView.m_BackgroundAgentEnabled = BackgroundAgentEnabled();
-        previewView.m_HasNewSuggestion = suggestion.has_value();
-        previewView.m_HasPreviewHandler = static_cast<bool>( m_PreviewSuggestionHandler );
-
-        if( suggestion )
-        {
-            previewView.m_CanPreviewSuggestion =
-                    m_Model->CanPreviewSuggestion( suggestion->m_Id );
-            previewView.m_TargetsWorkspacePreview =
-                    AiAgentSuggestionTargetsWorkspacePreview( *suggestion );
-        }
-
-        if( AiAgentShouldAutoPreviewBackgroundSuggestion( previewView ) )
-            PreviewLatestSuggestion();
-        else
-            RefreshSuggestions();
+        queueBackgroundSuggestionUpdate( std::move( snapshot ),
+                                         std::move( activity ),
+                                         wxS( "activity" ) );
+        RefreshSuggestions();
     }
 
     RefreshLog();
@@ -1566,6 +1754,7 @@ void AI_AGENT_PANEL::updateComposerStatus()
 
     AI_AGENT_COMPOSER_STATUS_VIEW view;
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
+    view.m_BackgroundAgentBusy = backgroundSuggestionUpdateInFlight();
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
     view.m_HasActiveSuggestion =
             m_Model->LatestActiveSuggestionId().has_value()
@@ -1576,6 +1765,118 @@ void AI_AGENT_PANEL::updateComposerStatus()
     m_ComposerStatus->SetLabel( AiAgentComposerStatusText( view ) );
     m_ComposerStatus->Wrap( -1 );
     Layout();
+}
+
+
+void AI_AGENT_PANEL::queueBackgroundSuggestionUpdate( AI_CONTEXT_SNAPSHOT aSnapshot,
+                                                      AI_ACTIVITY_RECORD aActivity,
+                                                      wxString aReason )
+{
+    if( !m_BackgroundUpdateState )
+        return;
+
+    std::shared_ptr<BACKGROUND_UPDATE_STATE> state = m_BackgroundUpdateState;
+    const uint64_t generation = state->m_Generation.fetch_add( 1 ) + 1;
+
+    AI_AGENT_BACKGROUND_UPDATE_VIEW view;
+    view.m_BackgroundAgentEnabled = BackgroundAgentEnabled();
+    view.m_HasContextProvider = static_cast<bool>( m_ContextProvider );
+    view.m_UpdateInFlight = state->m_InFlight.load();
+
+    if( AiAgentBackgroundUpdateAction( view )
+        != AI_AGENT_BACKGROUND_UPDATE_ACTION::QueueAsync )
+    {
+        return;
+    }
+
+    bool expected = false;
+
+    if( !state->m_InFlight.compare_exchange_strong( expected, true ) )
+        return;
+
+    const wxString researchDirectory = m_Model->LocalTextResearchDirectory();
+
+    std::thread(
+            [state, panel = this, generation,
+             snapshot = std::move( aSnapshot ),
+             activity = std::move( aActivity ),
+             reason = std::move( aReason ),
+             researchDirectory]() mutable
+            {
+                std::optional<AI_SUGGESTION_RECORD> suggestion;
+
+                AI_AGENT_PANEL_MODEL workerModel( MakeDefaultAiProvider() );
+                workerModel.SetBackgroundAgentEnabled( true );
+                workerModel.SetLocalTextResearchDirectory( researchDirectory );
+                suggestion = workerModel.UpdateSuggestionsIfBackgroundEnabled(
+                        std::move( snapshot ), std::move( activity ), reason );
+
+                if( !state->m_Alive.load() || !wxTheApp )
+                {
+                    state->m_InFlight.store( false );
+                    return;
+                }
+
+                wxTheApp->CallAfter(
+                        [state, panel, generation,
+                         suggestion = std::move( suggestion )]() mutable
+                        {
+                            state->m_InFlight.store( false );
+
+                            if( !state->m_Alive.load()
+                                || generation != state->m_Generation.load() )
+                            {
+                                return;
+                            }
+
+                            panel->finishBackgroundSuggestionUpdate(
+                                    generation, std::move( suggestion ) );
+                        } );
+            } )
+            .detach();
+
+    updateComposerStatus();
+}
+
+
+void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(
+        uint64_t aGeneration,
+        std::optional<AI_SUGGESTION_RECORD> aSuggestion )
+{
+    wxUnusedVar( aGeneration );
+
+    std::optional<AI_SUGGESTION_RECORD> stored;
+
+    if( aSuggestion )
+        stored = m_Model->AddSuggestion( std::move( *aSuggestion ) );
+
+    AI_AGENT_BACKGROUND_PREVIEW_VIEW previewView;
+    previewView.m_BackgroundAgentEnabled = BackgroundAgentEnabled();
+    previewView.m_HasNewSuggestion = stored.has_value();
+    previewView.m_HasPreviewHandler = static_cast<bool>( m_PreviewSuggestionHandler );
+
+    if( stored )
+    {
+        previewView.m_CanPreviewSuggestion =
+                m_Model->CanPreviewSuggestion( stored->m_Id );
+        previewView.m_TargetsWorkspacePreview =
+                AiAgentSuggestionTargetsWorkspacePreview( *stored );
+    }
+
+    if( AiAgentShouldAutoPreviewBackgroundSuggestion( previewView ) )
+        PreviewLatestSuggestion();
+    else
+        RefreshSuggestions();
+
+    RefreshLog();
+    updateComposerStatus();
+}
+
+
+bool AI_AGENT_PANEL::backgroundSuggestionUpdateInFlight() const
+{
+    return m_BackgroundUpdateState
+           && m_BackgroundUpdateState->m_InFlight.load();
 }
 
 

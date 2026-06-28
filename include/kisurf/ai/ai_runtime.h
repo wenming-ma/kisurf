@@ -20,6 +20,9 @@ public:
             const AI_TOOL_CALL_RECORD& aToolCall ) = 0;
 };
 
+class AI_PROMPT_TRACE_STORE;
+class AI_ARTIFACT_STORE;
+
 class KICOMMON_API AI_RUNTIME
 {
 public:
@@ -31,6 +34,8 @@ public:
 
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void SetToolCallHandler( AI_TOOL_CALL_HANDLER* aHandler );
+    void SetPromptTraceStore( AI_PROMPT_TRACE_STORE* aStore );
+    void SetArtifactStore( AI_ARTIFACT_STORE* aStore );
     std::vector<AI_TRACE_RECORD> TraceRecords() const;
     std::vector<AI_ACTIVITY_RECORD> ActivityRecords() const;
 
@@ -40,6 +45,8 @@ private:
     AI_ACTIVITY_LOG              m_OwnedActivityLog;
     AI_ACTIVITY_LOG*             m_ActivityLog = nullptr;
     AI_TOOL_CALL_HANDLER*        m_ToolCallHandler = nullptr;
+    AI_PROMPT_TRACE_STORE*       m_PromptTraceStore = nullptr;
+    AI_ARTIFACT_STORE*           m_ArtifactStore = nullptr;
     mutable std::mutex           m_Mutex;
     std::vector<AI_TRACE_RECORD> m_TraceRecords;
 };

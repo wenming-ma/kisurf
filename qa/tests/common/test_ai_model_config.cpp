@@ -99,6 +99,7 @@ BOOST_AUTO_TEST_CASE( StorePersistsNonSecretJsonAndSecretBackedApiKey )
     config.m_BaseUrl = wxS( "https://unit.example.test/v1/" );
     config.m_Model = wxS( "unit-model" );
     config.m_ApiKey = wxS( "unit-test-key" );
+    config.m_ResearchFolder = wxS( "C:/unit/research" );
 
     wxString error;
     AI_MODEL_CONFIG_STORE saveStore(
@@ -110,6 +111,7 @@ BOOST_AUTO_TEST_CASE( StorePersistsNonSecretJsonAndSecretBackedApiKey )
     BOOST_CHECK( payload.find( "unit-test-key" ) == std::string::npos );
     BOOST_CHECK( payload.find( "openai-compatible" ) != std::string::npos );
     BOOST_CHECK( payload.find( "https://unit.example.test/v1" ) != std::string::npos );
+    BOOST_CHECK( payload.find( "C:/unit/research" ) != std::string::npos );
 
     AI_MODEL_CONFIG loaded;
     AI_MODEL_CONFIG_STORE loadStore(
@@ -121,6 +123,8 @@ BOOST_AUTO_TEST_CASE( StorePersistsNonSecretJsonAndSecretBackedApiKey )
                        wxString( wxS( "https://unit.example.test/v1" ) ) );
     BOOST_CHECK_EQUAL( loaded.m_Model, wxString( wxS( "unit-model" ) ) );
     BOOST_CHECK_EQUAL( loaded.m_ApiKey, wxString( wxS( "unit-test-key" ) ) );
+    BOOST_CHECK_EQUAL( loaded.m_ResearchFolder,
+                       wxString( wxS( "C:/unit/research" ) ) );
 }
 
 

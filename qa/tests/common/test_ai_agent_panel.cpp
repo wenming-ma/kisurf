@@ -57,6 +57,18 @@ public:
                 decltype( &AI_AGENT_PANEL_BASE_SURFACE_TEST::m_SendButton )>;
     }
 
+    static constexpr bool HasNewChatButtonMember()
+    {
+        return std::is_member_object_pointer_v<
+                decltype( &AI_AGENT_PANEL_BASE_SURFACE_TEST::m_NewChatButton )>;
+    }
+
+    static constexpr bool HasNewChatEvent()
+    {
+        return std::is_member_function_pointer_v<
+                decltype( &AI_AGENT_PANEL_BASE_SURFACE_TEST::OnNewChat )>;
+    }
+
     static constexpr bool HasPromptTextChangedEvent()
     {
         return std::is_member_function_pointer_v<
@@ -104,8 +116,17 @@ BOOST_AUTO_TEST_CASE( AgentPanelBaseExposesExpectedControlSurface )
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasComposerStatusMember() );
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasInputMember() );
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasSendButtonMember() );
+    BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasNewChatButtonMember() );
+    BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasNewChatEvent() );
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasPromptTextChangedEvent() );
     BOOST_CHECK( !AI_AGENT_PANEL_BASE_SURFACE_TEST::HasModeChoiceMember() );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelExposesNewChatSurface )
+{
+    BOOST_CHECK( ( std::is_member_function_pointer_v<
+            decltype( &AI_AGENT_PANEL::StartNewChat )> ) );
 }
 
 
@@ -200,6 +221,13 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesSuggestionReviewCommands )
             decltype( &AI_AGENT_PANEL::RejectLatestSuggestion )> ) );
     BOOST_CHECK( ( std::is_member_function_pointer_v<
             decltype( &AI_AGENT_PANEL::HasPendingChatSessionPreview )> ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelExposesProviderRecoveryCommand )
+{
+    BOOST_CHECK( ( std::is_member_function_pointer_v<
+            decltype( &AI_AGENT_PANEL::RecoverLatestProviderFailure )> ) );
 }
 
 
@@ -299,6 +327,11 @@ BOOST_AUTO_TEST_CASE( AgentPanelFormatsComposerStatusLifecycle )
     BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
                        wxString( wxS( "Background Agent on" ) ) );
 
+    view.m_BackgroundAgentBusy = true;
+    BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
+                       wxString( wxS( "Background Agent thinking" ) ) );
+
+    view.m_BackgroundAgentBusy = false;
     view.m_HasActiveSuggestion = true;
     BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
                        wxString( wxS( "Preview ready" ) ) );
@@ -310,6 +343,31 @@ BOOST_AUTO_TEST_CASE( AgentPanelFormatsComposerStatusLifecycle )
     view.m_LastRequestCancelled = true;
     BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
                        wxString( wxS( "Stopped request #7" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelQueuesBackgroundUpdatesAsAsyncWork )
+{
+    AI_AGENT_BACKGROUND_UPDATE_VIEW view;
+    view.m_BackgroundAgentEnabled = true;
+    view.m_HasContextProvider = true;
+
+    BOOST_CHECK( AiAgentBackgroundUpdateAction( view )
+                 == AI_AGENT_BACKGROUND_UPDATE_ACTION::QueueAsync );
+
+    view.m_UpdateInFlight = true;
+    BOOST_CHECK( AiAgentBackgroundUpdateAction( view )
+                 == AI_AGENT_BACKGROUND_UPDATE_ACTION::DropWhileBusy );
+
+    view.m_UpdateInFlight = false;
+    view.m_BackgroundAgentEnabled = false;
+    BOOST_CHECK( AiAgentBackgroundUpdateAction( view )
+                 == AI_AGENT_BACKGROUND_UPDATE_ACTION::Ignore );
+
+    view.m_BackgroundAgentEnabled = true;
+    view.m_HasContextProvider = false;
+    BOOST_CHECK( AiAgentBackgroundUpdateAction( view )
+                 == AI_AGENT_BACKGROUND_UPDATE_ACTION::Ignore );
 }
 
 

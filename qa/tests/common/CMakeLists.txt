@@ -44,6 +44,7 @@ set( QA_COMMON_SRCS
     test_ai_python_worker.cpp
     test_ai_session_tool_call_handler.cpp
     test_ai_agent_action.cpp
+    test_ai_artifact_store.cpp
     test_ai_agent_menu_discoverability.cpp
     test_ai_action_catalog.cpp
     test_ai_action_tool_call_handler.cpp
@@ -51,6 +52,10 @@ set( QA_COMMON_SRCS
     test_ai_activity_log.cpp
     test_ai_editor_activity_recorder.cpp
     test_ai_context_index.cpp
+    test_ai_local_text_memory.cpp
+    test_ai_memory_store.cpp
+    test_ai_token_budget_manager.cpp
+    test_ai_prompt_trace_store.cpp
     test_ai_context_anchor_provider.cpp
     test_ai_visual_snapshot.cpp
     test_ai_accept_applier.cpp

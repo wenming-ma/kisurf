@@ -12,34 +12,9 @@
 #include <utility>
 #include <vector>
 #include <wx/arrstr.h> // for MSVC to see std::vector<wxString> is exported from wx
-#include <wx/utils.h>
 
 namespace
 {
-class ENV_GUARD
-{
-public:
-    explicit ENV_GUARD( wxString aName ) :
-            m_Name( std::move( aName ) ),
-            m_HadValue( wxGetEnv( m_Name, &m_Value ) )
-    {
-    }
-
-    ~ENV_GUARD()
-    {
-        if( m_HadValue )
-            wxSetEnv( m_Name, m_Value );
-        else
-            wxUnsetEnv( m_Name );
-    }
-
-private:
-    wxString m_Name;
-    wxString m_Value;
-    bool     m_HadValue = false;
-};
-
-
 AI_TOOL_CALL_RECORD toolCall( const wxString& aToolName, const wxString& aArguments )
 {
     AI_TOOL_CALL_RECORD call;
@@ -175,23 +150,6 @@ AI_SUGGESTION_RECORD operationOnlyPanelFillSuggestion()
 
 
 BOOST_AUTO_TEST_SUITE( AiDirectUseSmoke )
-
-
-BOOST_AUTO_TEST_CASE( EnvironmentLowercaseBaseUrlAliasConfiguresProvider )
-{
-    ENV_GUARD kisurfBaseGuard( wxS( "KISURF_AI_BASE_URL" ) );
-    ENV_GUARD openaiBaseGuard( wxS( "OPENAI_BASE_URL" ) );
-    ENV_GUARD lowerBaseGuard( wxS( "base_url" ) );
-
-    wxUnsetEnv( wxS( "KISURF_AI_BASE_URL" ) );
-    wxUnsetEnv( wxS( "OPENAI_BASE_URL" ) );
-    wxSetEnv( wxS( "base_url" ), wxS( "https://direct-use.example.test/v1/" ) );
-
-    AI_PROVIDER_SETTINGS settings = AI_PROVIDER_SETTINGS::FromEnvironment();
-
-    BOOST_CHECK_EQUAL( settings.m_BaseUrl,
-                       wxString( wxS( "https://direct-use.example.test/v1" ) ) );
-}
 
 
 BOOST_AUTO_TEST_CASE( ProviderAdvertisesDirectUseToolSurface )

@@ -10,15 +10,23 @@
 
 #include <kisurf/ai/ai_next_action_runtime.h>
 
+#include <kisurf/ai/ai_artifact_store.h>
 #include <kisurf/ai/ai_atomic_operation_executor.h>
+#include <kisurf/ai/ai_local_text_memory.h>
+#include <kisurf/ai/ai_memory_store.h>
+#include <kisurf/ai/ai_provider_input_compiler.h>
 #include <kisurf/ai/ai_execution_session.h>
 #include <kisurf/ai/ai_next_action_candidate_library.h>
+#include <kisurf/ai/ai_next_action_session_store.h>
+#include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
+#include <kisurf/ai/ai_visual_snapshot.h>
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -26,7 +34,11 @@
 #include <string>
 #include <utility>
 
+#include <wx/base64.h>
+#include <wx/buffer.h>
 #include <wx/ffile.h>
+#include <wx/image.h>
+#include <wx/mstream.h>
 
 namespace
 {
@@ -2271,6 +2283,231 @@ nlohmann::json parseObjectBody( const wxString& aBody )
 }
 
 
+void copyStableModeField( const nlohmann::json& aSource,
+                          nlohmann::json& aTarget,
+                          const char* aField )
+{
+    if( aSource.is_object() && aSource.contains( aField ) )
+        aTarget[aField] = aSource[aField];
+}
+
+
+wxString nextActionConversationKey( const AI_SEMANTIC_EVENT& aEvent )
+{
+    const AI_CONTEXT_SNAPSHOT& snapshot = aEvent.m_ContextSnapshot;
+    const nlohmann::json       modeContext =
+            parseObjectBody( snapshot.m_ToolState.m_ModeContextJson );
+
+    nlohmann::json stableMode = nlohmann::json::object();
+
+    for( const char* field : { "net", "layer", "width", "start", "source",
+                               "footprint", "symbol", "component",
+                               "placeable_kind", "zone_type", "table_id",
+                               "row_id", "column_id" } )
+    {
+        copyStableModeField( modeContext, stableMode, field );
+    }
+
+    if( stableMode.empty() && !snapshot.m_ToolState.m_ModeContextJson.IsEmpty() )
+        stableMode["mode_context_hash"] =
+                toUtf8String( fnv1a64Fingerprint(
+                        snapshot.m_ToolState.m_ModeContextJson ) );
+
+    nlohmann::json panels = nlohmann::json::array();
+
+    for( const AI_PANEL_STATE_RECORD& panel : snapshot.m_PanelStates )
+    {
+        panels.push_back( {
+                { "id", toUtf8String( panel.m_Id ) },
+                { "focused_control_id",
+                  toUtf8String( panel.m_FocusedControlId ) } } );
+    }
+
+    nlohmann::json key =
+            { { "project_id", toUtf8String( snapshot.m_ProjectId ) },
+              { "document_id", toUtf8String( snapshot.m_DocumentId ) },
+              { "board_base_hash",
+                toUtf8String( aEvent.m_ContextVersion.m_BoardBaseHash ) },
+              { "work_state", toUtf8String( aEvent.m_Kind ) },
+              { "tool_state",
+                toUtf8String( snapshot.m_ToolState.KindAsString() ) },
+              { "stable_mode_context", std::move( stableMode ) },
+              { "panels", std::move( panels ) } };
+
+    return fromUtf8String( key.dump() );
+}
+
+
+struct NEXT_ACTION_MEMORY_IDENTITY
+{
+    wxString m_ProjectId;
+    wxString m_DocumentId;
+};
+
+
+NEXT_ACTION_MEMORY_IDENTITY memoryIdentityFromSuggestionProvenance(
+        const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    NEXT_ACTION_MEMORY_IDENTITY identity;
+    nlohmann::json provenance = parseObjectBody( aSuggestion.m_RuntimeProvenanceJson );
+
+    identity.m_ProjectId = optionalString( provenance, "project_id" );
+    identity.m_DocumentId = optionalString( provenance, "document_id" );
+    return identity;
+}
+
+
+wxString acceptedSuggestionMemoryText( const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    wxString text = wxS( "Accepted Next Action" );
+
+    if( !aSuggestion.m_Title.IsEmpty() )
+        text += wxS( ": " ) + aSuggestion.m_Title;
+
+    if( !aSuggestion.m_Body.IsEmpty() )
+        text += wxS( "\n" ) + aSuggestion.m_Body;
+
+    if( !aSuggestion.m_ContextKind.IsEmpty() )
+        text += wxS( "\ncontext_kind: " ) + aSuggestion.m_ContextKind;
+
+    return text;
+}
+
+
+AI_PROVIDER_INPUT_BLOCK recentNextActionStepsBlock(
+        const std::vector<AI_NEXT_ACTION_RUNTIME_STEP>& aSteps,
+        uint64_t aConversationId )
+{
+    constexpr size_t RECENT_STEP_LIMIT = 6;
+
+    std::vector<const AI_NEXT_ACTION_RUNTIME_STEP*> sessionSteps;
+
+    for( const AI_NEXT_ACTION_RUNTIME_STEP& step : aSteps )
+    {
+        if( step.m_ConversationId == aConversationId )
+            sessionSteps.push_back( &step );
+    }
+
+    AI_PROVIDER_INPUT_BLOCK block;
+
+    if( sessionSteps.empty() )
+        return block;
+
+    const size_t start = sessionSteps.size() > RECENT_STEP_LIMIT
+                         ? sessionSteps.size() - RECENT_STEP_LIMIT : 0;
+    nlohmann::json steps = nlohmann::json::array();
+
+    for( size_t ii = start; ii < sessionSteps.size(); ++ii )
+    {
+        const AI_NEXT_ACTION_RUNTIME_STEP& step = *sessionSteps[ii];
+        const nlohmann::json semantic = parseObjectBody( step.m_SemanticEventJson );
+        const nlohmann::json decision = parseObjectBody( step.m_LlmDecisionJson );
+        const nlohmann::json review = parseObjectBody( step.m_ReviewDecisionJson );
+
+        nlohmann::json item = {
+            { "step_id", step.m_Id },
+            { "status", nextActionStepStatusJsonName( step.m_Status ) },
+            { "observation_packet_id", step.m_ObservationPacketId },
+            { "attempt_count", step.m_AttemptIds.size() },
+            { "published_suggestion_id", step.m_PublishedSuggestionId }
+        };
+
+        if( semantic.is_object() )
+        {
+            item["semantic_event"] = {
+                { "slot_id", semantic.value( "slot_id", std::string() ) },
+                { "kind", semantic.value( "kind", std::string() ) },
+                { "reason", semantic.value( "reason", std::string() ) }
+            };
+        }
+
+        if( decision.is_object() )
+        {
+            item["decision"] = {
+                { "decision_kind",
+                  decision.value( "decision_kind", std::string() ) },
+                { "opportunity_type",
+                  decision.value( "opportunity_type", std::string() ) },
+                { "reason_code", decision.value( "reason_code", std::string() ) }
+            };
+        }
+
+        if( review.is_object() )
+        {
+            item["review"] = {
+                { "decision_kind",
+                  review.value( "decision_kind", std::string() ) },
+                { "reason_code", review.value( "reason_code", std::string() ) }
+            };
+        }
+
+        steps.push_back( std::move( item ) );
+    }
+
+    nlohmann::json payload = {
+        { "schema",
+          { { "name", "kisurf.ai.next_action_recent_steps" },
+            { "version", 1 } } },
+        { "conversation_id", aConversationId },
+        { "original_step_count", sessionSteps.size() },
+        { "sent_step_count", sessionSteps.size() - start },
+        { "steps", std::move( steps ) }
+    };
+
+    wxString text;
+    text << wxS( "Previous Next Action steps (current active session):\n" )
+         << fromUtf8String( payload.dump() );
+
+    block.m_Id = wxS( "next_action.recent_steps" );
+    block.m_Kind = wxS( "next_action_recent_steps" );
+    block.m_Source = wxS( "next_action_session" );
+    block.m_Text = text;
+    block.m_OriginalChars = text.length();
+    block.m_MetadataJson = wxString::Format(
+            wxS( "{\"conversation_id\":%llu,\"original_step_count\":%llu,"
+                 "\"sent_step_count\":%llu}" ),
+            static_cast<unsigned long long>( aConversationId ),
+            static_cast<unsigned long long>( sessionSteps.size() ),
+            static_cast<unsigned long long>( sessionSteps.size() - start ) );
+    return block;
+}
+
+
+wxString nextActionSessionTypeForStep( const AI_NEXT_ACTION_RUNTIME_STEP& aStep )
+{
+    const nlohmann::json semantic = parseObjectBody( aStep.m_SemanticEventJson );
+
+    if( semantic.is_object() && semantic.contains( "kind" )
+        && semantic["kind"].is_string() )
+    {
+        return fromUtf8String( semantic["kind"].get<std::string>() );
+    }
+
+    return wxS( "next_action" );
+}
+
+
+AI_NEXT_ACTION_SESSION_STEP_RECORD nextActionSessionStepRecord(
+        const AI_NEXT_ACTION_RUNTIME_STEP& aStep )
+{
+    AI_NEXT_ACTION_SESSION_STEP_RECORD record;
+    record.m_StepId = aStep.m_Id;
+    record.m_Status = fromUtf8String(
+            nextActionStepStatusJsonName( aStep.m_Status ) );
+    record.m_SuggestionStreamId = aStep.m_SuggestionStreamId;
+    record.m_ObservationPacketId = aStep.m_ObservationPacketId;
+    record.m_PublishedSuggestionId = aStep.m_PublishedSuggestionId;
+    record.m_SemanticEventJson = aStep.m_SemanticEventJson;
+    record.m_ObservationPacketJson = aStep.m_ObservationPacketJson;
+    record.m_LlmDecisionJson = aStep.m_LlmDecisionJson;
+    record.m_LlmDecisionToolResultsJson = aStep.m_LlmDecisionToolResultsJson;
+    record.m_ReviewDecisionJson = aStep.m_ReviewDecisionJson;
+    record.m_ReviewToolResultsJson = aStep.m_ReviewToolResultsJson;
+    record.m_AttemptIds = aStep.m_AttemptIds;
+    return record;
+}
+
+
 nlohmann::json parseJsonText( const wxString& aBody, nlohmann::json aFallback )
 {
     if( aBody.IsEmpty() )
@@ -3893,6 +4130,288 @@ nlohmann::json anchorRecordJson( const AI_CONTEXT_ANCHOR& aAnchor )
     }
 
     return record;
+}
+
+
+AI_VISUAL_BOUNDS visualBoundsFromJson( const nlohmann::json& aBounds )
+{
+    AI_VISUAL_BOUNDS bounds;
+
+    if( !aBounds.is_object() )
+        return bounds;
+
+    bounds.m_Left = aBounds.value( "left", 0.0 );
+    bounds.m_Top = aBounds.value( "top", 0.0 );
+    bounds.m_Right = aBounds.value( "right", 0.0 );
+    bounds.m_Bottom = aBounds.value( "bottom", 0.0 );
+    return bounds;
+}
+
+
+bool visualBoundsFromFlexibleJson( const nlohmann::json& aBounds,
+                                   AI_VISUAL_BOUNDS& aResult )
+{
+    if( !aBounds.is_object() )
+        return false;
+
+    if( aBounds.contains( "left" ) && aBounds.contains( "top" )
+        && aBounds.contains( "right" ) && aBounds.contains( "bottom" ) )
+    {
+        aResult.m_Left = aBounds.value( "left", 0.0 );
+        aResult.m_Top = aBounds.value( "top", 0.0 );
+        aResult.m_Right = aBounds.value( "right", 0.0 );
+        aResult.m_Bottom = aBounds.value( "bottom", 0.0 );
+        return aResult.m_Right > aResult.m_Left
+               && aResult.m_Bottom > aResult.m_Top;
+    }
+
+    if( aBounds.contains( "x" ) && aBounds.contains( "y" )
+        && ( aBounds.contains( "w" ) || aBounds.contains( "width" ) )
+        && ( aBounds.contains( "h" ) || aBounds.contains( "height" ) ) )
+    {
+        const double x = aBounds.value( "x", 0.0 );
+        const double y = aBounds.value( "y", 0.0 );
+        const double w = aBounds.contains( "w" ) ? aBounds.value( "w", 0.0 )
+                                                  : aBounds.value( "width", 0.0 );
+        const double h = aBounds.contains( "h" ) ? aBounds.value( "h", 0.0 )
+                                                  : aBounds.value( "height", 0.0 );
+
+        aResult.m_Left = x;
+        aResult.m_Top = y;
+        aResult.m_Right = x + w;
+        aResult.m_Bottom = y + h;
+        return w > 0.0 && h > 0.0;
+    }
+
+    return false;
+}
+
+
+AI_VISUAL_PIXEL_WORLD_TRANSFORM visualPixelWorldTransformFromSidecarJson(
+        const wxString& aSidecarJson )
+{
+    AI_VISUAL_PIXEL_WORLD_TRANSFORM transform;
+    const nlohmann::json sidecar = objectFromJsonText( aSidecarJson );
+
+    if( !sidecar.contains( "pixel_world_transform" )
+        || !sidecar["pixel_world_transform"].is_object() )
+    {
+        return transform;
+    }
+
+    const nlohmann::json& jsonTransform = sidecar["pixel_world_transform"];
+
+    if( jsonTransform.contains( "world_origin" )
+        && jsonTransform["world_origin"].is_object() )
+    {
+        transform.m_WorldOriginX =
+                jsonTransform["world_origin"].value( "x", 0.0 );
+        transform.m_WorldOriginY =
+                jsonTransform["world_origin"].value( "y", 0.0 );
+    }
+
+    transform.m_WorldXPerPixelX =
+            jsonTransform.value( "world_x_per_pixel_x", 0.0 );
+    transform.m_WorldXPerPixelY =
+            jsonTransform.value( "world_x_per_pixel_y", 0.0 );
+    transform.m_WorldYPerPixelX =
+            jsonTransform.value( "world_y_per_pixel_x", 0.0 );
+    transform.m_WorldYPerPixelY =
+            jsonTransform.value( "world_y_per_pixel_y", 0.0 );
+    return transform;
+}
+
+
+bool hasInvertiblePixelWorldTransform(
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform )
+{
+    const double determinant =
+            aTransform.m_WorldXPerPixelX * aTransform.m_WorldYPerPixelY
+            - aTransform.m_WorldXPerPixelY * aTransform.m_WorldYPerPixelX;
+
+    return std::abs( determinant ) > 1e-9;
+}
+
+
+bool pixelPointFromWorldPoint( const AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform,
+                               double aWorldX, double aWorldY,
+                               double& aPixelX, double& aPixelY )
+{
+    const double determinant =
+            aTransform.m_WorldXPerPixelX * aTransform.m_WorldYPerPixelY
+            - aTransform.m_WorldXPerPixelY * aTransform.m_WorldYPerPixelX;
+
+    if( std::abs( determinant ) <= 1e-9 )
+        return false;
+
+    const double dx = aWorldX - aTransform.m_WorldOriginX;
+    const double dy = aWorldY - aTransform.m_WorldOriginY;
+
+    aPixelX = ( aTransform.m_WorldYPerPixelY * dx
+                - aTransform.m_WorldXPerPixelY * dy ) / determinant;
+    aPixelY = ( -aTransform.m_WorldYPerPixelX * dx
+                + aTransform.m_WorldXPerPixelX * dy ) / determinant;
+    return true;
+}
+
+
+bool pixelBoundsFromWorldBounds(
+        const AI_VISUAL_BOUNDS& aWorldBounds,
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform,
+        AI_VISUAL_BOUNDS& aPixelBounds )
+{
+    if( aWorldBounds.m_Right <= aWorldBounds.m_Left
+        || aWorldBounds.m_Bottom <= aWorldBounds.m_Top
+        || !hasInvertiblePixelWorldTransform( aTransform ) )
+    {
+        return false;
+    }
+
+    double xs[4] = {};
+    double ys[4] = {};
+
+    const double worldXs[4] = {
+        aWorldBounds.m_Left,
+        aWorldBounds.m_Right,
+        aWorldBounds.m_Left,
+        aWorldBounds.m_Right
+    };
+    const double worldYs[4] = {
+        aWorldBounds.m_Top,
+        aWorldBounds.m_Top,
+        aWorldBounds.m_Bottom,
+        aWorldBounds.m_Bottom
+    };
+
+    for( size_t i = 0; i < 4; ++i )
+    {
+        if( !pixelPointFromWorldPoint( aTransform, worldXs[i], worldYs[i],
+                                       xs[i], ys[i] ) )
+        {
+            return false;
+        }
+    }
+
+    aPixelBounds.m_Left = *std::min_element( std::begin( xs ), std::end( xs ) );
+    aPixelBounds.m_Top = *std::min_element( std::begin( ys ), std::end( ys ) );
+    aPixelBounds.m_Right = *std::max_element( std::begin( xs ), std::end( xs ) );
+    aPixelBounds.m_Bottom = *std::max_element( std::begin( ys ), std::end( ys ) );
+    return aPixelBounds.m_Right > aPixelBounds.m_Left
+           && aPixelBounds.m_Bottom > aPixelBounds.m_Top;
+}
+
+
+bool decodePngDataUriToImage( const wxString& aDataUri, wxImage& aImage )
+{
+    const std::string dataUri = toUtf8String( aDataUri );
+    const std::string marker = "base64,";
+    const size_t markerPos = dataUri.find( marker );
+
+    if( markerPos == std::string::npos )
+        return false;
+
+    const wxString encoded = fromUtf8String(
+            dataUri.substr( markerPos + marker.size() ) );
+    wxMemoryBuffer buffer = wxBase64Decode( encoded );
+
+    if( buffer.GetDataLen() == 0 )
+        return false;
+
+    wxMemoryInputStream stream( buffer.GetData(), buffer.GetDataLen() );
+    wxImage image;
+
+    if( !image.LoadFile( stream, wxBITMAP_TYPE_PNG ) || !image.IsOk() )
+        return false;
+
+    aImage = image;
+    return true;
+}
+
+
+std::vector<AI_VISUAL_ANCHOR_RECORD> visualAnchorsFromSidecarJson(
+        const wxString& aSidecarJson )
+{
+    std::vector<AI_VISUAL_ANCHOR_RECORD> anchors;
+
+    nlohmann::json sidecar =
+            nlohmann::json::parse( toUtf8String( aSidecarJson ), nullptr, false );
+
+    if( sidecar.is_discarded() || !sidecar.is_object() )
+        return anchors;
+
+    const nlohmann::json* artifact = &sidecar;
+
+    if( sidecar.contains( "visual_observation_artifact" )
+        && sidecar["visual_observation_artifact"].is_object() )
+    {
+        artifact = &sidecar["visual_observation_artifact"];
+    }
+
+    if( !artifact->contains( "anchors" ) || !( *artifact )["anchors"].is_array() )
+        return anchors;
+
+    for( const nlohmann::json& item : ( *artifact )["anchors"] )
+    {
+        if( !item.is_object() )
+            continue;
+
+        AI_VISUAL_ANCHOR_RECORD anchor;
+        anchor.m_AnchorId =
+                fromUtf8String( item.value( "anchor_id", std::string() ) );
+        anchor.m_ObjectId =
+                fromUtf8String( item.value( "object_id", std::string() ) );
+        anchor.m_Handle = fromUtf8String( item.value( "handle", std::string() ) );
+        anchor.m_Layer = fromUtf8String( item.value( "layer", std::string() ) );
+        anchor.m_NetName =
+                fromUtf8String( item.value( "net_name", std::string() ) );
+
+        if( item.contains( "world_xy" ) && item["world_xy"].is_object() )
+        {
+            anchor.m_WorldX = item["world_xy"].value( "x", 0.0 );
+            anchor.m_WorldY = item["world_xy"].value( "y", 0.0 );
+        }
+
+        if( item.contains( "world_bounds" ) )
+            anchor.m_WorldBounds = visualBoundsFromJson( item["world_bounds"] );
+
+        if( item.contains( "pixel_bounds" ) )
+            anchor.m_PixelBounds = visualBoundsFromJson( item["pixel_bounds"] );
+
+        if( !anchor.m_AnchorId.IsEmpty() )
+            anchors.push_back( anchor );
+    }
+
+    return anchors;
+}
+
+
+nlohmann::json visualBoundsJson( const AI_VISUAL_BOUNDS& aBounds )
+{
+    return {
+        { "left", aBounds.m_Left },
+        { "top", aBounds.m_Top },
+        { "right", aBounds.m_Right },
+        { "bottom", aBounds.m_Bottom }
+    };
+}
+
+
+nlohmann::json visualAnchorResolutionJson(
+        const AI_VISUAL_ANCHOR_RESOLUTION& aResolution )
+{
+    return {
+        { "kind", toUtf8String( aResolution.m_Kind ) },
+        { "anchor_id", toUtf8String( aResolution.m_AnchorId ) },
+        { "object_id", toUtf8String( aResolution.m_ObjectId ) },
+        { "handle", toUtf8String( aResolution.m_Handle ) },
+        { "layer", toUtf8String( aResolution.m_Layer ) },
+        { "net_name", toUtf8String( aResolution.m_NetName ) },
+        { "world_xy",
+          { { "x", aResolution.m_WorldX }, { "y", aResolution.m_WorldY } } },
+        { "world_bounds", visualBoundsJson( aResolution.m_WorldBounds ) },
+        { "pixel_bounds", visualBoundsJson( aResolution.m_PixelBounds ) },
+        { "resolved", aResolution.m_Resolved }
+    };
 }
 
 
@@ -9256,6 +9775,7 @@ nlohmann::json surfacePatchPreviewFactsJson(
 bool AI_NEXT_ACTION_CONTEXT_VERSION::IsValid() const
 {
     return m_ContextVersion.IsValid() || !m_BoardBaseHash.IsEmpty()
+           || !m_ProjectId.IsEmpty() || !m_DocumentId.IsEmpty()
            || m_ActivitySequence != 0 || !m_ViewportFingerprint.IsEmpty()
            || !m_CursorRegionFingerprint.IsEmpty();
 }
@@ -9264,7 +9784,9 @@ bool AI_NEXT_ACTION_CONTEXT_VERSION::IsValid() const
 wxString AI_NEXT_ACTION_CONTEXT_VERSION::AsJsonText() const
 {
     nlohmann::json payload =
-            { { "board_base_hash", toUtf8String( m_BoardBaseHash ) },
+            { { "project_id", toUtf8String( m_ProjectId ) },
+              { "document_id", toUtf8String( m_DocumentId ) },
+              { "board_base_hash", toUtf8String( m_BoardBaseHash ) },
               { "document_revision", m_ContextVersion.m_DocumentRevision },
               { "selection_revision", m_ContextVersion.m_SelectionRevision },
               { "view_revision", m_ContextVersion.m_ViewRevision },
@@ -9293,6 +9815,8 @@ AI_NEXT_ACTION_CONTEXT_VERSION AiNextActionContextVersionFromSnapshot(
         const wxString& aBoardBaseHash )
 {
     AI_NEXT_ACTION_CONTEXT_VERSION version;
+    version.m_ProjectId = aSnapshot.m_ProjectId;
+    version.m_DocumentId = aSnapshot.m_DocumentId;
     version.m_BoardBaseHash = aBoardBaseHash;
     version.m_ContextVersion = aSnapshot.m_Version;
     version.m_ToolModeVersion =
@@ -11612,69 +12136,12 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 { "role", "facts" },
                 { "side_effect", "read_only" },
                 { "can_publish", false } },
-              { { "name", "placement.generate_via_pattern_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "placement" },
+              { { "name", "observation.resolve_visual_reference" },
+                { "layer", "atomic" },
+                { "role", "visual_grounding" },
                 { "side_effect", "read_only" },
-                { "candidate_source", "internal_via_pattern_library" },
-                { "can_publish", false } },
-              { { "name", "placement.generate_footprint_transform_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "placement" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_footprint_transform_library" },
-                { "can_publish", false } },
-              { { "name", "placement.generate_footprint_orientation_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "placement" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_footprint_orientation_library" },
-                { "can_publish", false } },
-              { { "name", "routing.generate_segment_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "routing" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_routing_segment_library" },
-                { "can_publish", false } },
-              { { "name", "routing.generate_parallel_segment_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "routing" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_parallel_routing_library" },
-                { "can_publish", false } },
-              { { "name", "routing.generate_bus_segment_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "routing" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_bus_routing_library" },
-                { "can_publish", false } },
-              { { "name", "routing.generate_replace_path_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "routing" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_replace_path_library" },
-                { "can_publish", false } },
-              { { "name", "routing.generate_constraint_aware_reroute_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "routing" },
-                { "side_effect", "read_only" },
-                { "candidate_source",
-                  "internal_constraint_aware_reroute_library" },
-                { "can_publish", false } },
-              { { "name", "surface.generate_fill_candidates" },
-                { "layer", "integrated" },
-                { "role", "candidate_generation" },
-                { "work_state", "structured_surface" },
-                { "side_effect", "read_only" },
-                { "candidate_source", "internal_surface_fill_library" },
+                { "grounding_bridge", "visual_anchor_to_object_or_world" },
+                { "pixel_only_mutation_truth", false },
                 { "can_publish", false } },
               { { "name", "shadow.apply_candidate" },
                 { "layer", "atomic" },
@@ -11836,6 +12303,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ToolCatalogJson() const
                 if( aName.rfind( "surface.", 0 ) == 0 )
                     return std::string( "surface" );
 
+                if( aName.rfind( "observation.", 0 ) == 0 )
+                    return std::string( "observation" );
+
                 if( aName.rfind( "atomic.", 0 ) == 0 )
                     return std::string( "atomic" );
 
@@ -11915,6 +12385,34 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                 { "minItems", aMinItems }
                             };
                         };
+
+                if( aName == "observation.resolve_visual_reference" )
+                {
+                    parameters["properties"]["reference"] =
+                            { { "type", "object" },
+                              { "additionalProperties", true },
+                              { "description",
+                                "Visual reference produced from a VLM observation. "
+                                "Use anchor_id when available. Pixel-only references "
+                                "are rejected as mutation truth." } };
+                    parameters["properties"]["sidecar_json"] =
+                            { { "type", "string" },
+                              { "description",
+                                "Optional visual observation sidecar JSON to resolve "
+                                "against, such as preview_frame.sidecar returned by "
+                                "render.hidden_attempt. If omitted, the current "
+                                "observation visual sidecar is used." } };
+                    parameters["properties"]["sidecar"] =
+                            { { "type", "object" },
+                              { "additionalProperties", true },
+                              { "description",
+                                "Optional parsed visual observation sidecar object. "
+                                "Use this instead of sidecar_json when the provider "
+                                "can pass structured tool arguments." } };
+                    parameters["required"] =
+                            nlohmann::json::array( { "reference" } );
+                    return parameters;
+                }
 
                 auto geometryPatchSchema =
                         [&]()
@@ -13353,7 +13851,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
                 if( !issue.is_object() )
                     continue;
 
-                if( !issue.contains( "geometry" ) && !issue.contains( "bbox" )
+                if( !issue.contains( "geometry" )
+                    && !issue.contains( "world_bounds" )
+                    && !issue.contains( "bbox" )
                     && !issue.contains( "region" )
                     && !issue.contains( "position" )
                     && !issue.contains( "main_item_bbox" )
@@ -13377,6 +13877,9 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::ValidateAttempt(
 
                 if( issue.contains( "geometry" ) )
                     fact["geometry"] = issue["geometry"];
+
+                if( issue.contains( "world_bounds" ) )
+                    fact["world_bounds"] = issue["world_bounds"];
 
                 if( issue.contains( "bbox" ) )
                     fact["bbox"] = issue["bbox"];
@@ -13461,6 +13964,12 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
 
                 if( name == "observation_read" || name == "observation.read" )
                     return std::string( "observation.read" );
+
+                if( name == "observation_resolve_visual_reference"
+                    || name == "observation.resolve_visual_reference" )
+                {
+                    return std::string( "observation.resolve_visual_reference" );
+                }
 
                 if( name == "placement_generate_via_pattern_candidates"
                     || name == "placement.generate_via_pattern_candidates" )
@@ -13682,8 +14191,60 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
         return makeResult(
                 true, true, wxString(), wxS( "Observation returned." ),
                            { { "tool", "observation.read" },
-                             { "status", "observed" },
-                             { "observation", observation } } );
+                              { "status", "observed" },
+                              { "observation", observation } } );
+    }
+
+    if( toolName == "observation.resolve_visual_reference" )
+    {
+        nlohmann::json args;
+
+        if( auto malformedResult = parseArgumentsOrMalformed( toolName, args ) )
+            return *malformedResult;
+
+        if( !args.contains( "reference" ) || !args["reference"].is_object() )
+        {
+            return makeResult(
+                    false, false, wxS( "malformed_arguments" ),
+                    wxS( "observation.resolve_visual_reference requires a "
+                         "reference object." ),
+                    { { "tool", toolName },
+                      { "status", "malformed_arguments" } } );
+        }
+
+        wxString sidecarJson = aObservation.m_ContextSnapshot.m_Visual.m_SidecarJson;
+        std::string sidecarSource = "observation";
+
+        if( args.contains( "sidecar_json" ) && args["sidecar_json"].is_string() )
+        {
+            sidecarJson = fromUtf8String( args["sidecar_json"].get<std::string>() );
+            sidecarSource = "tool_argument";
+        }
+        else if( args.contains( "sidecar" ) && args["sidecar"].is_object() )
+        {
+            sidecarJson = fromUtf8String( args["sidecar"].dump() );
+            sidecarSource = "tool_argument";
+        }
+
+        std::vector<AI_VISUAL_ANCHOR_RECORD> anchors =
+                visualAnchorsFromSidecarJson( sidecarJson );
+
+        AI_VISUAL_ANCHOR_RESOLUTION resolution =
+                ResolveAiVisualReferenceJson(
+                        fromUtf8String( args["reference"].dump() ), anchors );
+
+        nlohmann::json payload =
+                { { "tool", "observation.resolve_visual_reference" },
+                  { "status", resolution.m_Resolved ? "resolved" : "rejected" },
+                  { "sidecar_source", sidecarSource },
+                  { "visual_anchor_count", anchors.size() },
+                  { "resolution", visualAnchorResolutionJson( resolution ) },
+                  { "reference", args["reference"] },
+                  { "pixel_only_mutation_truth", false } };
+
+        return makeResult(
+                true, true, resolution.m_ErrorCode, resolution.m_Message,
+                std::move( payload ) );
     }
 
     if( toolName == "placement.generate_via_pattern_candidates"
@@ -14829,12 +15390,655 @@ void AI_NEXT_ACTION_RUNTIME::SetCurrentContextSampler(
 }
 
 
+void AI_NEXT_ACTION_RUNTIME::SetPromptTraceStore( AI_PROMPT_TRACE_STORE* aStore )
+{
+    m_PromptTraceStore = aStore;
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::SetMemoryStore( AI_MEMORY_STORE* aStore )
+{
+    m_MemoryStore = aStore;
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::SetLocalTextMemoryIndex( AI_LOCAL_TEXT_MEMORY_INDEX* aIndex )
+{
+    m_LocalTextMemoryIndex = aIndex;
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::SetArtifactStore( AI_ARTIFACT_STORE* aStore )
+{
+    m_ArtifactStore = aStore;
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::SetSessionStore( AI_NEXT_ACTION_SESSION_STORE* aStore )
+{
+    m_SessionStore = aStore;
+}
+
+
+namespace
+{
+wxString nextActionPromptTraceStatusForResponse( const AI_PROVIDER_RESPONSE& aResponse )
+{
+    if( aResponse.m_Title.CmpNoCase( wxS( "AI Provider Error" ) ) == 0 )
+        return wxS( "provider_error" );
+
+    return wxS( "provider_response" );
+}
+
+
+bool isNextActionScriptOutputTool( const wxString& aToolName )
+{
+    return aToolName == wxS( "kisurf_run_cell" )
+           || aToolName == wxS( "script_run_bounded_plan" );
+}
+
+
+bool nextActionHasExecutedToolCall( const std::vector<AI_TOOL_CALL_RECORD>& aToolCalls )
+{
+    for( const AI_TOOL_CALL_RECORD& toolCall : aToolCalls )
+    {
+        if( toolCall.m_Executed )
+            return true;
+    }
+
+    return false;
+}
+
+
+nlohmann::json nextActionExecutedToolCallRefsJson(
+        const std::vector<AI_TOOL_CALL_RECORD>& aToolCalls )
+{
+    nlohmann::json refs = nlohmann::json::array();
+
+    for( const AI_TOOL_CALL_RECORD& toolCall : aToolCalls )
+    {
+        if( !toolCall.m_Executed )
+            continue;
+
+        refs.push_back( {
+                { "tool_call_id", toUtf8String( toolCall.m_ToolCallId ) },
+                { "tool_name", toUtf8String( toolCall.m_ToolName ) },
+                { "allowed", toolCall.m_Allowed },
+                { "executed", toolCall.m_Executed },
+                { "error_code", toUtf8String( toolCall.m_ErrorCode ) }
+        } );
+    }
+
+    return refs;
+}
+
+
+void nextActionCopyIfPresent( nlohmann::json& aTarget,
+                              const nlohmann::json& aSource,
+                              const char* aKey )
+{
+    if( aSource.contains( aKey ) )
+        aTarget[aKey] = aSource[aKey];
+}
+
+
+nlohmann::json nextActionContextVersionJson( const AI_CONTEXT_VERSION& aVersion )
+{
+    return {
+        { "document_revision", aVersion.m_DocumentRevision },
+        { "selection_revision", aVersion.m_SelectionRevision },
+        { "view_revision", aVersion.m_ViewRevision }
+    };
+}
+
+
+nlohmann::json nextActionRecoveryBasisJson(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const std::vector<AI_TOOL_CALL_RECORD>& aToolCalls )
+{
+    nlohmann::json basis = {
+        { "requires_checkpoint_resume", true },
+        { "executed_tool_result_count", 0 },
+        { "board_state_version",
+          nextActionContextVersionJson( aRequest.m_ContextVersion ) },
+        { "tool_results", nlohmann::json::array() }
+    };
+
+    size_t executedCount = 0;
+
+    for( const AI_TOOL_CALL_RECORD& toolCall : aToolCalls )
+    {
+        if( !toolCall.m_Executed )
+            continue;
+
+        ++executedCount;
+
+        nlohmann::json tool = {
+            { "tool_call_id", toUtf8String( toolCall.m_ToolCallId ) },
+            { "tool_name", toUtf8String( toolCall.m_ToolName ) },
+            { "allowed", toolCall.m_Allowed },
+            { "executed", toolCall.m_Executed }
+        };
+
+        nlohmann::json result = nlohmann::json::parse(
+                toUtf8String( toolCall.m_ResultJson ), nullptr, false );
+
+        if( result.is_object() )
+        {
+            nextActionCopyIfPresent( tool, result, "session_id" );
+            nextActionCopyIfPresent( tool, result, "hidden_session_id" );
+            nextActionCopyIfPresent( tool, result, "checkpoint_id" );
+            nextActionCopyIfPresent( tool, result, "rollback_checkpoint_id" );
+            nextActionCopyIfPresent( tool, result, "preview_id" );
+            nextActionCopyIfPresent( tool, result, "attempt_id" );
+
+            if( result.contains( "session_journal" )
+                && result["session_journal"].is_object()
+                && result["session_journal"].contains( "operations" )
+                && result["session_journal"]["operations"].is_array() )
+            {
+                tool["session_journal"] = result["session_journal"];
+                tool["journal_operation_count"] =
+                        result["session_journal"]["operations"].size();
+            }
+
+            if( result.contains( "attempt_session_journal" )
+                && result["attempt_session_journal"].is_object()
+                && result["attempt_session_journal"].contains( "operations" )
+                && result["attempt_session_journal"]["operations"].is_array() )
+            {
+                tool["attempt_session_journal"] = result["attempt_session_journal"];
+                tool["attempt_journal_operation_count"] =
+                        result["attempt_session_journal"]["operations"].size();
+            }
+        }
+
+        basis["tool_results"].push_back( std::move( tool ) );
+    }
+
+    basis["executed_tool_result_count"] = executedCount;
+    return basis;
+}
+
+
+void markNextActionPostSideEffectProviderFailure(
+        AI_PROVIDER_RESPONSE& aResponse,
+        const AI_PROVIDER_REQUEST& aRequest,
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    if( nextActionPromptTraceStatusForResponse( aResponse ) != wxS( "provider_error" )
+        || !nextActionHasExecutedToolCall( aHandledToolCalls ) )
+    {
+        return;
+    }
+
+    nlohmann::json trace = nlohmann::json::parse(
+            toUtf8String( aResponse.m_ProviderTraceJson ), nullptr, false );
+
+    if( trace.is_discarded() || !trace.is_object() )
+    {
+        trace = nlohmann::json::object();
+        trace["schema"] = { { "name", "kisurf.ai.provider_trace" },
+                            { "version", 1 } };
+    }
+
+    trace["runtime_guard"] = {
+        { "reason", "post_side_effect_ambiguity" },
+        { "action", "checkpoint_or_journal_recovery_required" },
+        { "replay_policy", "do_not_blindly_reexecute_tools" },
+        { "executed_tool_calls",
+          nextActionExecutedToolCallRefsJson( aHandledToolCalls ) },
+        { "recovery_basis",
+          nextActionRecoveryBasisJson( aRequest, aHandledToolCalls ) }
+    };
+
+    aResponse.m_ProviderTraceJson = fromUtf8String( trace.dump() );
+}
+
+
+void appendNextActionPromptTrace( AI_PROMPT_TRACE_STORE* aStore,
+                                  const AI_PROVIDER_REQUEST& aRequest,
+                                  const AI_PROVIDER_RESPONSE& aResponse )
+{
+    if( !aStore )
+        return;
+
+    wxString error;
+    aStore->Append( aRequest, nextActionPromptTraceStatusForResponse( aResponse ),
+                    aResponse.m_ProviderTraceJson, error );
+}
+
+
+void archiveLargeNextActionToolResult( AI_ARTIFACT_STORE* aStore,
+                                       const AI_PROVIDER_REQUEST& aRequest,
+                                       const AI_TOOL_CALL_RECORD& aToolCall )
+{
+    if( !aStore || aToolCall.m_ResultJson.IsEmpty()
+        || aToolCall.m_ResultJson.length() <= aRequest.m_MaxToolResultChars )
+    {
+        return;
+    }
+
+    AI_ARTIFACT_RECORD artifact;
+    wxString           error;
+
+    if( isNextActionScriptOutputTool( aToolCall.m_ToolName ) )
+    {
+        AiStoreScriptOutputArtifact( aRequest.m_ContextSnapshot.m_ProjectId,
+                                     aRequest.m_ContextSnapshot.m_DocumentId,
+                                     wxS( "next_action" ), wxS( "trace" ),
+                                     aToolCall.m_ToolCallId,
+                                     aToolCall.m_ToolName,
+                                     aToolCall.m_ArgumentsJson,
+                                     aToolCall.m_ResultJson,
+                                     *aStore, artifact, error );
+        return;
+    }
+
+    AiStoreToolResultArtifact( aRequest.m_ContextSnapshot.m_ProjectId,
+                               aRequest.m_ContextSnapshot.m_DocumentId,
+                               wxS( "next_action" ), wxS( "trace" ),
+                               aToolCall.m_ToolCallId,
+                               aToolCall.m_ToolName,
+                               aToolCall.m_ResultJson,
+                               *aStore, artifact, error );
+}
+
+
+void archiveNextActionProviderRecoveryArtifact(
+        AI_ARTIFACT_STORE* aStore,
+        const AI_PROVIDER_REQUEST& aRequest,
+        AI_PROVIDER_RESPONSE& aResponse )
+{
+    if( !aStore || aResponse.m_ProviderTraceJson.IsEmpty() )
+        return;
+
+    nlohmann::json trace = nlohmann::json::parse(
+            toUtf8String( aResponse.m_ProviderTraceJson ), nullptr, false );
+
+    if( trace.is_discarded() || !trace.is_object()
+        || !trace.contains( "runtime_guard" )
+        || !trace["runtime_guard"].is_object()
+        || !trace["runtime_guard"].contains( "recovery_basis" ) )
+    {
+        return;
+    }
+
+    AI_ARTIFACT_RECORD artifact;
+    wxString           error;
+
+    if( !AiStoreProviderRecoveryArtifact(
+                aRequest.m_ContextSnapshot.m_ProjectId,
+                aRequest.m_ContextSnapshot.m_DocumentId,
+                wxS( "next_action" ), wxS( "trace" ),
+                wxS( "AI_NEXT_ACTION_RUNTIME" ),
+                aRequest.m_RequestId, aResponse.m_ProviderTraceJson,
+                *aStore, artifact, error ) )
+    {
+        return;
+    }
+
+    trace["runtime_guard"]["recovery_artifact_ref"] = {
+        { "uri", toUtf8String( artifact.m_Uri ) },
+        { "kind", "provider_recovery" },
+        { "retention", toUtf8String( artifact.m_RetentionClass ) },
+        { "request_id", aRequest.m_RequestId }
+    };
+
+    aResponse.m_ProviderTraceJson = fromUtf8String( trace.dump() );
+}
+
+
+void archiveNextActionVisualObservationForProviderInput(
+        AI_ARTIFACT_STORE* aStore,
+        AI_PROVIDER_REQUEST& aRequest )
+{
+    AI_VISUAL_SNAPSHOT& visual = aRequest.m_ContextSnapshot.m_Visual;
+
+    if( !aStore || !visual.HasPixels() )
+        return;
+
+    AI_VISUAL_OBSERVATION_ARTIFACT visualArtifact;
+    visualArtifact.m_Snapshot = visual;
+    visualArtifact.m_SidecarJson = visual.m_SidecarJson;
+
+    AI_ARTIFACT_RECORD artifact;
+    wxString           error;
+
+    if( !AiStoreVisualObservationArtifact(
+                aRequest.m_ContextSnapshot.m_ProjectId,
+                aRequest.m_ContextSnapshot.m_DocumentId,
+                wxS( "next_action" ), wxS( "trace" ),
+                visualArtifact, *aStore, artifact, error ) )
+    {
+        return;
+    }
+
+    nlohmann::json sidecar = parseObjectBody( visual.m_SidecarJson );
+
+    sidecar["artifact_ref"] = {
+        { "uri", toUtf8String( artifact.m_Uri ) },
+        { "kind", "visual_observation" },
+        { "retention", toUtf8String( artifact.m_RetentionClass ) },
+        { "frame_id", toUtf8String( visual.m_FrameId ) },
+        { "frame_kind", toUtf8String( visual.m_FrameKind ) }
+    };
+
+    visual.m_SidecarJson = fromUtf8String( sidecar.dump() );
+}
+
+
+wxString failedAttemptReasonCode( const AI_NEXT_ACTION_RUNTIME_STEP& aStep )
+{
+    nlohmann::json review = parseObjectBody( aStep.m_ReviewDecisionJson );
+
+    if( review.contains( "preview_gate_result" )
+        && review["preview_gate_result"].is_object() )
+    {
+        const nlohmann::json& gate = review["preview_gate_result"];
+
+        if( gate.contains( "reasons" ) && gate["reasons"].is_array()
+            && !gate["reasons"].empty() && gate["reasons"].front().is_string() )
+        {
+            return fromUtf8String( gate["reasons"].front().get<std::string>() );
+        }
+    }
+
+    if( review.contains( "reason_code" ) && review["reason_code"].is_string() )
+        return fromUtf8String( review["reason_code"].get<std::string>() );
+
+    nlohmann::json decision = parseObjectBody( aStep.m_LlmDecisionJson );
+
+    if( decision.contains( "reason_code" ) && decision["reason_code"].is_string() )
+        return fromUtf8String( decision["reason_code"].get<std::string>() );
+
+    return wxS( "abandoned" );
+}
+
+
+void archiveFailedHiddenAttemptAudits(
+        AI_ARTIFACT_STORE* aStore,
+        const AI_OBSERVATION_PACKET& aObservation,
+        const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
+        const std::vector<AI_NEXT_ACTION_ATTEMPT_RECORD>& aAttempts )
+{
+    if( !aStore || aStep.m_Status != AI_NEXT_ACTION_STEP_STATUS::Abandoned
+        || aStep.m_AttemptIds.empty() )
+    {
+        return;
+    }
+
+    const wxString terminalStatus =
+            fromUtf8String( nextActionStepStatusJsonName( aStep.m_Status ) );
+    const wxString reasonCode = failedAttemptReasonCode( aStep );
+
+    for( uint64_t attemptId : aStep.m_AttemptIds )
+    {
+        const auto attemptIt = std::find_if(
+                aAttempts.begin(), aAttempts.end(),
+                [&]( const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt )
+                {
+                    return aAttempt.m_Id == attemptId;
+                } );
+
+        if( attemptIt == aAttempts.end() )
+            continue;
+
+        const AI_NEXT_ACTION_ATTEMPT_RECORD& attempt = *attemptIt;
+        nlohmann::json payload = {
+            { "schema",
+              { { "name", "kisurf.ai.failed_hidden_attempt" },
+                { "version", 1 } } },
+            { "runtime_step_id", aStep.m_Id },
+            { "attempt_id", attempt.m_Id },
+            { "terminal_status", toUtf8String( terminalStatus ) },
+            { "reason_code", toUtf8String( reasonCode ) },
+            { "semantic_event", parseObjectBody( aStep.m_SemanticEventJson ) },
+            { "observation_packet", parseObjectBody( aStep.m_ObservationPacketJson ) },
+            { "llm_decision", parseObjectBody( aStep.m_LlmDecisionJson ) },
+            { "llm_decision_tool_results",
+              parseObjectBody( aStep.m_LlmDecisionToolResultsJson ) },
+            { "review_decision", parseObjectBody( aStep.m_ReviewDecisionJson ) },
+            { "review_tool_results",
+              parseObjectBody( aStep.m_ReviewToolResultsJson ) },
+            { "attempt",
+              { { "candidate_index", attempt.m_CandidateIndex },
+                { "hidden_session_id", attempt.m_HiddenSessionId },
+                { "hidden_step_id", attempt.m_HiddenStepId },
+                { "base_checkpoint_id", attempt.m_BaseCheckpointId },
+                { "attempt_journal", parseObjectBody( attempt.m_JournalJson ) },
+                { "render_outputs", parseObjectBody( attempt.m_RenderOutputsJson ) },
+                { "validation_facts",
+                  parseObjectBody( attempt.m_ValidationFactsJson ) },
+                { "rollback", parseObjectBody( attempt.m_RollbackJson ) },
+                { "budget_counters",
+                  parseObjectBody( attempt.m_BudgetCounters.AsJsonText() ) },
+                { "provenance", parseObjectBody( attempt.m_ProvenanceJson ) } } } };
+
+        AI_ARTIFACT_RECORD artifact;
+        wxString           error;
+        AiStoreFailedHiddenAttemptArtifact(
+                aObservation.m_ContextSnapshot.m_ProjectId,
+                aObservation.m_ContextSnapshot.m_DocumentId,
+                wxS( "next_action" ), wxS( "trace" ),
+                aStep.m_Id, attempt.m_Id, terminalStatus, reasonCode,
+                fromUtf8String( payload.dump() ), *aStore, artifact, error );
+    }
+}
+
+
+void archiveNextActionValidationReport( AI_ARTIFACT_STORE* aStore,
+                                        const AI_PROVIDER_REQUEST& aRequest,
+                                        AI_TOOL_CALL_RECORD& aToolCall )
+{
+    if( !aStore || aToolCall.m_ResultJson.IsEmpty()
+        || aToolCall.m_ToolName != wxS( "validate_hidden_attempt" ) )
+    {
+        return;
+    }
+
+    AI_ARTIFACT_RECORD artifact;
+    wxString           error;
+
+    if( !AiStoreValidationReportArtifact(
+                aRequest.m_ContextSnapshot.m_ProjectId,
+                aRequest.m_ContextSnapshot.m_DocumentId,
+                wxS( "next_action" ), wxS( "trace" ),
+                aToolCall.m_ToolCallId,
+                aToolCall.m_ToolName,
+                aToolCall.m_ResultJson,
+                *aStore, artifact, error ) )
+    {
+        return;
+    }
+
+    nlohmann::json result = parseObjectBody( aToolCall.m_ResultJson );
+
+    result["artifact_ref"] = {
+        { "uri", toUtf8String( artifact.m_Uri ) },
+        { "kind", "validation_report" },
+        { "retention", toUtf8String( artifact.m_RetentionClass ) },
+        { "tool_call_id", toUtf8String( aToolCall.m_ToolCallId ) }
+    };
+
+    aToolCall.m_ResultJson = fromUtf8String( result.dump() );
+}
+
+
+void attachNextActionValidationIssueCrops( AI_ARTIFACT_STORE* aStore,
+                                           const AI_PROVIDER_REQUEST& aRequest,
+                                           AI_TOOL_CALL_RECORD& aToolCall )
+{
+    if( !aStore || aToolCall.m_ResultJson.IsEmpty()
+        || aToolCall.m_ToolName != wxS( "validate_hidden_attempt" )
+        || !aRequest.m_ContextSnapshot.m_Visual.HasPixels() )
+    {
+        return;
+    }
+
+    nlohmann::json result = parseObjectBody( aToolCall.m_ResultJson );
+
+    if( !result.contains( "service_result" )
+        || !result["service_result"].is_object()
+        || !result["service_result"].contains( "validation" )
+        || !result["service_result"]["validation"].is_object()
+        || !result["service_result"]["validation"].contains( "issues" )
+        || !result["service_result"]["validation"]["issues"].is_array() )
+    {
+        return;
+    }
+
+    wxImage sourceImage;
+
+    if( !decodePngDataUriToImage( aRequest.m_ContextSnapshot.m_Visual.m_DataUri,
+                                  sourceImage ) )
+    {
+        return;
+    }
+
+    const AI_VISUAL_SNAPSHOT& visual = aRequest.m_ContextSnapshot.m_Visual;
+    const AI_VISUAL_PIXEL_WORLD_TRANSFORM transform =
+            visualPixelWorldTransformFromSidecarJson( visual.m_SidecarJson );
+    const std::vector<AI_VISUAL_ANCHOR_RECORD> anchors =
+            visualAnchorsFromSidecarJson( visual.m_SidecarJson );
+
+    const nlohmann::json& issues =
+            result["service_result"]["validation"]["issues"];
+    nlohmann::json cropRefs = nlohmann::json::array();
+    size_t         issueIndex = 0;
+
+    for( const nlohmann::json& issue : issues )
+    {
+        if( !issue.is_object() )
+            continue;
+
+        AI_VISUAL_BOUNDS issuePixelBounds;
+        AI_VISUAL_BOUNDS issueWorldBounds;
+        const bool       hasIssueWorldBounds =
+                issue.contains( "world_bounds" )
+                && visualBoundsFromFlexibleJson( issue["world_bounds"],
+                                                 issueWorldBounds );
+
+        bool hasIssuePixelBounds =
+                issue.contains( "pixel_bounds" )
+                && visualBoundsFromFlexibleJson( issue["pixel_bounds"],
+                                                 issuePixelBounds );
+
+        if( !hasIssuePixelBounds && hasIssueWorldBounds )
+        {
+            hasIssuePixelBounds = pixelBoundsFromWorldBounds(
+                    issueWorldBounds, transform, issuePixelBounds );
+        }
+
+        if( !hasIssuePixelBounds )
+            continue;
+
+        const std::string issueId =
+                issue.value( "id",
+                        issue.value( "key",
+                                std::string( "validation_issue_" )
+                                + std::to_string( issueIndex + 1 ) ) );
+
+        AI_VISUAL_ISSUE_CROP_REQUEST cropRequest;
+        cropRequest.m_FrameId = visual.m_FrameId
+                                + wxString::Format(
+                                          wxS( ".issue_crop.%llu" ),
+                                          static_cast<unsigned long long>(
+                                                  issueIndex + 1 ) );
+        cropRequest.m_Source = visual.m_Source;
+        cropRequest.m_ParentFrameId = visual.m_FrameId;
+        cropRequest.m_ParentFrameKind = visual.m_FrameKind;
+        cropRequest.m_IssueId = fromUtf8String( issueId );
+        cropRequest.m_IssueKind =
+                fromUtf8String( issue.value( "kind", std::string() ) );
+        cropRequest.m_IssueSeverity =
+                fromUtf8String( issue.value( "severity", std::string() ) );
+        cropRequest.m_IssueTitle =
+                fromUtf8String( issue.value( "title", std::string() ) );
+        cropRequest.m_IssueMessage =
+                fromUtf8String( issue.value( "message", std::string() ) );
+        cropRequest.m_DocumentRevision =
+                aRequest.m_ContextSnapshot.m_Version.m_DocumentRevision;
+        cropRequest.m_PreviewRevision =
+                aRequest.m_ContextSnapshot.m_Version.m_ViewRevision;
+        cropRequest.m_ContextPaddingPx = 24;
+        cropRequest.m_IssuePixelBounds = issuePixelBounds;
+        cropRequest.m_IssueWorldBounds = issueWorldBounds;
+        cropRequest.m_PixelWorldTransform = transform;
+        cropRequest.m_Anchors = anchors;
+
+        AI_VISUAL_OBSERVATION_ARTIFACT cropArtifact =
+                BuildAiVisualIssueCropFromImage( sourceImage, cropRequest );
+
+        if( !cropArtifact.m_Snapshot.HasPixels() )
+            continue;
+
+        AI_ARTIFACT_RECORD artifact;
+        wxString           error;
+
+        if( !AiStoreVisualObservationArtifact(
+                    aRequest.m_ContextSnapshot.m_ProjectId,
+                    aRequest.m_ContextSnapshot.m_DocumentId,
+                    wxS( "next_action" ), wxS( "trace" ), cropArtifact,
+                    *aStore, artifact, error ) )
+        {
+            continue;
+        }
+
+        nlohmann::json cropRef = {
+            { "uri", toUtf8String( artifact.m_Uri ) },
+            { "kind", "visual_observation" },
+            { "retention", toUtf8String( artifact.m_RetentionClass ) },
+            { "frame_id", toUtf8String( cropRequest.m_FrameId ) },
+            { "frame_kind", "issue_crop" },
+            { "parent_frame_id", toUtf8String( visual.m_FrameId ) },
+            { "parent_frame_kind", toUtf8String( visual.m_FrameKind ) },
+            { "pixel_bounds",
+              { { "left", issuePixelBounds.m_Left },
+                { "top", issuePixelBounds.m_Top },
+                { "right", issuePixelBounds.m_Right },
+                { "bottom", issuePixelBounds.m_Bottom } } },
+            { "source_issue",
+              { { "id", issueId },
+                { "kind", issue.value( "kind", std::string() ) },
+                { "severity", issue.value( "severity", std::string() ) },
+                { "title", issue.value( "title", std::string() ) },
+                { "message", issue.value( "message", std::string() ) } } }
+        };
+
+        cropRefs.push_back( std::move( cropRef ) );
+
+        if( cropRefs.size() >= 4 )
+            break;
+
+        ++issueIndex;
+    }
+
+    if( cropRefs.empty() )
+        return;
+
+    result["issue_visual_artifact_count"] = cropRefs.size();
+    result["issue_visual_artifacts"] = std::move( cropRefs );
+    aToolCall.m_ResultJson = fromUtf8String( result.dump() );
+}
+}
+
+
 AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
         AI_PROVIDER_REQUEST aRequest,
         const AI_OBSERVATION_PACKET& aObservation,
         AI_NEXT_ACTION_ATTEMPT_RECORD* aAttempt )
 {
+    archiveNextActionVisualObservationForProviderInput( m_ArtifactStore, aRequest );
+
     AI_PROVIDER_RESPONSE response = m_Provider->Generate( aRequest );
+    markNextActionPostSideEffectProviderFailure( response, aRequest,
+                                                 aRequest.m_ToolResults );
+    archiveNextActionProviderRecoveryArtifact( m_ArtifactStore, aRequest,
+                                               response );
+    appendNextActionPromptTrace( m_PromptTraceStore,
+                                 AiCompileProviderInputWithBudget( aRequest ),
+                                 response );
 
     std::vector<AI_TOOL_CALL_RECORD> handledToolCalls = aRequest.m_ToolResults;
     size_t                           toolRounds = 0;
@@ -14866,6 +16070,13 @@ AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
             toolCall.m_ErrorCode = result.m_ErrorCode;
             toolCall.m_Message = result.m_Message;
             toolCall.m_ResultJson = result.m_ResultJson;
+            attachNextActionValidationIssueCrops( m_ArtifactStore, aRequest,
+                                                  toolCall );
+            archiveNextActionValidationReport( m_ArtifactStore, aRequest, toolCall );
+            if( aAttempt && toolCall.m_ToolName == wxS( "validate_hidden_attempt" ) )
+                aAttempt->m_ValidationFactsJson = toolCall.m_ResultJson;
+
+            archiveLargeNextActionToolResult( m_ArtifactStore, aRequest, toolCall );
         }
 
         handledToolCalls.insert(
@@ -14888,7 +16099,16 @@ AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
 
         AI_PROVIDER_REQUEST continuationRequest = aRequest;
         continuationRequest.m_ToolResults = handledToolCalls;
+
         response = m_Provider->Generate( continuationRequest );
+        markNextActionPostSideEffectProviderFailure( response, continuationRequest,
+                                                     handledToolCalls );
+        archiveNextActionProviderRecoveryArtifact( m_ArtifactStore,
+                                                   continuationRequest,
+                                                   response );
+        appendNextActionPromptTrace( m_PromptTraceStore,
+                                     AiCompileProviderInputWithBudget( continuationRequest ),
+                                     response );
         response.m_RequestId = aRequest.m_RequestId;
     }
 
@@ -14947,6 +16167,150 @@ AI_PROVIDER_RESPONSE AI_NEXT_ACTION_RUNTIME::generateWithToolLoop(
 }
 
 
+uint64_t AI_NEXT_ACTION_RUNTIME::conversationIdForEvent(
+        const AI_SEMANTIC_EVENT& aEvent )
+{
+    const wxString conversationKey = nextActionConversationKey( aEvent );
+
+    if( m_ActiveConversationId == 0
+        || m_ActiveConversationKey != conversationKey )
+    {
+        m_ActiveConversationKey = conversationKey;
+        m_ActiveConversationId = m_NextConversationId++;
+    }
+
+    return m_ActiveConversationId;
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::attachRetrievedMemory(
+        AI_PROVIDER_REQUEST& aRequest ) const
+{
+    if( aRequest.m_ContextSnapshot.m_ProjectId.IsEmpty()
+        || aRequest.m_ContextSnapshot.m_DocumentId.IsEmpty() )
+    {
+        return;
+    }
+
+    if( m_MemoryStore
+        && aRequest.m_RetrievedMemoryBlocks.size() < aRequest.m_MaxRetrievedMemoryRecords )
+    {
+        AI_MEMORY_QUERY query;
+        query.m_ProjectId = aRequest.m_ContextSnapshot.m_ProjectId;
+        query.m_DocumentId = aRequest.m_ContextSnapshot.m_DocumentId;
+        query.m_AcceptanceState = wxS( "accepted" );
+        query.m_MinTrustLevel = 70;
+        query.m_Limit = aRequest.m_MaxRetrievedMemoryRecords
+                        - aRequest.m_RetrievedMemoryBlocks.size();
+
+        wxString error;
+        std::vector<AI_MEMORY_RECORD> records = m_MemoryStore->Query( query, error );
+
+        if( error.IsEmpty() )
+        {
+            for( const AI_MEMORY_RECORD& record : records )
+                aRequest.m_RetrievedMemoryBlocks.push_back(
+                        AiMemoryRecordToProviderInputBlock( record ) );
+        }
+    }
+
+    if( m_LocalTextMemoryIndex
+        && aRequest.m_RetrievedMemoryBlocks.size() < aRequest.m_MaxRetrievedMemoryRecords )
+    {
+        AI_LOCAL_TEXT_MEMORY_QUERY query;
+        query.m_Text = aRequest.m_UserText + wxS( "\n" )
+                       + aRequest.m_ContextSnapshot.AsPromptText();
+        query.m_ProjectId = aRequest.m_ContextSnapshot.m_ProjectId;
+        query.m_DocumentId = aRequest.m_ContextSnapshot.m_DocumentId;
+
+        const size_t remaining =
+                aRequest.m_MaxRetrievedMemoryRecords - aRequest.m_RetrievedMemoryBlocks.size();
+
+        for( const AI_LOCAL_TEXT_MEMORY_RESULT& result :
+             m_LocalTextMemoryIndex->Search( query, remaining ) )
+        {
+            aRequest.m_RetrievedMemoryBlocks.push_back(
+                    AiLocalTextMemoryResultToProviderInputBlock( result ) );
+        }
+    }
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::recordAcceptedSuggestionMemory(
+        const AI_SUGGESTION_RECORD& aSuggestion ) const
+{
+    if( !m_MemoryStore || !isNextActionRuntimeSuggestion( aSuggestion ) )
+        return;
+
+    NEXT_ACTION_MEMORY_IDENTITY identity =
+            memoryIdentityFromSuggestionProvenance( aSuggestion );
+
+    if( identity.m_ProjectId.IsEmpty() || identity.m_DocumentId.IsEmpty() )
+        return;
+
+    AI_MEMORY_RECORD record;
+    record.m_Id = wxS( "nextaction.accepted." )
+                  + fnv1a64Fingerprint( aSuggestion.m_RuntimeProvenanceJson );
+    record.m_ProjectId = identity.m_ProjectId;
+    record.m_DocumentId = identity.m_DocumentId;
+    record.m_AgentKind = wxS( "nextaction" );
+    record.m_Type = wxS( "accepted_next_action" );
+    record.m_Text = acceptedSuggestionMemoryText( aSuggestion );
+    record.m_Source = wxS( "next_action_accept" );
+    record.m_ProvenanceJson = aSuggestion.m_RuntimeProvenanceJson;
+    record.m_BoardStateVersion = wxString::Format(
+            wxS( "doc:%llu;selection:%llu;view:%llu" ),
+            static_cast<unsigned long long>(
+                    aSuggestion.m_ContextVersion.m_DocumentRevision ),
+            static_cast<unsigned long long>(
+                    aSuggestion.m_ContextVersion.m_SelectionRevision ),
+            static_cast<unsigned long long>(
+                    aSuggestion.m_ContextVersion.m_ViewRevision ) );
+    record.m_AcceptanceState = wxS( "accepted" );
+    record.m_TrustLevel = 90;
+    record.m_Sequence = aSuggestion.m_Sequence;
+
+    wxString error;
+    m_MemoryStore->Append( record, error );
+}
+
+
+void AI_NEXT_ACTION_RUNTIME::persistSession( uint64_t aConversationId ) const
+{
+    if( !m_SessionStore || aConversationId == 0 )
+        return;
+
+    AI_NEXT_ACTION_SESSION_RECORD record;
+    record.m_ConversationId = aConversationId;
+
+    for( const AI_NEXT_ACTION_RUNTIME_STEP& step : m_Steps )
+    {
+        if( step.m_ConversationId != aConversationId )
+            continue;
+
+        if( record.m_SessionType.IsEmpty() )
+            record.m_SessionType = nextActionSessionTypeForStep( step );
+
+        if( record.m_ProjectId.IsEmpty() )
+            record.m_ProjectId = step.m_ContextVersion.m_ProjectId;
+
+        if( record.m_DocumentId.IsEmpty() )
+            record.m_DocumentId = step.m_ContextVersion.m_DocumentId;
+
+        record.m_Steps.push_back( nextActionSessionStepRecord( step ) );
+    }
+
+    if( record.m_SessionType.IsEmpty() )
+        record.m_SessionType = wxS( "next_action" );
+
+    if( aConversationId == m_ActiveConversationId )
+        record.m_ContextKey = m_ActiveConversationKey;
+
+    wxString error;
+    m_SessionStore->WriteSession( record, error );
+}
+
+
 std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
@@ -14957,6 +16321,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
 
     AI_NEXT_ACTION_RUNTIME_STEP step;
     step.m_Id = m_NextStepId++;
+    step.m_ConversationId = conversationIdForEvent( *event );
     step.m_SuggestionStreamId = event->m_SlotId;
     step.m_ContextVersion = event->m_ContextVersion;
     step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Reasoning;
@@ -14974,6 +16339,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     {
         step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
         m_Steps.push_back( step );
+        persistSession( step.m_ConversationId );
         return std::nullopt;
     }
 
@@ -14990,6 +16356,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     {
         step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
         m_Steps.push_back( step );
+        persistSession( step.m_ConversationId );
         return std::nullopt;
     }
 
@@ -14998,6 +16365,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     {
         step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
         m_Steps.push_back( step );
+        persistSession( step.m_ConversationId );
         return std::nullopt;
     }
 
@@ -15048,6 +16416,10 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
                 if( storedAttempt.m_Id == attempt.m_Id )
                 {
                     storedAttempt.m_JournalJson = attempt.m_JournalJson;
+                    storedAttempt.m_RenderOutputsJson = attempt.m_RenderOutputsJson;
+                    storedAttempt.m_ValidationFactsJson =
+                            attempt.m_ValidationFactsJson;
+                    storedAttempt.m_RollbackJson = attempt.m_RollbackJson;
                     storedAttempt.m_ProvenanceJson = attempt.m_ProvenanceJson;
                     storedAttempt.m_BudgetCounters = attempt.m_BudgetCounters;
                     break;
@@ -15082,7 +16454,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
                 }
 
                 AI_SUGGESTION_RECORD suggestion =
-                        publishAttempt( step, attempt, publish );
+                        publishAttempt( step, observation, attempt, publish );
                 std::optional<AI_SUGGESTION_RECORD> stored =
                         storeSuggestion( suggestion );
 
@@ -15091,6 +16463,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
                     step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Published;
                     step.m_PublishedSuggestionId = stored->m_Id;
                     m_Steps.push_back( step );
+                    persistSession( step.m_ConversationId );
                     return stored;
                 }
             }
@@ -15117,7 +16490,10 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     }
 
     step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
+    archiveFailedHiddenAttemptAudits( m_ArtifactStore, observation, step,
+                                      m_Attempts );
     m_Steps.push_back( step );
+    persistSession( step.m_ConversationId );
     return std::nullopt;
 }
 
@@ -15491,6 +16867,7 @@ bool AI_NEXT_ACTION_RUNTIME::Accept( uint64_t aSuggestionId, AI_EDIT_SESSION& aE
     attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
+    recordAcceptedSuggestionMemory( *suggestion );
     return true;
 }
 
@@ -15538,6 +16915,7 @@ bool AI_NEXT_ACTION_RUNTIME::Accept(
     attachAcceptGateResult( *suggestion, true, {} );
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
+    recordAcceptedSuggestionMemory( *suggestion );
     return true;
 }
 
@@ -15565,6 +16943,7 @@ bool AI_NEXT_ACTION_RUNTIME::MarkAccepted( uint64_t aSuggestionId )
 
     suggestion->m_Status = AI_SUGGESTION_STATUS::Accepted;
     deactivateRuntimePreviewLease( *suggestion );
+    recordAcceptedSuggestionMemory( *suggestion );
     return true;
 }
 
@@ -15592,6 +16971,44 @@ bool AI_NEXT_ACTION_RUNTIME::Expire( uint64_t aSuggestionId )
     suggestion->m_Status = AI_SUGGESTION_STATUS::Expired;
     deactivateRuntimePreviewLease( *suggestion );
     return true;
+}
+
+
+size_t AI_NEXT_ACTION_RUNTIME::ExpireActive()
+{
+    size_t expired = 0;
+
+    for( AI_SUGGESTION_RECORD& suggestion : m_Suggestions )
+    {
+        if( !isActive( suggestion ) )
+            continue;
+
+        suggestion.m_Status = AI_SUGGESTION_STATUS::Expired;
+        deactivateRuntimePreviewLease( suggestion );
+        ++expired;
+    }
+
+    for( AI_NEXT_ACTION_RUNTIME_STEP& step : m_Steps )
+    {
+        if( step.m_Status != AI_NEXT_ACTION_STEP_STATUS::Published )
+            continue;
+
+        const auto suggestionIt =
+                std::find_if( m_Suggestions.begin(), m_Suggestions.end(),
+                              [&step]( const AI_SUGGESTION_RECORD& aSuggestion )
+                              {
+                                  return aSuggestion.m_Id
+                                         == step.m_PublishedSuggestionId;
+                              } );
+
+        if( suggestionIt != m_Suggestions.end()
+            && suggestionIt->m_Status == AI_SUGGESTION_STATUS::Expired )
+        {
+            step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Expired;
+        }
+    }
+
+    return expired;
 }
 
 
@@ -15734,6 +17151,7 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
 
     AI_PROVIDER_REQUEST request;
     request.m_RequestId = aStep.m_Id * 10 + 1;
+    request.m_ConversationId = aStep.m_ConversationId;
     request.m_RequestKind = AI_PROVIDER_REQUEST_KIND::NextActionDecision;
     request.m_EditorKind = aObservation.m_ContextSnapshot.m_EditorKind;
     request.m_ContextVersion = aObservation.m_ContextVersion.m_ContextVersion;
@@ -15752,6 +17170,13 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
     request.m_MaxToolRounds =
             attemptPolicyForWorkState( aObservation.m_Kind ).m_MaxToolRounds;
     request.m_DisableDefaultTools = true;
+    AI_PROVIDER_INPUT_BLOCK recentSteps =
+            recentNextActionStepsBlock( m_Steps, aStep.m_ConversationId );
+
+    if( !recentSteps.m_Id.IsEmpty() )
+        request.m_ProviderInputBlocks.push_back( std::move( recentSteps ) );
+
+    attachRetrievedMemory( request );
 
     AI_PROVIDER_RESPONSE response =
             generateWithToolLoop( request, aObservation, nullptr );
@@ -15867,6 +17292,7 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
 
     AI_PROVIDER_REQUEST request;
     request.m_RequestId = aStep.m_Id * 10 + 2;
+    request.m_ConversationId = aStep.m_ConversationId;
     request.m_RequestKind = AI_PROVIDER_REQUEST_KIND::NextActionReview;
     request.m_EditorKind = aObservation.m_ContextSnapshot.m_EditorKind;
     request.m_ContextVersion = aObservation.m_ContextVersion.m_ContextVersion;
@@ -15895,6 +17321,13 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
                                                      .m_ToolRoundCount )
                     : 0;
     request.m_DisableDefaultTools = true;
+    AI_PROVIDER_INPUT_BLOCK recentSteps =
+            recentNextActionStepsBlock( m_Steps, aStep.m_ConversationId );
+
+    if( !recentSteps.m_Id.IsEmpty() )
+        request.m_ProviderInputBlocks.push_back( std::move( recentSteps ) );
+
+    attachRetrievedMemory( request );
 
     AI_PROVIDER_RESPONSE response =
             generateWithToolLoop( request, aObservation, &aAttempt );
@@ -16141,6 +17574,7 @@ AI_NEXT_ACTION_PUBLISH_DECISION AI_NEXT_ACTION_RUNTIME::buildPublishDecision(
 
 AI_SUGGESTION_RECORD AI_NEXT_ACTION_RUNTIME::publishAttempt(
         const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
+        const AI_OBSERVATION_PACKET& aObservation,
         const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt,
         const AI_NEXT_ACTION_PUBLISH_DECISION& aPublish )
 {
@@ -16181,6 +17615,10 @@ AI_SUGGESTION_RECORD AI_NEXT_ACTION_RUNTIME::publishAttempt(
             { { "runtime", "next_action" },
               { "runtime_step_id", aStep.m_Id },
               { "attempt_id", aAttempt.m_Id },
+              { "project_id",
+                toUtf8String( aObservation.m_ContextSnapshot.m_ProjectId ) },
+              { "document_id",
+                toUtf8String( aObservation.m_ContextSnapshot.m_DocumentId ) },
               { "dependency_fingerprint",
                 toUtf8String( aPublish.m_AcceptToken.m_DependencyFingerprint ) },
               { "preview_lease",

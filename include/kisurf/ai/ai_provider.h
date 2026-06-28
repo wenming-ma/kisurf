@@ -42,7 +42,6 @@ struct KICOMMON_API AI_PROVIDER_SETTINGS
 
     static wxString DefaultBaseUrl();
     static wxString DefaultModel();
-    static AI_PROVIDER_SETTINGS FromEnvironment();
 };
 
 class KICOMMON_API AI_PROVIDER

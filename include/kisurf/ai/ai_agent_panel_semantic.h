@@ -16,6 +16,9 @@ struct KICOMMON_API AI_AGENT_PANEL_SEMANTIC_VIEW
     size_t               m_MessageCount = 0;
     size_t               m_SuggestionCount = 0;
     size_t               m_LogEntryCount = 0;
+    bool                 m_HasProviderRecovery = false;
+    bool                 m_CanExecuteProviderRecovery = false;
+    wxString             m_ProviderRecoveryEpisodeJson;
     wxString             m_ComposerStatusText;
     wxString             m_LogSummary;
 };

@@ -44,6 +44,10 @@ class KICOMMON_API AI_MODEL_SETTINGS_DIALOG_BASE : public wxDialog
 		wxTextCtrl* m_Model;
 		wxStaticText* m_ApiKeyLabel;
 		wxTextCtrl* m_ApiKey;
+		wxStaticText* m_ResearchFolderLabel;
+		wxBoxSizer* m_ResearchFolderSizer;
+		wxTextCtrl* m_ResearchFolder;
+		wxButton* m_ResearchFolderBrowse;
 		wxStaticText* m_HelpText;
 		wxStdDialogButtonSizer* m_StdDialogButtons;
 		wxButton* m_StdDialogButtonsOK;

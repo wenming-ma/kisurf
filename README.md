@@ -305,16 +305,20 @@ Configure the provider from inside the editor:
 1. Open `AI -> Model Settings...`.
 2. Alternatively, open `AI -> Agent` and click `Model...` in the Agent pane.
 3. Choose `OpenAI-compatible`.
-4. Set the base URL, model, and API key.
+4. Set the base URL, model, API key, and optional research folder.
 5. Press OK; the Agent reloads the model provider for the next chat or
    Next Action suggestion.
 
-The default base URL is `https://sub2api.wenming-dev.org/v1`. API keys are stored
+The default OpenAI-compatible endpoint is
+`https://sub2api.wenming-dev.org/v1` with model `gpt-5.5`. API keys are stored
 through the local platform secret store and are not written to project files.
 Normal Agent runtime configuration is loaded from Model Settings; OpenAI API
 key, base URL, and model environment variables are not used as default runtime
 credentials. Use `KISURF_AI_PROVIDER=stub` only when you deliberately want the
 offline deterministic provider.
+If a research folder is configured, `.md`, `.txt`, `.text`, `.markdown`, and
+`.rst` files are loaded as local text memory for the current project/document
+and can be retrieved by both Chat Agent and Next Action provider requests.
 The `Anthropic-compatible` option is visible for future switching, but this
 developer-preview branch only implements OpenAI-compatible runtime calls.
 

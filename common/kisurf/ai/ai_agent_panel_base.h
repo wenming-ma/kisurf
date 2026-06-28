@@ -43,6 +43,7 @@ class KICOMMON_API AI_AGENT_PANEL_BASE : public wxPanel
 		wxBoxSizer* m_RootSizer;
 		wxBoxSizer* m_HeaderSizer;
 		wxButton* m_ModelSettingsButton;
+		wxButton* m_NewChatButton;
 		wxCheckBox* m_BackgroundAgentToggle;
 		wxNotebook* m_Notebook;
 		wxPanel* m_ChatPage;
@@ -65,6 +66,7 @@ class KICOMMON_API AI_AGENT_PANEL_BASE : public wxPanel
 
 		// Virtual event handlers, override them in your derived class
 		virtual void OnModelSettings( wxCommandEvent& event ) { event.Skip(); }
+		virtual void OnNewChat( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnBackgroundAgentToggled( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPromptTextChanged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPromptEnter( wxCommandEvent& event ) { event.Skip(); }

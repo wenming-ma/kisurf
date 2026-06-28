@@ -132,17 +132,25 @@ set( KICOMMON_SRCS
     kisurf/ai/ai_agent_panel_base.cpp
     kisurf/ai/ai_agent_panel_model.cpp
     kisurf/ai/ai_agent_panel_semantic.cpp
+    kisurf/ai/ai_artifact_store.cpp
+    kisurf/ai/ai_chat_session_store.cpp
     kisurf/ai/ai_model_config.cpp
     kisurf/ai/ai_model_settings_dialog_base.cpp
     kisurf/ai/ai_observability_log.cpp
     kisurf/ai/ai_callback_action_runner.cpp
     kisurf/ai/ai_context_index.cpp
+    kisurf/ai/ai_provider_input_compiler.cpp
+    kisurf/ai/ai_local_text_memory.cpp
+    kisurf/ai/ai_memory_store.cpp
+    kisurf/ai/ai_token_budget_manager.cpp
+    kisurf/ai/ai_prompt_trace_store.cpp
     kisurf/ai/ai_context_anchor_provider.cpp
     kisurf/ai/ai_edit_session.cpp
     kisurf/ai/ai_atomic_operation_executor.cpp
     kisurf/ai/ai_execution_session.cpp
     kisurf/ai/ai_next_action_candidate_library.cpp
     kisurf/ai/ai_next_action_runtime.cpp
+    kisurf/ai/ai_next_action_session_store.cpp
     kisurf/ai/ai_preview_manager.cpp
     kisurf/ai/ai_provider.cpp
     kisurf/ai/ai_python_local_worker.cpp

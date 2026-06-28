@@ -18,6 +18,7 @@ struct KICOMMON_API AI_MODEL_CONFIG
     wxString               m_BaseUrl;
     wxString               m_Model;
     wxString               m_ApiKey;
+    wxString               m_ResearchFolder;
 
     void Normalize();
 };

@@ -16,6 +16,8 @@
 
 #include <optional>
 #include <string>
+#include <utility>
+#include <algorithm>
 
 namespace
 {
@@ -43,12 +45,293 @@ nlohmann::json parseObjectJson( const wxString& aText )
 }
 
 
+nlohmann::json visualBoundsJson( const AI_VISUAL_BOUNDS& aBounds )
+{
+    return {
+        { "left", aBounds.m_Left },
+        { "top", aBounds.m_Top },
+        { "right", aBounds.m_Right },
+        { "bottom", aBounds.m_Bottom }
+    };
+}
+
+
 std::string stringOrFallback( const wxString& aText, const char* aFallback )
 {
     if( aText.IsEmpty() )
         return aFallback;
 
     return toUtf8String( aText );
+}
+
+
+nlohmann::json snapshotSidecarJson( const AI_VISUAL_SNAPSHOT& aSnapshot )
+{
+    if( aSnapshot.m_SidecarJson.IsEmpty() )
+        return nlohmann::json::object();
+
+    return parseObjectJson( aSnapshot.m_SidecarJson );
+}
+
+
+bool visualBoundsValid( const AI_VISUAL_BOUNDS& aBounds )
+{
+    return aBounds.m_Right > aBounds.m_Left && aBounds.m_Bottom > aBounds.m_Top;
+}
+
+
+bool jsonNumberField( const nlohmann::json& aObject, const char* aKey,
+                      double& aValue )
+{
+    if( !aObject.is_object() || !aObject.contains( aKey )
+        || !aObject[aKey].is_number() )
+    {
+        return false;
+    }
+
+    aValue = aObject[aKey].get<double>();
+    return true;
+}
+
+
+bool pixelWorldTransformFromSidecar( const nlohmann::json& aSidecar,
+                                     AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform )
+{
+    if( !aSidecar.is_object() || !aSidecar.contains( "pixel_world_transform" )
+        || !aSidecar["pixel_world_transform"].is_object() )
+    {
+        return false;
+    }
+
+    const nlohmann::json& transform = aSidecar["pixel_world_transform"];
+
+    if( !transform.contains( "world_origin" )
+        || !transform["world_origin"].is_object()
+        || !jsonNumberField( transform["world_origin"], "x",
+                             aTransform.m_WorldOriginX )
+        || !jsonNumberField( transform["world_origin"], "y",
+                             aTransform.m_WorldOriginY )
+        || !jsonNumberField( transform, "world_x_per_pixel_x",
+                             aTransform.m_WorldXPerPixelX )
+        || !jsonNumberField( transform, "world_x_per_pixel_y",
+                             aTransform.m_WorldXPerPixelY )
+        || !jsonNumberField( transform, "world_y_per_pixel_x",
+                             aTransform.m_WorldYPerPixelX )
+        || !jsonNumberField( transform, "world_y_per_pixel_y",
+                             aTransform.m_WorldYPerPixelY ) )
+    {
+        return false;
+    }
+
+    const double determinant =
+            aTransform.m_WorldXPerPixelX * aTransform.m_WorldYPerPixelY
+            - aTransform.m_WorldXPerPixelY * aTransform.m_WorldYPerPixelX;
+
+    return determinant != 0.0;
+}
+
+
+std::optional<std::pair<double, double>> pixelPointFromWorldPoint(
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform,
+        double aWorldX, double aWorldY )
+{
+    const double determinant =
+            aTransform.m_WorldXPerPixelX * aTransform.m_WorldYPerPixelY
+            - aTransform.m_WorldXPerPixelY * aTransform.m_WorldYPerPixelX;
+
+    if( determinant == 0.0 )
+        return std::nullopt;
+
+    const double dx = aWorldX - aTransform.m_WorldOriginX;
+    const double dy = aWorldY - aTransform.m_WorldOriginY;
+    const double pixelX = ( dx * aTransform.m_WorldYPerPixelY
+                            - aTransform.m_WorldXPerPixelY * dy )
+                          / determinant;
+    const double pixelY = ( aTransform.m_WorldXPerPixelX * dy
+                            - dx * aTransform.m_WorldYPerPixelX )
+                          / determinant;
+
+    return std::make_pair( pixelX, pixelY );
+}
+
+
+std::optional<AI_VISUAL_BOUNDS> pixelBoundsFromWorldBounds(
+        const AI_VISUAL_BOUNDS& aWorldBounds,
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM& aTransform )
+{
+    if( !visualBoundsValid( aWorldBounds ) )
+        return std::nullopt;
+
+    const std::optional<std::pair<double, double>> corners[] = {
+        pixelPointFromWorldPoint( aTransform, aWorldBounds.m_Left, aWorldBounds.m_Top ),
+        pixelPointFromWorldPoint( aTransform, aWorldBounds.m_Right, aWorldBounds.m_Top ),
+        pixelPointFromWorldPoint( aTransform, aWorldBounds.m_Left, aWorldBounds.m_Bottom ),
+        pixelPointFromWorldPoint( aTransform, aWorldBounds.m_Right, aWorldBounds.m_Bottom )
+    };
+
+    if( !corners[0] || !corners[1] || !corners[2] || !corners[3] )
+        return std::nullopt;
+
+    const double xs[] = {
+        corners[0]->first,
+        corners[1]->first,
+        corners[2]->first,
+        corners[3]->first
+    };
+    const double ys[] = {
+        corners[0]->second,
+        corners[1]->second,
+        corners[2]->second,
+        corners[3]->second
+    };
+
+    return AI_VISUAL_BOUNDS{
+        *std::min_element( std::begin( xs ), std::end( xs ) ),
+        *std::min_element( std::begin( ys ), std::end( ys ) ),
+        *std::max_element( std::begin( xs ), std::end( xs ) ),
+        *std::max_element( std::begin( ys ), std::end( ys ) )
+    };
+}
+
+
+nlohmann::json visualAnchorJson(
+        const AI_VISUAL_ANCHOR_RECORD& aAnchor,
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM* aPixelWorldTransform = nullptr )
+{
+    AI_VISUAL_BOUNDS pixelBounds = aAnchor.m_PixelBounds;
+
+    if( aPixelWorldTransform && !visualBoundsValid( pixelBounds )
+        && visualBoundsValid( aAnchor.m_WorldBounds ) )
+    {
+        if( std::optional<AI_VISUAL_BOUNDS> projected =
+                    pixelBoundsFromWorldBounds( aAnchor.m_WorldBounds,
+                                                *aPixelWorldTransform ) )
+        {
+            pixelBounds = *projected;
+        }
+    }
+
+    return {
+        { "anchor_id", toUtf8String( aAnchor.m_AnchorId ) },
+        { "object_id", toUtf8String( aAnchor.m_ObjectId ) },
+        { "handle", toUtf8String( aAnchor.m_Handle ) },
+        { "layer", toUtf8String( aAnchor.m_Layer ) },
+        { "net_name", toUtf8String( aAnchor.m_NetName ) },
+        { "world_xy", { { "x", aAnchor.m_WorldX }, { "y", aAnchor.m_WorldY } } },
+        { "world_bounds", visualBoundsJson( aAnchor.m_WorldBounds ) },
+        { "pixel_bounds", visualBoundsJson( pixelBounds ) }
+    };
+}
+
+
+nlohmann::json visualAnchorsJson(
+        const std::vector<AI_VISUAL_ANCHOR_RECORD>& aAnchors,
+        const AI_VISUAL_PIXEL_WORLD_TRANSFORM* aPixelWorldTransform = nullptr )
+{
+    nlohmann::json anchors = nlohmann::json::array();
+
+    for( const AI_VISUAL_ANCHOR_RECORD& anchor : aAnchors )
+        anchors.push_back( visualAnchorJson( anchor, aPixelWorldTransform ) );
+
+    return anchors;
+}
+
+
+nlohmann::json previewFrameJson( const AI_VISUAL_SNAPSHOT& aSnapshot,
+                                 uint64_t aPreviewId,
+                                 const AI_EXECUTION_SESSION& aSession,
+                                 size_t aRenderedItemCount,
+                                 size_t aRenderedOverlayCount,
+                                 const std::vector<AI_VISUAL_ANCHOR_RECORD>& aAnchors )
+{
+    const std::string fallbackFrameId =
+            "preview_after_" + std::to_string( aPreviewId );
+
+    nlohmann::json frame = {
+        { "frame_id",
+          stringOrFallback( aSnapshot.m_FrameId, fallbackFrameId.c_str() ) },
+        { "frame_kind",
+          stringOrFallback( aSnapshot.m_FrameKind, "preview_after" ) },
+        { "source",
+          stringOrFallback( aSnapshot.m_Source,
+                            "pcbnew.native_preview_scene" ) },
+        { "has_pixels", aSnapshot.HasPixels() },
+        { "preview_id", aPreviewId },
+        { "session_id", aSession.SessionId() },
+        { "epoch", aSession.Epoch() },
+        { "rendered_item_count", aRenderedItemCount },
+        { "rendered_overlay_count", aRenderedOverlayCount }
+    };
+
+    if( aSnapshot.m_WidthPx > 0 )
+        frame["width_px"] = aSnapshot.m_WidthPx;
+
+    if( aSnapshot.m_HeightPx > 0 )
+        frame["height_px"] = aSnapshot.m_HeightPx;
+
+    if( aSnapshot.m_ByteSize > 0 )
+        frame["byte_size"] = aSnapshot.m_ByteSize;
+
+    if( !aSnapshot.m_MimeType.IsEmpty() )
+        frame["mime_type"] = toUtf8String( aSnapshot.m_MimeType );
+
+    if( !aSnapshot.m_UnavailableReason.IsEmpty() )
+        frame["unavailable_reason"] =
+                toUtf8String( aSnapshot.m_UnavailableReason );
+    else if( !aSnapshot.HasPixels() )
+        frame["unavailable_reason"] = "preview_scene_pixels_not_captured";
+
+    const nlohmann::json sidecar = snapshotSidecarJson( aSnapshot );
+    AI_VISUAL_PIXEL_WORLD_TRANSFORM pixelWorldTransform;
+    const bool hasPixelWorldTransform =
+            pixelWorldTransformFromSidecar( sidecar, pixelWorldTransform );
+
+    if( !sidecar.empty() )
+    {
+        frame["sidecar"] = sidecar;
+
+        if( sidecar.contains( "document_revision" ) )
+            frame["document_revision"] = sidecar["document_revision"];
+
+        if( sidecar.contains( "preview_revision" ) )
+            frame["preview_revision"] = sidecar["preview_revision"];
+    }
+
+    if( !aAnchors.empty() )
+    {
+        if( !frame.contains( "sidecar" ) || !frame["sidecar"].is_object() )
+            frame["sidecar"] = nlohmann::json::object();
+
+        frame["sidecar"]["anchors"] = visualAnchorsJson(
+                aAnchors, hasPixelWorldTransform ? &pixelWorldTransform : nullptr );
+    }
+
+    return frame;
+}
+
+
+AI_VISUAL_SNAPSHOT capturePreviewFrameFromCanvas(
+        EDA_DRAW_PANEL_GAL& aCanvas, uint64_t aPreviewId,
+        const AI_EXECUTION_SESSION& aSession,
+        const std::vector<AI_VISUAL_ANCHOR_RECORD>& aAnchors )
+{
+    AI_VISUAL_CONTEXT_FRAME_REQUEST request;
+    request.m_FrameId = wxString::Format(
+            wxS( "preview_after_%llu" ),
+            static_cast<unsigned long long>( aPreviewId ) );
+    request.m_FrameKind = wxS( "preview_after" );
+    request.m_Source = wxS( "pcbnew.native_preview_scene" );
+    request.m_PreviewId = wxString::Format(
+            wxS( "%llu" ), static_cast<unsigned long long>( aPreviewId ) );
+    request.m_DocumentRevision =
+            aSession.ContextVersion().m_DocumentRevision;
+    request.m_PreviewRevision =
+            aSession.ContextVersion().m_ViewRevision;
+    request.m_Anchors = aAnchors;
+
+    AI_VISUAL_OBSERVATION_ARTIFACT artifact;
+    BuildAiVisualContextFrameFromCanvas( aCanvas, artifact, request );
+    return artifact.m_Snapshot;
 }
 
 
@@ -62,6 +345,9 @@ std::string layerOrFallback( const AI_SHADOW_ITEM& aItem )
 
     return "F.Cu";
 }
+
+
+const nlohmann::json* pointRing( const nlohmann::json& aGeometry );
 
 
 wxString shadowItemPreviewLabel( const AI_SHADOW_ITEM& aItem )
@@ -82,6 +368,274 @@ wxString metadataValue( const AI_SHADOW_ITEM& aItem, const wxString& aKey )
         return wxEmptyString;
 
     return it->second;
+}
+
+
+struct PREVIEW_ANCHOR_GEOMETRY
+{
+    double           m_WorldX = 0.0;
+    double           m_WorldY = 0.0;
+    AI_VISUAL_BOUNDS m_WorldBounds;
+};
+
+
+struct PREVIEW_WORLD_BOUNDS_BUILDER
+{
+    bool   m_HasPoint = false;
+    double m_Left = 0.0;
+    double m_Top = 0.0;
+    double m_Right = 0.0;
+    double m_Bottom = 0.0;
+
+    void Include( double aX, double aY )
+    {
+        if( !m_HasPoint )
+        {
+            m_Left = aX;
+            m_Right = aX;
+            m_Top = aY;
+            m_Bottom = aY;
+            m_HasPoint = true;
+            return;
+        }
+
+        m_Left = std::min( m_Left, aX );
+        m_Right = std::max( m_Right, aX );
+        m_Top = std::min( m_Top, aY );
+        m_Bottom = std::max( m_Bottom, aY );
+    }
+
+    AI_VISUAL_BOUNDS Bounds( double aPadding = 0.0 ) const
+    {
+        return {
+            m_Left - aPadding,
+            m_Top - aPadding,
+            m_Right + aPadding,
+            m_Bottom + aPadding
+        };
+    }
+};
+
+
+bool jsonPointD( const nlohmann::json& aPoint, double& aX, double& aY )
+{
+    if( !aPoint.is_object() || !aPoint.contains( "x" ) || !aPoint.contains( "y" )
+        || !aPoint["x"].is_number() || !aPoint["y"].is_number() )
+    {
+        return false;
+    }
+
+    aX = aPoint["x"].get<double>();
+    aY = aPoint["y"].get<double>();
+    return true;
+}
+
+
+bool includePointFromField( const nlohmann::json& aGeometry, const char* aField,
+                            PREVIEW_WORLD_BOUNDS_BUILDER& aBuilder,
+                            double& aLastX, double& aLastY )
+{
+    if( !aGeometry.contains( aField ) )
+        return false;
+
+    double x = 0.0;
+    double y = 0.0;
+
+    if( !jsonPointD( aGeometry[aField], x, y ) )
+        return false;
+
+    aBuilder.Include( x, y );
+    aLastX = x;
+    aLastY = y;
+    return true;
+}
+
+
+bool includePointArray( const nlohmann::json& aPoints,
+                        PREVIEW_WORLD_BOUNDS_BUILDER& aBuilder )
+{
+    if( !aPoints.is_array() || aPoints.empty() )
+        return false;
+
+    bool any = false;
+
+    for( const nlohmann::json& point : aPoints )
+    {
+        double x = 0.0;
+        double y = 0.0;
+
+        if( !jsonPointD( point, x, y ) )
+            return false;
+
+        aBuilder.Include( x, y );
+        any = true;
+    }
+
+    return any;
+}
+
+
+double numericFieldOr( const nlohmann::json& aJson, const char* aName, double aFallback )
+{
+    if( !aJson.contains( aName ) || !aJson[aName].is_number() )
+        return aFallback;
+
+    return aJson[aName].get<double>();
+}
+
+
+std::optional<PREVIEW_ANCHOR_GEOMETRY> previewAnchorGeometry(
+        const AI_SHADOW_ITEM& aItem )
+{
+    nlohmann::json geometry = parseObjectJson( aItem.m_GeometryJson );
+    nlohmann::json properties = parseObjectJson( aItem.m_PropertiesJson );
+    PREVIEW_ANCHOR_GEOMETRY result;
+
+    if( aItem.m_Type == wxS( "via" ) )
+    {
+        if( !geometry.contains( "position" )
+            || !jsonPointD( geometry["position"], result.m_WorldX, result.m_WorldY ) )
+        {
+            return std::nullopt;
+        }
+
+        const double diameter = numericFieldOr( geometry, "diameter", 600000.0 );
+        const double radius = std::max( 0.0, diameter / 2.0 );
+        result.m_WorldBounds = {
+            result.m_WorldX - radius,
+            result.m_WorldY - radius,
+            result.m_WorldX + radius,
+            result.m_WorldY + radius
+        };
+        return result;
+    }
+
+    PREVIEW_WORLD_BOUNDS_BUILDER builder;
+    double lastX = 0.0;
+    double lastY = 0.0;
+    double padding = 0.0;
+
+    if( aItem.m_Type == wxS( "track_segment" ) )
+    {
+        if( !includePointFromField( geometry, "start", builder, lastX, lastY )
+            || !includePointFromField( geometry, "end", builder, lastX, lastY ) )
+        {
+            return std::nullopt;
+        }
+
+        padding = numericFieldOr( geometry, "width", 0.0 ) / 2.0;
+    }
+    else if( aItem.m_Type == wxS( "shape" ) )
+    {
+        std::string shape;
+
+        if( properties.contains( "shape_type" ) && properties["shape_type"].is_string() )
+            shape = properties["shape_type"].get<std::string>();
+        else if( geometry.contains( "shape" ) && geometry["shape"].is_string() )
+            shape = geometry["shape"].get<std::string>();
+        else if( geometry.contains( "shape_type" ) && geometry["shape_type"].is_string() )
+            shape = geometry["shape_type"].get<std::string>();
+
+        if( shape == "circle" )
+        {
+            if( !geometry.contains( "center" )
+                || !jsonPointD( geometry["center"], result.m_WorldX, result.m_WorldY ) )
+            {
+                return std::nullopt;
+            }
+
+            const double radius = numericFieldOr( geometry, "radius", 0.0 );
+            const double width = numericFieldOr( properties, "width",
+                                                 numericFieldOr( geometry, "width", 0.0 ) );
+            padding = std::max( 0.0, radius + width / 2.0 );
+            result.m_WorldBounds = {
+                result.m_WorldX - padding,
+                result.m_WorldY - padding,
+                result.m_WorldX + padding,
+                result.m_WorldY + padding
+            };
+            return result;
+        }
+
+        if( shape == "polygon" || shape == "poly" )
+        {
+            const nlohmann::json* points = pointRing( geometry );
+
+            if( !points || !includePointArray( *points, builder ) )
+                return std::nullopt;
+        }
+        else
+        {
+            bool any = includePointFromField( geometry, "start", builder, lastX, lastY );
+            any = includePointFromField( geometry, "mid", builder, lastX, lastY ) || any;
+            any = includePointFromField( geometry, "end", builder, lastX, lastY ) || any;
+
+            if( !any )
+                return std::nullopt;
+        }
+
+        padding = numericFieldOr( properties, "width",
+                                  numericFieldOr( geometry, "width", 0.0 ) ) / 2.0;
+    }
+    else if( aItem.m_Type == wxS( "zone" ) )
+    {
+        const nlohmann::json* points = pointRing( geometry );
+
+        if( !points || !includePointArray( *points, builder ) )
+            return std::nullopt;
+    }
+    else if( aItem.m_Type == wxS( "footprint" ) )
+    {
+        if( !geometry.contains( "position" )
+            || !jsonPointD( geometry["position"], result.m_WorldX, result.m_WorldY ) )
+        {
+            return std::nullopt;
+        }
+
+        result.m_WorldBounds = {
+            result.m_WorldX,
+            result.m_WorldY,
+            result.m_WorldX,
+            result.m_WorldY
+        };
+        return result;
+    }
+    else
+    {
+        return std::nullopt;
+    }
+
+    if( !builder.m_HasPoint )
+        return std::nullopt;
+
+    result.m_WorldBounds = builder.Bounds( padding );
+    result.m_WorldX = ( result.m_WorldBounds.m_Left + result.m_WorldBounds.m_Right ) / 2.0;
+    result.m_WorldY = ( result.m_WorldBounds.m_Top + result.m_WorldBounds.m_Bottom ) / 2.0;
+    return result;
+}
+
+
+std::optional<AI_VISUAL_ANCHOR_RECORD> previewAnchorForShadowItem(
+        const AI_SHADOW_ITEM& aItem )
+{
+    std::optional<PREVIEW_ANCHOR_GEOMETRY> geometry =
+            previewAnchorGeometry( aItem );
+
+    if( !geometry )
+        return std::nullopt;
+
+    const wxString label = shadowItemPreviewLabel( aItem );
+
+    AI_VISUAL_ANCHOR_RECORD anchor;
+    anchor.m_AnchorId = wxS( "preview_item:" ) + label;
+    anchor.m_ObjectId = label;
+    anchor.m_Handle = aItem.m_Handle.AsString();
+    anchor.m_Layer = wxString::FromUTF8( layerOrFallback( aItem ).c_str() );
+    anchor.m_NetName = aItem.m_Net;
+    anchor.m_WorldX = geometry->m_WorldX;
+    anchor.m_WorldY = geometry->m_WorldY;
+    anchor.m_WorldBounds = geometry->m_WorldBounds;
+    return anchor;
 }
 
 
@@ -488,12 +1042,20 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
 
 
 KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
-        BOARD& aBoard, KIGFX::VIEW& aView ) :
+        BOARD& aBoard, KIGFX::VIEW& aView, EDA_DRAW_PANEL_GAL* aCanvas ) :
         m_Board( aBoard ),
         m_Resolver( aBoard ),
         m_Adapter( m_Resolver, aView ),
-        m_PreviewManager( m_Adapter )
+        m_PreviewManager( m_Adapter ),
+        m_Canvas( aCanvas )
 {
+}
+
+
+void KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::SetPreviewFrameCaptureProvider(
+        PREVIEW_FRAME_CAPTURE_PROVIDER aProvider )
+{
+    m_PreviewFrameCaptureProvider = std::move( aProvider );
 }
 
 
@@ -524,6 +1086,7 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
     const uint64_t previewId = m_PreviewManager.BeginPreview( fromJson( provenance ) );
     size_t renderedItemCount = 0;
     size_t renderedOverlayCount = 0;
+    std::vector<AI_VISUAL_ANCHOR_RECORD> previewAnchors;
 
     for( const AI_SHADOW_ITEM& item : aSession.ShadowBoard().QueryItems() )
     {
@@ -531,6 +1094,9 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
 
         if( !ref )
             continue;
+
+        if( std::optional<AI_VISUAL_ANCHOR_RECORD> anchor = previewAnchorForShadowItem( item ) )
+            previewAnchors.push_back( *anchor );
 
         const size_t beforeCount = m_Adapter.PreviewedItems().size();
         m_PreviewManager.ShowObject( *ref );
@@ -561,6 +1127,14 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         }
     }
 
+    AI_VISUAL_SNAPSHOT previewFrame;
+
+    if( m_PreviewFrameCaptureProvider )
+        previewFrame = m_PreviewFrameCaptureProvider( previewId, aSession );
+    else if( m_Canvas )
+        previewFrame = capturePreviewFrameFromCanvas( *m_Canvas, previewId,
+                                                     aSession, previewAnchors );
+
     result.m_Ok = true;
     result.m_PreviewId = previewId;
     result.m_RenderedItemCount = renderedItemCount;
@@ -569,7 +1143,11 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         { "native_preview", true },
         { "preview_id", previewId },
         { "rendered_item_count", renderedItemCount },
-        { "rendered_overlay_count", renderedOverlayCount }
+        { "rendered_overlay_count", renderedOverlayCount },
+        { "preview_frame",
+          previewFrameJson( previewFrame, previewId, aSession,
+                            renderedItemCount, renderedOverlayCount,
+                            previewAnchors ) }
     } );
     return result;
 }

@@ -485,6 +485,14 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardViaAndClearsBySessi
     BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "preview_rendered" );
     BOOST_CHECK( payload["native_preview"].get<bool>() );
     BOOST_CHECK_EQUAL( payload["rendered_item_count"].get<size_t>(), 1 );
+    BOOST_REQUIRE( payload.contains( "preview_frame" ) );
+    BOOST_CHECK_EQUAL( payload["preview_frame"]["frame_kind"].get<std::string>(),
+                       "preview_after" );
+    BOOST_CHECK_EQUAL( payload["preview_frame"]["source"].get<std::string>(),
+                       "pcbnew.native_preview_scene" );
+    BOOST_CHECK_EQUAL( payload["preview_frame"]["preview_id"].get<uint64_t>(),
+                       result.m_PreviewId );
+    BOOST_CHECK( !payload["preview_frame"]["has_pixels"].get<bool>() );
 
     BOOST_REQUIRE_EQUAL( previewService.PreviewedItems().size(), 1 );
     BOOST_CHECK( dynamic_cast<PCB_VIA*>( previewService.PreviewedItems().front() ) != nullptr );
@@ -492,6 +500,96 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardViaAndClearsBySessi
     previewService.ClearPreview( session.SessionId() );
 
     BOOST_CHECK( previewService.PreviewedItems().empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionPreviewServiceCapturesPreviewAfterVisualFrame )
+{
+    PCB_PREVIEW_FIXTURE fixture;
+    KIGFX::VIEW         view;
+    KISURF_AI_PCB_SESSION_PREVIEW_SERVICE previewService( fixture.m_Board, view );
+
+    previewService.SetPreviewFrameCaptureProvider(
+            []( uint64_t aPreviewId, const AI_EXECUTION_SESSION& aSession )
+            {
+                wxImage image( 10, 8, false );
+                image.SetRGB( wxRect( 0, 0, 10, 8 ), 32, 64, 96 );
+
+                AI_VISUAL_CONTEXT_FRAME_REQUEST request;
+                request.m_FrameId = wxString::Format(
+                        wxS( "preview_after_%llu" ),
+                        static_cast<unsigned long long>( aPreviewId ) );
+                request.m_FrameKind = wxS( "preview_after" );
+                request.m_Source = wxS( "pcbnew.native_preview_scene" );
+                request.m_PreviewId = wxString::Format(
+                        wxS( "%llu" ),
+                        static_cast<unsigned long long>( aPreviewId ) );
+                request.m_DocumentRevision =
+                        aSession.ContextVersion().m_DocumentRevision;
+                request.m_PreviewRevision =
+                        aSession.ContextVersion().m_ViewRevision;
+                request.m_PixelBounds = AI_VISUAL_BOUNDS{ 0.0, 0.0, 10.0, 8.0 };
+                request.m_PixelWorldTransform.m_WorldXPerPixelX = 100000.0;
+                request.m_PixelWorldTransform.m_WorldYPerPixelY = 100000.0;
+
+                return BuildAiVisualContextFrameFromImage( image, request ).m_Snapshot;
+            } );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 117;
+    options.m_BoardId = wxS( "pcb-session-preview-frame" );
+    options.m_BaseHash = wxS( "hash-a" );
+    options.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    options.m_ContextVersion.m_DocumentRevision = 44;
+    options.m_ContextVersion.m_ViewRevision = 9;
+    AI_EXECUTION_SESSION session( std::move( options ) );
+
+    BOOST_CHECK( session.BeginStep( wxS( "preview frame via" ) ) != 0 );
+    AI_ATOMIC_EXECUTION_RESULT execution = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"session-preview-frame-via\",\"net\":\"GND\","
+                 "\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":400,\"y\":500}}" ) );
+    BOOST_REQUIRE( execution.m_Ok );
+    session.EndStep( 1 );
+
+    AI_SESSION_PREVIEW_RESULT result =
+            previewService.RenderPreview( session, wxS( "{\"mode\":\"native\"}" ) );
+
+    BOOST_REQUIRE( result.m_Ok );
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+
+    BOOST_REQUIRE( payload.contains( "preview_frame" ) );
+    const nlohmann::json& frame = payload["preview_frame"];
+    BOOST_CHECK( frame["has_pixels"].get<bool>() );
+    BOOST_CHECK_EQUAL( frame["frame_kind"].get<std::string>(), "preview_after" );
+    BOOST_CHECK_EQUAL( frame["source"].get<std::string>(),
+                       "pcbnew.native_preview_scene.preview_after" );
+    BOOST_CHECK_EQUAL( frame["frame_id"].get<std::string>(),
+                       "preview_after_1" );
+    BOOST_CHECK_EQUAL( frame["width_px"].get<int>(), 10 );
+    BOOST_CHECK_EQUAL( frame["height_px"].get<int>(), 8 );
+    BOOST_CHECK_EQUAL( frame["document_revision"].get<uint64_t>(), 44 );
+    BOOST_CHECK_EQUAL( frame["preview_revision"].get<uint64_t>(), 9 );
+    BOOST_CHECK( frame.contains( "sidecar" ) );
+    BOOST_REQUIRE( frame["sidecar"].contains( "anchors" ) );
+    BOOST_REQUIRE_EQUAL( frame["sidecar"]["anchors"].size(), 1 );
+    const nlohmann::json& anchor = frame["sidecar"]["anchors"][0];
+    BOOST_CHECK_EQUAL( anchor["anchor_id"].get<std::string>(),
+                       "preview_item:session-preview-frame-via" );
+    BOOST_CHECK_EQUAL( anchor["object_id"].get<std::string>(),
+                       "session-preview-frame-via" );
+    BOOST_CHECK( anchor["handle"].get<std::string>().find( "session:117/handle:" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( anchor["net_name"].get<std::string>(), "GND" );
+    BOOST_CHECK_EQUAL( anchor["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK_EQUAL( anchor["world_xy"]["x"].get<double>(), 400.0 );
+    BOOST_CHECK_EQUAL( anchor["world_xy"]["y"].get<double>(), 500.0 );
+    BOOST_CHECK_CLOSE( anchor["pixel_bounds"]["left"].get<double>(), -2.996, 0.001 );
+    BOOST_CHECK_CLOSE( anchor["pixel_bounds"]["top"].get<double>(), -2.995, 0.001 );
+    BOOST_CHECK_CLOSE( anchor["pixel_bounds"]["right"].get<double>(), 3.004, 0.001 );
+    BOOST_CHECK_CLOSE( anchor["pixel_bounds"]["bottom"].get<double>(), 3.005, 0.001 );
 }
 
 

@@ -101,6 +101,7 @@ public:
             const AI_TOOL_CALL_RECORD& aToolCall ) override;
     void OnPythonEvent( const AI_PYTHON_EVENT& aEvent ) override;
 
+    bool CancelActiveSession( const wxString& aReason );
     const AI_EXECUTION_SESSION* ActiveSession() const;
     bool HasPendingSessionPreview() const;
     wxString ToolCatalogJson() const;

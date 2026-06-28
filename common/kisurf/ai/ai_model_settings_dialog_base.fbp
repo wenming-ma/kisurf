@@ -144,6 +144,51 @@
                 <property name="value"></property>
               </object>
             </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL</property>
+              <property name="proportion">0</property>
+              <object class="wxStaticText" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">Research folder</property>
+                <property name="name">m_ResearchFolderLabel</property>
+                <property name="permission">protected</property>
+                <property name="wrap">-1</property>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
+              <property name="border">0</property>
+              <property name="flag">wxEXPAND</property>
+              <property name="proportion">0</property>
+              <object class="wxBoxSizer" expanded="true">
+                <property name="name">m_ResearchFolderSizer</property>
+                <property name="orient">wxHORIZONTAL</property>
+                <property name="permission">protected</property>
+                <object class="sizeritem" expanded="true">
+                  <property name="border">6</property>
+                  <property name="flag">wxEXPAND|wxRIGHT</property>
+                  <property name="proportion">1</property>
+                  <object class="wxTextCtrl" expanded="true">
+                    <property name="id">wxID_ANY</property>
+                    <property name="name">m_ResearchFolder</property>
+                    <property name="permission">protected</property>
+                    <property name="style"></property>
+                    <property name="value"></property>
+                  </object>
+                </object>
+                <object class="sizeritem" expanded="true">
+                  <property name="border">0</property>
+                  <property name="flag">wxEXPAND</property>
+                  <property name="proportion">0</property>
+                  <object class="wxButton" expanded="true">
+                    <property name="id">wxID_ANY</property>
+                    <property name="label">Browse...</property>
+                    <property name="name">m_ResearchFolderBrowse</property>
+                    <property name="permission">protected</property>
+                  </object>
+                </object>
+              </object>
+            </object>
           </object>
         </object>
         <object class="sizeritem" expanded="true">
@@ -152,7 +197,7 @@
           <property name="proportion">0</property>
           <object class="wxStaticText" expanded="true">
             <property name="id">wxID_ANY</property>
-            <property name="label">Keys are stored locally. Changes apply to the next Agent request.</property>
+            <property name="label">Keys are stored locally. Research folder files are used as local text memory. Changes apply to the next Agent request.</property>
             <property name="name">m_HelpText</property>
             <property name="permission">protected</property>
             <property name="wrap">480</property>

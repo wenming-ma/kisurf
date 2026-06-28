@@ -3966,6 +3966,21 @@ const AI_EXECUTION_SESSION* AI_SESSION_TOOL_CALL_HANDLER::ActiveSession() const
 }
 
 
+bool AI_SESSION_TOOL_CALL_HANDLER::CancelActiveSession( const wxString& aReason )
+{
+    if( !m_Session )
+        return false;
+
+    const uint64_t sessionId = m_Session->SessionId();
+    m_Session->CancelSession( aReason );
+    clearSessionPreview( m_PreviewService, sessionId );
+    clearPreviewState();
+    stopSessionPythonWorker( m_PythonWorker.get() );
+    m_Session.reset();
+    return true;
+}
+
+
 bool AI_SESSION_TOOL_CALL_HANDLER::HasPendingSessionPreview() const
 {
     return m_Session

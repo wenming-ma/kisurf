@@ -4,10 +4,12 @@
 #include <kisurf/ai/ai_activity_log.h>
 #include <kisurf/ai/ai_agent_panel_base.h>
 #include <kisurf/ai/ai_agent_panel_model.h>
+#include <kisurf/ai/ai_model_config.h>
 #include <kisurf/ai/ai_runtime.h>
 #include <kisurf/ai/ai_semantic_ui.h>
 #include <kisurf/ai/ai_tool_execution.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -22,6 +24,7 @@ class AI_SESSION_VALIDATION_SERVICE;
 struct KICOMMON_API AI_AGENT_COMPOSER_STATUS_VIEW
 {
     bool                 m_BackgroundAgentEnabled = false;
+    bool                 m_BackgroundAgentBusy = false;
     bool                 m_InputHasText = false;
     bool                 m_HasActiveSuggestion = false;
     uint64_t             m_LatestRequestId = 0;
@@ -52,6 +55,20 @@ struct KICOMMON_API AI_AGENT_BACKGROUND_PREVIEW_VIEW
     bool m_TargetsWorkspacePreview = false;
 };
 
+enum class AI_AGENT_BACKGROUND_UPDATE_ACTION
+{
+    Ignore,
+    QueueAsync,
+    DropWhileBusy
+};
+
+struct KICOMMON_API AI_AGENT_BACKGROUND_UPDATE_VIEW
+{
+    bool m_BackgroundAgentEnabled = false;
+    bool m_HasContextProvider = false;
+    bool m_UpdateInFlight = false;
+};
+
 class KICOMMON_API AI_AGENT_PANEL : public AI_AGENT_PANEL_BASE
 {
 public:
@@ -66,8 +83,10 @@ public:
 
     AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
                     CONTEXT_PROVIDER aContextProvider = CONTEXT_PROVIDER() );
+    ~AI_AGENT_PANEL() override;
 
     void SendCurrentText();
+    void StartNewChat();
     void RefreshTranscript();
     void RefreshSuggestions();
     void RefreshLog();
@@ -94,6 +113,7 @@ public:
     bool PreviewLatestSuggestion();
     bool AcceptLatestSuggestion();
     bool RejectLatestSuggestion();
+    bool RecoverLatestProviderFailure();
     bool HasPendingChatSessionPreview() const;
     bool HandlePreviewShortcut( int aKeyCode, bool aHasModifier = false,
                                 bool aFocusInsideAgentPanel = false );
@@ -101,6 +121,7 @@ public:
 
 private:
     void OnModelSettings( wxCommandEvent& aEvent ) override;
+    void OnNewChat( wxCommandEvent& aEvent ) override;
     void OnBackgroundAgentToggled( wxCommandEvent& aEvent ) override;
     void OnPromptTextChanged( wxCommandEvent& aEvent ) override;
     void OnPromptEnter( wxCommandEvent& aEvent ) override;
@@ -117,11 +138,20 @@ private:
     bool invokeActiveChatSessionTool( const wxString& aToolName,
                                       const wxString& aArgumentsJson,
                                       const wxString& aToolCallId );
+    void loadConfiguredResearchFolder( const AI_MODEL_CONFIG& aConfig,
+                                       bool aReportErrors );
     AI_CONTEXT_SNAPSHOT contextSnapshotWithPanelState() const;
     void updateModeControls();
     void updateComposerStatus();
     void saveWorkspaceContextStateFromContext( const AI_CONTEXT_SNAPSHOT& aSnapshot,
                                                const AI_ACTIVITY_RECORD& aActivity );
+    void queueBackgroundSuggestionUpdate( AI_CONTEXT_SNAPSHOT aSnapshot,
+                                          AI_ACTIVITY_RECORD aActivity,
+                                          wxString aReason );
+    void finishBackgroundSuggestionUpdate(
+            uint64_t aGeneration,
+            std::optional<AI_SUGGESTION_RECORD> aSuggestion );
+    bool backgroundSuggestionUpdateInFlight() const;
 
     AI_EDITOR_KIND                            m_EditorKind;
     CONTEXT_PROVIDER                          m_ContextProvider;
@@ -133,9 +163,19 @@ private:
     AI_SESSION_TOOL_CALL_HANDLER*             m_SessionToolCallHandler = nullptr;
     bool                                      m_HasSessionPreviewService = false;
     bool                                      m_HasSessionAcceptAdapter = false;
+    AI_ACCEPT_APPLY_ADAPTER*                  m_AcceptAdapter = nullptr;
     SUGGESTION_PREVIEW_HANDLER                m_PreviewSuggestionHandler;
     SUGGESTION_ACCEPT_HANDLER                 m_AcceptSuggestionHandler;
     SUGGESTION_REJECT_HANDLER                 m_RejectSuggestionHandler;
+
+    struct BACKGROUND_UPDATE_STATE
+    {
+        std::atomic_bool     m_Alive{ true };
+        std::atomic_bool     m_InFlight{ false };
+        std::atomic<uint64_t> m_Generation{ 0 };
+    };
+
+    std::shared_ptr<BACKGROUND_UPDATE_STATE> m_BackgroundUpdateState;
 };
 
 KICOMMON_API wxString AiAgentWorkspaceContextTitle( AI_AGENT_WORKSPACE_CONTEXT_KIND aMode );
@@ -156,5 +196,7 @@ KICOMMON_API bool AiAgentSuggestionTargetsWorkspacePreview(
         const AI_SUGGESTION_RECORD& aSuggestion );
 KICOMMON_API bool AiAgentShouldAutoPreviewBackgroundSuggestion(
         const AI_AGENT_BACKGROUND_PREVIEW_VIEW& aView );
+KICOMMON_API AI_AGENT_BACKGROUND_UPDATE_ACTION AiAgentBackgroundUpdateAction(
+        const AI_AGENT_BACKGROUND_UPDATE_VIEW& aView );
 KICOMMON_API bool AiAgentReviewCommandTargetsChatSession(
         bool aHasActiveSuggestion, bool aHasPendingChatSession );

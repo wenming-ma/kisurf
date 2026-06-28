@@ -39,6 +39,18 @@ public:
                 decltype( &AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::m_ApiKey )>;
     }
 
+    static constexpr bool HasResearchFolder()
+    {
+        return std::is_member_object_pointer_v<
+                decltype( &AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::m_ResearchFolder )>;
+    }
+
+    static constexpr bool HasResearchFolderBrowseButton()
+    {
+        return std::is_member_object_pointer_v<
+                decltype( &AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::m_ResearchFolderBrowse )>;
+    }
+
     static constexpr bool HasHelpText()
     {
         return std::is_member_object_pointer_v<
@@ -54,6 +66,9 @@ BOOST_AUTO_TEST_CASE( DialogBaseExposesGeneratedSettingsSurface )
     BOOST_CHECK( AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasBaseUrl() );
     BOOST_CHECK( AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasModel() );
     BOOST_CHECK( AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasApiKey() );
+    BOOST_CHECK( AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasResearchFolder() );
+    BOOST_CHECK(
+            AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasResearchFolderBrowseButton() );
     BOOST_CHECK( AI_MODEL_SETTINGS_DIALOG_BASE_SURFACE_TEST::HasHelpText() );
 }
 

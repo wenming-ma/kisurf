@@ -24,6 +24,7 @@ BOOST_AUTO_TEST_SUITE( AiAgentPanelSemantic )
 BOOST_AUTO_TEST_CASE( EmitsStableAgentPaneNodeIds )
 {
     AI_AGENT_PANEL_SEMANTIC_VIEW view;
+    view.m_HasProviderRecovery = true;
 
     AI_SEMANTIC_UI_TREE tree = AiAgentPanelSemanticTree( view );
 
@@ -41,7 +42,8 @@ BOOST_AUTO_TEST_CASE( EmitsStableAgentPaneNodeIds )
         wxS( "agent.stop" ),
         wxS( "agent.preview.invoke" ),
         wxS( "agent.accept" ),
-        wxS( "agent.reject" )
+        wxS( "agent.reject" ),
+        wxS( "agent.recovery.execute" )
     };
 
     for( const wxString& id : ids )
@@ -158,6 +160,83 @@ BOOST_AUTO_TEST_CASE( AcceptNodeRequiresUserConfirmation )
     BOOST_CHECK( accept->m_RequiresUserConfirmation );
     BOOST_CHECK( !preview->m_RequiresUserConfirmation );
     BOOST_CHECK( !send->m_RequiresUserConfirmation );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderRecoveryNodeRequiresConfirmationAndReflectsAvailability )
+{
+    AI_AGENT_PANEL_SEMANTIC_VIEW view;
+    view.m_HasProviderRecovery = false;
+    view.m_CanExecuteProviderRecovery = true;
+
+    AI_SEMANTIC_UI_TREE tree = AiAgentPanelSemanticTree( view );
+
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.recovery.execute" ) ) );
+
+    view.m_HasProviderRecovery = true;
+    view.m_CanExecuteProviderRecovery = false;
+    tree = AiAgentPanelSemanticTree( view );
+
+    const AI_SEMANTIC_UI_NODE* disabledRecovery =
+            tree.FindNode( wxS( "agent.recovery.execute" ) );
+
+    BOOST_REQUIRE( disabledRecovery );
+    BOOST_CHECK_EQUAL( disabledRecovery->m_ParentNodeId,
+                       wxString( wxS( "agent.tabs.log" ) ) );
+    BOOST_CHECK_EQUAL( disabledRecovery->m_Role, wxString( wxS( "button" ) ) );
+    BOOST_CHECK_EQUAL( disabledRecovery->m_Label,
+                       wxString( wxS( "Recover" ) ) );
+    BOOST_CHECK( !disabledRecovery->m_Enabled );
+    BOOST_CHECK_EQUAL( disabledRecovery->m_ActionName,
+                       wxString( wxS( "invoke" ) ) );
+    BOOST_CHECK( disabledRecovery->m_RequiresUserConfirmation );
+
+    view.m_CanExecuteProviderRecovery = true;
+    tree = AiAgentPanelSemanticTree( view );
+
+    const AI_SEMANTIC_UI_NODE* enabledRecovery =
+            tree.FindNode( wxS( "agent.recovery.execute" ) );
+
+    BOOST_REQUIRE( enabledRecovery );
+    BOOST_CHECK( enabledRecovery->m_Enabled );
+    BOOST_CHECK( enabledRecovery->m_RequiresUserConfirmation );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderRecoveryEpisodeIsProjectedAsReviewText )
+{
+    AI_AGENT_PANEL_SEMANTIC_VIEW view;
+    view.m_HasProviderRecovery = true;
+    view.m_CanExecuteProviderRecovery = true;
+    view.m_ProviderRecoveryEpisodeJson =
+            wxS( "{\"schema\":{\"name\":\"kisurf.ai.provider_recovery_episode\"},"
+                 "\"status\":\"ready_for_user_review\","
+                 "\"automatic_execution_allowed\":false,"
+                 "\"user_review_required\":true,"
+                 "\"preflight_result\":{\"allowed\":true},"
+                 "\"replay_request\":{\"status\":\"ready_for_user_review\"}}" );
+
+    AI_SEMANTIC_UI_TREE tree = AiAgentPanelSemanticTree( view );
+    const AI_SEMANTIC_UI_NODE* review =
+            tree.FindNode( wxS( "agent.recovery.review" ) );
+
+    BOOST_REQUIRE( review );
+    BOOST_CHECK_EQUAL( review->m_ParentNodeId,
+                       wxString( wxS( "agent.tabs.log" ) ) );
+    BOOST_CHECK_EQUAL( review->m_Role, wxString( wxS( "text" ) ) );
+    BOOST_CHECK_EQUAL( review->m_Label,
+                       wxString( wxS( "Recovery review" ) ) );
+    BOOST_CHECK( review->m_Enabled );
+    BOOST_CHECK( review->m_ActionName.IsEmpty() );
+    BOOST_CHECK( !review->m_RequiresUserConfirmation );
+    BOOST_CHECK( review->m_TextPolicy == AI_SEMANTIC_UI_TEXT_POLICY::Plain );
+    BOOST_CHECK( review->m_TextValue.Contains(
+            wxS( "kisurf.ai.provider_recovery_episode" ) ) );
+    BOOST_CHECK( review->m_TextValue.Contains(
+            wxS( "\"status\":\"ready_for_user_review\"" ) ) );
+    BOOST_CHECK( review->m_TextValue.Contains(
+            wxS( "\"automatic_execution_allowed\":false" ) ) );
+    BOOST_CHECK( review->m_TextValue.Contains( wxS( "replay_request" ) ) );
 }
 
 

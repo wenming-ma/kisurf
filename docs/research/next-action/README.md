@@ -2,16 +2,17 @@
 
 Place research reports and external research prompts for the Next Action Agent here.
 
-The consolidated implementation-oriented report is:
+The cross-cutting KiSurf AI Native system architecture now lives outside
+this folder:
 
-- `results/next-action-runtime-consolidated-report.md`
+- `../ai-native/results/kisurf-ai-native-system-synthesis-architecture-and-implementation-roadmap.md`
 - `results/next-action-source-spike-20260622.md`
 
 Research questions / briefs live in:
 
 - `questions/`
 
-Research results and consolidated reports live in:
+Next Action-specific research results live in:
 
 - `results/`
 

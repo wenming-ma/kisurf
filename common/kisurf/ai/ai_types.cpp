@@ -748,7 +748,8 @@ bool AI_PANEL_STATE_RECORD::HasState() const
 
 bool AI_CONTEXT_SNAPSHOT::HasContext() const
 {
-    return m_Version.IsValid() || !m_VisibleObjects.empty() || !m_SelectedObjects.empty()
+    return !m_ProjectId.IsEmpty() || !m_DocumentId.IsEmpty()
+           || m_Version.IsValid() || !m_VisibleObjects.empty() || !m_SelectedObjects.empty()
            || !m_Actions.empty() || !m_RecentActivity.empty() || !m_Summary.IsEmpty()
            || m_ToolState.HasToolState() || !m_Visual.m_Source.IsEmpty()
            || !m_Visual.m_UnavailableReason.IsEmpty() || !m_Anchors.empty()
@@ -763,6 +764,13 @@ wxString AI_CONTEXT_SNAPSHOT::AsPromptText( size_t aMaxObjects, size_t aMaxActio
     wxString text;
 
     text << wxS( "editor: " ) << editorKindName( m_EditorKind ) << wxS( "\n" );
+
+    if( !m_ProjectId.IsEmpty() )
+        text << wxS( "project_id: " ) << m_ProjectId << wxS( "\n" );
+
+    if( !m_DocumentId.IsEmpty() )
+        text << wxS( "document_id: " ) << m_DocumentId << wxS( "\n" );
+
     text << wxS( "version: " ) << m_Version.AsString() << wxS( "\n" );
 
     if( !m_Summary.IsEmpty() )
@@ -914,6 +922,10 @@ wxString AI_CONTEXT_SNAPSHOT::AsPromptText( size_t aMaxObjects, size_t aMaxActio
              << m_Visual.m_MimeType << wxS( " pixels=" )
              << ( m_Visual.HasPixels() ? wxS( "yes" ) : wxS( "no" ) );
 
+        if( !m_Visual.m_FrameId.IsEmpty() || !m_Visual.m_FrameKind.IsEmpty() )
+            text << wxS( " frame=" ) << m_Visual.m_FrameId << wxS( "/" )
+                 << m_Visual.m_FrameKind;
+
         if( !m_Visual.m_UnavailableReason.IsEmpty() )
             text << wxS( " unavailable_reason=" ) << m_Visual.m_UnavailableReason;
 
@@ -930,6 +942,8 @@ wxString AI_CONTEXT_SNAPSHOT::AsJsonText( size_t aMaxObjects, size_t aMaxActions
 {
     nlohmann::json context;
     context["editor"] = editorKindJsonName( m_EditorKind );
+    context["project_id"] = toUtf8String( m_ProjectId );
+    context["document_id"] = toUtf8String( m_DocumentId );
     context["version"] = { { "document", m_Version.m_DocumentRevision },
                            { "selection", m_Version.m_SelectionRevision },
                            { "view", m_Version.m_ViewRevision },
@@ -952,10 +966,15 @@ wxString AI_CONTEXT_SNAPSHOT::AsJsonText( size_t aMaxObjects, size_t aMaxActions
     context["panel_states"] = panelStatesJson( m_PanelStates, aMaxPanelStates );
     context["visual"] = { { "source", toUtf8String( m_Visual.m_Source ) },
                           { "mime_type", toUtf8String( m_Visual.m_MimeType ) },
+                          { "frame_id", toUtf8String( m_Visual.m_FrameId ) },
+                          { "frame_kind", toUtf8String( m_Visual.m_FrameKind ) },
                           { "width_px", m_Visual.m_WidthPx },
                           { "height_px", m_Visual.m_HeightPx },
                           { "byte_size", m_Visual.m_ByteSize },
                           { "has_pixels", m_Visual.HasPixels() } };
+
+    if( !m_Visual.m_SidecarJson.IsEmpty() )
+        context["visual"]["sidecar"] = toUtf8String( m_Visual.m_SidecarJson );
 
     if( !m_Visual.m_UnavailableReason.IsEmpty() )
     {

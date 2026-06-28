@@ -292,6 +292,12 @@ BOOST_AUTO_TEST_CASE( NativeValidationServiceProjectsDrcIssueItemBboxes )
         BOOST_CHECK( issue["main_item_bbox"].contains( "width" ) );
         BOOST_CHECK( issue["main_item_bbox"].contains( "height" ) );
 
+        BOOST_REQUIRE( issue.contains( "world_bounds" ) );
+        BOOST_CHECK( issue["world_bounds"].contains( "left" ) );
+        BOOST_CHECK( issue["world_bounds"].contains( "top" ) );
+        BOOST_CHECK( issue["world_bounds"].contains( "right" ) );
+        BOOST_CHECK( issue["world_bounds"].contains( "bottom" ) );
+
         if( issue.contains( "aux_item_uuid" ) )
         {
             BOOST_REQUIRE( issue.contains( "aux_item_bbox" ) );

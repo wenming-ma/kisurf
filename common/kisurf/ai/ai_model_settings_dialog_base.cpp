@@ -52,10 +52,24 @@ AI_MODEL_SETTINGS_DIALOG_BASE::AI_MODEL_SETTINGS_DIALOG_BASE( wxWindow* parent, 
 	m_ApiKey = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PASSWORD );
 	m_FormSizer->Add( m_ApiKey, 0, wxEXPAND, 0 );
 
+	m_ResearchFolderLabel = new wxStaticText( this, wxID_ANY, _("Research folder"), wxDefaultPosition, wxDefaultSize, 0 );
+	m_ResearchFolderLabel->Wrap( -1 );
+	m_FormSizer->Add( m_ResearchFolderLabel, 0, wxALIGN_CENTER_VERTICAL, 0 );
+
+	m_ResearchFolderSizer = new wxBoxSizer( wxHORIZONTAL );
+
+	m_ResearchFolder = new wxTextCtrl( this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0 );
+	m_ResearchFolderSizer->Add( m_ResearchFolder, 1, wxEXPAND|wxRIGHT, 6 );
+
+	m_ResearchFolderBrowse = new wxButton( this, wxID_ANY, _("Browse..."), wxDefaultPosition, wxDefaultSize, 0 );
+	m_ResearchFolderSizer->Add( m_ResearchFolderBrowse, 0, wxEXPAND, 0 );
+
+	m_FormSizer->Add( m_ResearchFolderSizer, 0, wxEXPAND, 0 );
+
 
 	m_RootSizer->Add( m_FormSizer, 1, wxEXPAND|wxALL, 12 );
 
-	m_HelpText = new wxStaticText( this, wxID_ANY, _("Keys are stored locally. Changes apply to the next Agent request."), wxDefaultPosition, wxDefaultSize, 0 );
+	m_HelpText = new wxStaticText( this, wxID_ANY, _("Keys are stored locally. Research folder files are used as local text memory. Changes apply to the next Agent request."), wxDefaultPosition, wxDefaultSize, 0 );
 	m_HelpText->Wrap( 480 );
 	m_RootSizer->Add( m_HelpText, 0, wxEXPAND|wxLEFT|wxRIGHT|wxBOTTOM, 12 );
 

@@ -130,6 +130,9 @@ struct KICOMMON_API AI_VISUAL_SNAPSHOT
     wxString m_Source;
     wxString m_MimeType;
     wxString m_DataUri;
+    wxString m_FrameId;
+    wxString m_FrameKind;
+    wxString m_SidecarJson;
     int      m_WidthPx = 0;
     int      m_HeightPx = 0;
     size_t   m_ByteSize = 0;
@@ -239,6 +242,8 @@ struct KICOMMON_API AI_PANEL_STATE_RECORD
 struct KICOMMON_API AI_CONTEXT_SNAPSHOT
 {
     AI_EDITOR_KIND                    m_EditorKind = AI_EDITOR_KIND::Unknown;
+    wxString                          m_ProjectId;
+    wxString                          m_DocumentId;
     AI_CONTEXT_VERSION                m_Version;
     std::vector<AI_OBJECT_REF>        m_VisibleObjects;
     std::vector<AI_OBJECT_REF>        m_SelectedObjects;
@@ -321,6 +326,19 @@ struct KICOMMON_API AI_TOOL_CALL_RECORD
     wxString m_Message;
 };
 
+struct KICOMMON_API AI_PROVIDER_INPUT_BLOCK
+{
+    wxString m_Id;
+    wxString m_Kind;
+    wxString m_Source;
+    wxString m_Text;
+    wxString m_MetadataJson;
+    bool     m_Included = true;
+    wxString m_OmissionReason;
+    size_t   m_OriginalChars = 0;
+    size_t   m_SentChars = 0;
+};
+
 enum class AI_PROVIDER_REQUEST_KIND
 {
     Chat,
@@ -331,6 +349,7 @@ enum class AI_PROVIDER_REQUEST_KIND
 struct KICOMMON_API AI_PROVIDER_REQUEST
 {
     uint64_t                         m_RequestId = 0;
+    uint64_t                         m_ConversationId = 1;
     AI_PROVIDER_REQUEST_KIND         m_RequestKind = AI_PROVIDER_REQUEST_KIND::Chat;
     AI_EDITOR_KIND                   m_EditorKind = AI_EDITOR_KIND::Unknown;
     AI_CONTEXT_VERSION               m_ContextVersion;
@@ -342,6 +361,20 @@ struct KICOMMON_API AI_PROVIDER_REQUEST
     wxString                         m_ToolCatalogJson;
     size_t                           m_MaxToolRounds = 1;
     bool                             m_DisableDefaultTools = false;
+    size_t                           m_MaxProviderInputChars = 24000;
+    size_t                           m_MaxContextActivityRecords = 24;
+    size_t                           m_MaxToolResultChars = 4096;
+    size_t                           m_MaxRetrievedMemoryRecords = 8;
+    size_t                           m_MaxRetrievedMemoryChars = 4096;
+    size_t                           m_MaxVisualDataUriChars = 1500000;
+    bool                             m_AllowVisualPixels = true;
+    bool                             m_ContextCompiled = false;
+    bool                             m_ProviderInputWasShrunk = false;
+    size_t                           m_ContextEstimatedChars = 0;
+    wxString                         m_CompiledUserMessageText;
+    wxString                         m_PromptTraceJson;
+    std::vector<AI_PROVIDER_INPUT_BLOCK> m_ProviderInputBlocks;
+    std::vector<AI_PROVIDER_INPUT_BLOCK> m_RetrievedMemoryBlocks;
 };
 
 struct KICOMMON_API AI_PROVIDER_RESPONSE
@@ -350,6 +383,7 @@ struct KICOMMON_API AI_PROVIDER_RESPONSE
     AI_SUGGESTION_KIND               m_Kind = AI_SUGGESTION_KIND::Chat;
     wxString                         m_Title;
     wxString                         m_Body;
+    wxString                         m_ProviderTraceJson;
     std::vector<AI_TOOL_CALL_RECORD> m_ToolCalls;
 };
 

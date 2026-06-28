@@ -2,8 +2,13 @@
 
 #include <kicommon.h>
 #include <kisurf/ai/ai_activity_log.h>
+#include <kisurf/ai/ai_artifact_store.h>
+#include <kisurf/ai/ai_chat_session_store.h>
+#include <kisurf/ai/ai_local_text_memory.h>
+#include <kisurf/ai/ai_memory_store.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_observability_log.h>
+#include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_runtime.h>
 #include <kisurf/ai/ai_types.h>
 
@@ -35,8 +40,56 @@ public:
     bool CancelRequest( uint64_t aRequestId );
     uint64_t LastRequestId() const { return m_LastRequestId; }
     bool LastRequestCancelled() const;
+    void StartNewChat();
+    uint64_t ActiveChatSessionId() const { return m_ActiveChatSessionId; }
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider );
+    void SetPromptTraceStore( AI_PROMPT_TRACE_STORE* aStore );
+    const wxString& PromptTraceStorePath() const;
+    void SetMemoryStore( AI_MEMORY_STORE* aStore );
+    const wxString& MemoryStorePath() const;
+    void SetLocalTextMemoryIndex( AI_LOCAL_TEXT_MEMORY_INDEX* aIndex );
+    void SetLocalTextResearchDirectory( const wxString& aDirectory );
+    const wxString& LocalTextResearchDirectory() const
+    {
+        return m_LocalTextResearchDirectory;
+    }
+    bool LoadLocalTextResearchDirectory( const wxString& aDirectory,
+                                         const wxString& aProjectId,
+                                         const wxString& aDocumentId,
+                                         wxString& aError );
+    void SetArtifactStore( AI_ARTIFACT_STORE* aStore );
+    const wxString& ArtifactStorePath() const;
+    void SetChatSessionStore( AI_CHAT_SESSION_STORE* aStore );
+    const wxString& ChatSessionStoreDirectory() const;
+    AI_PROVIDER_RECOVERY_POLICY LatestChatProviderRecoveryPolicy() const;
+    AI_PROVIDER_RECOVERY_POLICY LatestNextActionProviderRecoveryPolicy() const;
+    AI_PROVIDER_RECOVERY_RESUME_PACKET LatestChatProviderRecoveryResumePacket() const;
+    AI_PROVIDER_RECOVERY_RESUME_PACKET LatestNextActionProviderRecoveryResumePacket() const;
+    AI_PROVIDER_RECOVERY_RESUME_PLAN LatestChatProviderRecoveryResumePlan() const;
+    AI_PROVIDER_RECOVERY_RESUME_PLAN LatestNextActionProviderRecoveryResumePlan() const;
+    AI_PROVIDER_RECOVERY_PREFLIGHT_RESULT LatestChatProviderRecoveryPreflight(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_PREFLIGHT_RESULT LatestNextActionProviderRecoveryPreflight(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_REPLAY_REQUEST LatestChatProviderRecoveryReplayRequest(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_REPLAY_REQUEST LatestNextActionProviderRecoveryReplayRequest(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_EPISODE LatestChatProviderRecoveryEpisode(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_EPISODE LatestNextActionProviderRecoveryEpisode(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext ) const;
+    AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_RESULT
+    ExecuteChatProviderRecoveryReplayRequest(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext,
+            const AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_OPTIONS& aOptions,
+            AI_ACCEPT_APPLY_ADAPTER& aAdapter ) const;
+    AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_RESULT
+    ExecuteNextActionProviderRecoveryReplayRequest(
+            const AI_PROVIDER_RECOVERY_PREFLIGHT_CONTEXT& aContext,
+            const AI_PROVIDER_RECOVERY_REPLAY_EXECUTION_OPTIONS& aOptions,
+            AI_ACCEPT_APPLY_ADAPTER& aAdapter ) const;
     void ConfigureNextActionServices( AI_SESSION_PREVIEW_SERVICE* aPreviewService,
                                       AI_SESSION_VALIDATION_SERVICE* aValidationService );
     void ConfigureNextActionCurrentContextSampler(
@@ -91,8 +144,23 @@ public:
     size_t ExpireSuggestions( const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentVersion );
 
 private:
+    void refreshLocalTextResearchDirectory( const AI_CONTEXT_SNAPSHOT& aContextSnapshot );
+    void persistActiveChatSession();
+
     AI_ACTIVITY_LOG                         m_ActivityLog;
+    std::unique_ptr<AI_PROMPT_TRACE_STORE>  m_DefaultPromptTraceStore;
+    AI_PROMPT_TRACE_STORE*                  m_PromptTraceStore = nullptr;
+    std::unique_ptr<AI_MEMORY_STORE>        m_DefaultMemoryStore;
+    AI_MEMORY_STORE*                        m_MemoryStore = nullptr;
+    std::unique_ptr<AI_LOCAL_TEXT_MEMORY_INDEX> m_DefaultLocalTextMemoryIndex;
+    AI_LOCAL_TEXT_MEMORY_INDEX*             m_LocalTextMemoryIndex = nullptr;
+    wxString                                m_LocalTextResearchDirectory;
+    std::unique_ptr<AI_ARTIFACT_STORE>      m_DefaultArtifactStore;
+    AI_ARTIFACT_STORE*                      m_ArtifactStore = nullptr;
+    std::unique_ptr<AI_CHAT_SESSION_STORE>  m_DefaultChatSessionStore;
+    AI_CHAT_SESSION_STORE*                  m_ChatSessionStore = nullptr;
     AI_RUNTIME                              m_Runtime;
+    AI_TOOL_CALL_HANDLER*                   m_ToolCallHandler = nullptr;
     std::unique_ptr<AI_NEXT_ACTION_RUNTIME> m_NextActionRuntime;
     std::vector<AI_AGENT_MESSAGE>           m_Messages;
     std::map<AI_AGENT_WORKSPACE_CONTEXT_KIND, AI_AGENT_WORKSPACE_CONTEXT_STATE>
@@ -101,6 +169,12 @@ private:
             AI_AGENT_WORKSPACE_CONTEXT_KIND::General;
     bool                                    m_BackgroundAgentEnabled = false;
     uint64_t                                m_LastRequestId = 0;
+    uint64_t                                m_ActiveChatSessionId = 1;
+    uint64_t                                m_ChatActivityBoundarySequence = 0;
+    wxString                                m_LastChatProjectId;
+    wxString                                m_LastChatDocumentId;
+    wxString                                m_LastNextActionProjectId;
+    wxString                                m_LastNextActionDocumentId;
     AI_SESSION_PREVIEW_SERVICE*             m_NextActionPreviewService = nullptr;
     AI_SESSION_VALIDATION_SERVICE*          m_NextActionValidationService = nullptr;
     std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> m_NextActionContextSampler;
@@ -113,6 +187,6 @@ private:
         uint64_t m_Depth = 1;
     };
 
-    std::optional<DOCUMENT_WRITE_OWNERSHIP> m_DocumentWriteOwnership;
+    std::vector<DOCUMENT_WRITE_OWNERSHIP>   m_DocumentWriteOwnerships;
     uint64_t                                m_NextDocumentWriteLeaseId = 1;
 };

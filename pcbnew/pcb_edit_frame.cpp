@@ -425,7 +425,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     {
         m_aiSessionPreviewService =
                 std::make_unique<KISURF_AI_PCB_SESSION_PREVIEW_SERVICE>(
-                        *GetBoard(), *GetCanvas()->GetView() );
+                        *GetBoard(), *GetCanvas()->GetView(), GetCanvas() );
     }
 
     m_agentPanel = new AI_AGENT_PANEL( this, AI_EDITOR_KIND::Pcb,

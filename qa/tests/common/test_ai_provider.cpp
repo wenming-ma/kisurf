@@ -1,5 +1,6 @@
 #include <boost/test/unit_test.hpp>
 #include <json_common.h>
+#include <kisurf/ai/ai_provider_input_compiler.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
 #include <kisurf/ai/ai_provider.h>
 
@@ -283,93 +284,6 @@ BOOST_AUTO_TEST_CASE( StubProviderMentionsContextWhenPresent )
 }
 
 
-BOOST_AUTO_TEST_CASE( ProviderSettingsReadEnvironmentWithDefaults )
-{
-    wxString oldBaseUrl;
-    wxString oldModel;
-    wxString oldKey;
-    const bool hadBaseUrl = wxGetEnv( wxS( "KISURF_AI_BASE_URL" ), &oldBaseUrl );
-    const bool hadModel = wxGetEnv( wxS( "KISURF_AI_MODEL" ), &oldModel );
-    const bool hadKey = wxGetEnv( wxS( "OPENAI_API_KEY" ), &oldKey );
-
-    wxSetEnv( wxS( "KISURF_AI_BASE_URL" ), wxS( "https://unit.example.test/v1/" ) );
-    wxSetEnv( wxS( "KISURF_AI_MODEL" ), wxS( "unit-model" ) );
-    wxSetEnv( wxS( "OPENAI_API_KEY" ), wxS( "unit-test-key" ) );
-
-    AI_PROVIDER_SETTINGS settings = AI_PROVIDER_SETTINGS::FromEnvironment();
-
-    BOOST_CHECK_EQUAL( settings.m_BaseUrl, wxString( wxS( "https://unit.example.test/v1" ) ) );
-    BOOST_CHECK_EQUAL( settings.m_Model, wxString( wxS( "unit-model" ) ) );
-    BOOST_CHECK( settings.HasApiKey() );
-
-    if( hadBaseUrl )
-        wxSetEnv( wxS( "KISURF_AI_BASE_URL" ), oldBaseUrl );
-    else
-        wxUnsetEnv( wxS( "KISURF_AI_BASE_URL" ) );
-
-    if( hadModel )
-        wxSetEnv( wxS( "KISURF_AI_MODEL" ), oldModel );
-    else
-        wxUnsetEnv( wxS( "KISURF_AI_MODEL" ) );
-
-    if( hadKey )
-        wxSetEnv( wxS( "OPENAI_API_KEY" ), oldKey );
-    else
-        wxUnsetEnv( wxS( "OPENAI_API_KEY" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ProviderSettingsReadOpenAiBaseUrlAlias )
-{
-    ENV_GUARD kisurfBaseGuard( wxS( "KISURF_AI_BASE_URL" ) );
-    ENV_GUARD openaiBaseGuard( wxS( "OPENAI_BASE_URL" ) );
-    ENV_GUARD lowerBaseGuard( wxS( "base_url" ) );
-
-    wxUnsetEnv( wxS( "KISURF_AI_BASE_URL" ) );
-    wxSetEnv( wxS( "OPENAI_BASE_URL" ), wxS( "https://openai.example.test/v1/" ) );
-    wxSetEnv( wxS( "base_url" ), wxS( "https://lower.example.test/v1/" ) );
-
-    AI_PROVIDER_SETTINGS settings = AI_PROVIDER_SETTINGS::FromEnvironment();
-
-    BOOST_CHECK_EQUAL( settings.m_BaseUrl,
-                       wxString( wxS( "https://openai.example.test/v1" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ProviderSettingsReadLowercaseBaseUrlAlias )
-{
-    ENV_GUARD kisurfBaseGuard( wxS( "KISURF_AI_BASE_URL" ) );
-    ENV_GUARD openaiBaseGuard( wxS( "OPENAI_BASE_URL" ) );
-    ENV_GUARD lowerBaseGuard( wxS( "base_url" ) );
-
-    wxUnsetEnv( wxS( "KISURF_AI_BASE_URL" ) );
-    wxUnsetEnv( wxS( "OPENAI_BASE_URL" ) );
-    wxSetEnv( wxS( "base_url" ), wxS( "https://lower.example.test/v1/" ) );
-
-    AI_PROVIDER_SETTINGS settings = AI_PROVIDER_SETTINGS::FromEnvironment();
-
-    BOOST_CHECK_EQUAL( settings.m_BaseUrl,
-                       wxString( wxS( "https://lower.example.test/v1" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ProviderSettingsPrefersKiSurfBaseUrlAlias )
-{
-    ENV_GUARD kisurfBaseGuard( wxS( "KISURF_AI_BASE_URL" ) );
-    ENV_GUARD openaiBaseGuard( wxS( "OPENAI_BASE_URL" ) );
-    ENV_GUARD lowerBaseGuard( wxS( "base_url" ) );
-
-    wxSetEnv( wxS( "KISURF_AI_BASE_URL" ), wxS( "https://kisurf.example.test/v1/" ) );
-    wxSetEnv( wxS( "OPENAI_BASE_URL" ), wxS( "https://openai.example.test/v1/" ) );
-    wxSetEnv( wxS( "base_url" ), wxS( "https://lower.example.test/v1/" ) );
-
-    AI_PROVIDER_SETTINGS settings = AI_PROVIDER_SETTINGS::FromEnvironment();
-
-    BOOST_CHECK_EQUAL( settings.m_BaseUrl,
-                       wxString( wxS( "https://kisurf.example.test/v1" ) ) );
-}
-
-
 BOOST_AUTO_TEST_CASE( DefaultProviderReportsMissingKeyWhenUnconfigured )
 {
     ENV_GUARD providerGuard( wxS( "KISURF_AI_PROVIDER" ) );
@@ -538,6 +452,310 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDoesNotCallNetworkWithoutKey )
 }
 
 
+BOOST_AUTO_TEST_CASE( OpenAiProviderIncludesHttpErrorBodyExcerpt )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST&, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                aResponse.m_StatusCode = 502;
+                aResponse.m_Body =
+                        wxS( "{\"error\":{\"message\":\"upstream model overloaded\"}}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 14;
+    request.m_UserText = wxS( "hello" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 14 );
+    BOOST_CHECK( response.m_Body.Contains( wxS( "HTTP 502" ) ) );
+    BOOST_CHECK( response.m_Body.Contains( wxS( "upstream model overloaded" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesContextLimitWithShrunkContext )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    std::vector<size_t> requestSizes;
+    std::vector<bool>   requestHasImage;
+    int                 callCount = 0;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&]( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                ++callCount;
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+                requestSizes.push_back( aRequest.m_Body.length() );
+                requestHasImage.push_back(
+                        body["messages"].at( 1 )["content"].is_array() );
+
+                if( callCount == 1 )
+                {
+                    BOOST_CHECK( aRequest.m_Body.Contains( wxS( "RAW_PAYLOAD_NEEDLE" ) ) );
+                    aResponse.m_StatusCode = 400;
+                    aResponse.m_Body =
+                            wxS( "{\"error\":{\"code\":\"context_length_exceeded\","
+                                 "\"message\":\"maximum context length exceeded\"}}" );
+                    return true;
+                }
+
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "RAW_PAYLOAD_NEEDLE" ) ) );
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"shrunk ok\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 71;
+    request.m_UserText = wxS( "summarize after long tool result" );
+    request.m_MaxProviderInputChars = 24000;
+    request.m_MaxToolResultChars = 4096;
+    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "canvas" );
+    request.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
+    request.m_ContextSnapshot.m_Visual.m_DataUri = wxS( "data:image/png;base64,dW5pdA==" );
+    request.m_ContextSnapshot.m_Visual.m_WidthPx = 8;
+    request.m_ContextSnapshot.m_Visual.m_HeightPx = 8;
+    request.m_ContextSnapshot.m_Visual.m_ByteSize = 32;
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 71;
+    result.m_ToolCallId = wxS( "call_large" );
+    result.m_ToolName = wxS( "kisurf_run_cell" );
+
+    wxString rawPayload;
+    for( int i = 0; i < 3000; ++i )
+        rawPayload << wxS( "x" );
+
+    result.m_ResultJson = wxS( "{\"stdout\":\"" ) + rawPayload
+                          + wxS( "RAW_PAYLOAD_NEEDLE\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 71 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "shrunk ok" ) ) );
+    BOOST_REQUIRE_EQUAL( callCount, 2 );
+    BOOST_REQUIRE_EQUAL( requestSizes.size(), 2 );
+    BOOST_CHECK_LT( requestSizes.at( 1 ), requestSizes.at( 0 ) );
+    BOOST_REQUIRE_EQUAL( requestHasImage.size(), 2 );
+    BOOST_CHECK( requestHasImage.at( 0 ) );
+    BOOST_CHECK( !requestHasImage.at( 1 ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "retry_history" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "context_limit" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "shrunk_retry" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesLarge502WithShrunkContext )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    int                 callCount = 0;
+    std::vector<size_t> requestSizes;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&]( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                ++callCount;
+                requestSizes.push_back( aRequest.m_Body.length() );
+
+                if( callCount == 1 )
+                {
+                    aResponse.m_StatusCode = 502;
+                    aResponse.m_Body = wxS( "{\"error\":{\"message\":\"bad gateway\"}}" );
+                    return true;
+                }
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"retried small\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 72;
+    request.m_UserText = wxS( "large request that may overflow upstream proxy" );
+    request.m_MaxProviderInputChars = 50000;
+
+    for( int i = 0; i < 80; ++i )
+    {
+        AI_ACTIVITY_RECORD activity;
+        activity.m_Sequence = static_cast<uint64_t>( i + 1 );
+        activity.m_ActionName = wxString::Format( wxS( "activity-%02d" ), i );
+        wxString payload = wxS( "long activity payload " );
+
+        for( int j = 0; j < 200; ++j )
+            payload << wxS( "z" );
+
+        activity.m_Message = payload;
+        request.m_ContextSnapshot.m_RecentActivity.push_back( activity );
+    }
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 72 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "retried small" ) ) );
+    BOOST_REQUIRE_EQUAL( callCount, 2 );
+    BOOST_REQUIRE_EQUAL( requestSizes.size(), 2 );
+    BOOST_CHECK_LT( requestSizes.at( 1 ), requestSizes.at( 0 ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "retry_history" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "transient_gateway" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "shrunk_retry" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderPreflightsLargeRequestWithDefaultBudget )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    int callCount = 0;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&]( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                ++callCount;
+
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "RAW_PREFLIGHT_NEEDLE" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "compressed_tool_result" ) ) );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"preflight ok\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 73;
+    request.m_UserText = wxS( "summarize very large tool output" );
+    request.m_MaxProviderInputChars = 50000;
+    request.m_MaxToolResultChars = 20000;
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 73;
+    result.m_ToolCallId = wxS( "call_preflight_large" );
+    result.m_ToolName = wxS( "kisurf_run_cell" );
+
+    wxString rawPayload;
+    for( int i = 0; i < 10000; ++i )
+        rawPayload << wxS( "p" );
+
+    result.m_ResultJson = wxS( "{\"stdout\":\"" ) + rawPayload
+                          + wxS( "RAW_PREFLIGHT_NEEDLE\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 73 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "preflight ok" ) ) );
+    BOOST_CHECK_EQUAL( callCount, 1 );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "preflight_budget" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "tool_result_budget" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderUsesNextActionPreflightBudget )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    int callCount = 0;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&]( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                ++callCount;
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+                const std::string content =
+                        body["messages"].at( 1 )["content"].get<std::string>();
+                const std::string bodyText = aRequest.m_Body.ToStdString();
+
+                BOOST_CHECK( content.find( "activity-39" ) != std::string::npos );
+                BOOST_CHECK( content.find( "activity-00" ) == std::string::npos );
+                BOOST_CHECK( bodyText.find( "NEXT_ACTION_RAW_TOOL_RESULT_NEEDLE" )
+                             == std::string::npos );
+                BOOST_CHECK( bodyText.find( "compressed_tool_result" )
+                             != std::string::npos );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"next action ok\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 74;
+    request.m_RequestKind = AI_PROVIDER_REQUEST_KIND::NextActionDecision;
+    request.m_UserText = wxS( "next action decision with bounded episode input" );
+    request.m_MaxProviderInputChars = 50000;
+    request.m_MaxContextActivityRecords = 50;
+    request.m_MaxToolResultChars = 20000;
+    request.m_MaxRetrievedMemoryChars = 20000;
+
+    for( int i = 0; i < 40; ++i )
+    {
+        AI_ACTIVITY_RECORD activity;
+        activity.m_Sequence = static_cast<uint64_t>( i + 1 );
+        activity.m_ActionName = wxString::Format( wxS( "activity-%02d" ), i );
+        activity.m_Message = wxS( "bounded next action episode activity" );
+        request.m_ContextSnapshot.m_RecentActivity.push_back( activity );
+    }
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 74;
+    result.m_ToolCallId = wxS( "call_next_action_large" );
+    result.m_ToolName = wxS( "observation.read" );
+
+    wxString rawPayload;
+    for( int i = 0; i < 25000; ++i )
+        rawPayload << wxS( "n" );
+
+    result.m_ResultJson = wxS( "{\"observation\":\"" ) + rawPayload
+                          + wxS( "NEXT_ACTION_RAW_TOOL_RESULT_NEEDLE\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 74 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "next action ok" ) ) );
+    BOOST_CHECK_EQUAL( callCount, 1 );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "preflight_budget" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "tool_result_budget" ) ) );
+    BOOST_CHECK( response.m_ProviderTraceJson.Contains( wxS( "activity_record_budget" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( OpenAiProviderSendsVisualSnapshotAsImageUrlContent )
 {
     AI_PROVIDER_SETTINGS settings;
@@ -622,6 +840,579 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderKeepsStringContentWithoutVisualPixels )
 }
 
 
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerKeepsRecentActivityAndTracesOmissions )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 81;
+    request.m_UserText = wxS( "inspect latest state" );
+    request.m_MaxProviderInputChars = 1800;
+    request.m_MaxContextActivityRecords = 6;
+    request.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_ContextSnapshot.m_Version.m_DocumentRevision = 33;
+
+    for( int i = 0; i < 40; ++i )
+    {
+        AI_ACTIVITY_RECORD activity;
+        activity.m_Sequence = static_cast<uint64_t>( i + 1 );
+        activity.m_ActionName = wxString::Format( wxS( "activity-%02d" ), i );
+        activity.m_Message = wxString::Format( wxS( "activity-message-%02d" ), i );
+        activity.m_Executed = true;
+        request.m_ContextSnapshot.m_RecentActivity.push_back( activity );
+    }
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_CHECK( compiled.m_ContextCompiled );
+    BOOST_CHECK( compiled.m_ProviderInputWasShrunk );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains( wxS( "activity-39" ) ) );
+    BOOST_CHECK( !compiled.m_CompiledUserMessageText.Contains( wxS( "activity-00" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "recent_activity" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "omitted" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerIncludesOmittedInputSummary )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 88;
+    request.m_UserText = wxS( "inspect bounded context" );
+    request.m_MaxContextActivityRecords = 2;
+    request.m_AllowVisualPixels = false;
+    request.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "canvas.viewport" );
+    request.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
+    request.m_ContextSnapshot.m_Visual.m_DataUri =
+            wxS( "data:image/png;base64,dW5pdA==" );
+    request.m_ContextSnapshot.m_Visual.m_FrameId = wxS( "viewport-1" );
+    request.m_ContextSnapshot.m_Visual.m_FrameKind = wxS( "viewport_raw" );
+    request.m_ContextSnapshot.m_Visual.m_WidthPx = 12;
+    request.m_ContextSnapshot.m_Visual.m_HeightPx = 8;
+    request.m_ContextSnapshot.m_Visual.m_ByteSize = 48;
+
+    for( int i = 0; i < 6; ++i )
+    {
+        AI_ACTIVITY_RECORD activity;
+        activity.m_Sequence = static_cast<uint64_t>( i + 1 );
+        activity.m_ActionName = wxString::Format( wxS( "activity-%02d" ), i );
+        activity.m_Message = wxString::Format( wxS( "activity-message-%02d" ), i );
+        request.m_ContextSnapshot.m_RecentActivity.push_back( activity );
+    }
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE_EQUAL( messages.size(), 2 );
+    BOOST_CHECK_EQUAL( messages.at( 1 )["role"].get<std::string>(), "user" );
+
+    const std::string userContent =
+            messages.at( 1 )["content"].is_string()
+                    ? messages.at( 1 )["content"].get<std::string>()
+                    : messages.at( 1 )["content"].dump();
+
+    BOOST_CHECK( userContent.find( "Omitted provider input blocks" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "editor.recent_activity" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "older_activity_omitted" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "visual.frame.pixels" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "visual_pixels_disabled" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerIncludesResponseContractAndToolCatalogBlocks )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 89;
+    request.m_UserText = wxS( "review next action contract" );
+    request.m_MaxProviderInputChars = 8000;
+    request.m_ResponseFormatJson =
+            wxS( "{\"type\":\"json_schema\",\"json_schema\":{\"name\":\"next_action\","
+                 "\"schema\":{\"type\":\"object\",\"properties\":{\"action\":{\"type\":\"string\"}},"
+                 "\"required\":[\"action\"]}}}" );
+    request.m_ToolCatalogJson =
+            wxS( "[{\"type\":\"function\",\"function\":{\"name\":\"kisurf_test_tool\","
+                 "\"description\":\"Test tool\",\"parameters\":{\"type\":\"object\"}}}]" );
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE_EQUAL( messages.size(), 2 );
+    BOOST_CHECK_EQUAL( messages.at( 1 )["role"].get<std::string>(), "user" );
+
+    const std::string userContent =
+            messages.at( 1 )["content"].is_string()
+                    ? messages.at( 1 )["content"].get<std::string>()
+                    : messages.at( 1 )["content"].dump();
+
+    BOOST_CHECK( userContent.find( "Provider response contract" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "json_schema" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "\"action\"" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "Provider callable tool catalog" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "kisurf_test_tool" ) != std::string::npos );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "provider.response_format" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "provider.tool_catalog" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "response_schema" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "tool_catalog" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerSummarizesLargeToolCatalogBlock )
+{
+    nlohmann::json tools = nlohmann::json::array();
+
+    for( int i = 0; i < 32; ++i )
+    {
+        tools.push_back( {
+            { "type", "function" },
+            { "function",
+              {
+                  { "name", "kisurf_large_tool_" + std::to_string( i ) },
+                  { "description",
+                    "RAW_VERBOSE_TOOL_DESCRIPTION_NEEDLE_" + std::to_string( i )
+                            + std::string( 160, 'x' ) },
+                  { "parameters",
+                    {
+                        { "type", "object" },
+                        { "properties",
+                          {
+                              { "argument",
+                                {
+                                    { "type", "string" },
+                                    { "description",
+                                      "RAW_VERBOSE_SCHEMA_NEEDLE_" + std::to_string( i )
+                                              + std::string( 160, 'y' ) }
+                                } }
+                          } }
+                    } }
+              } } } );
+    }
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 90;
+    request.m_UserText = wxS( "review compact tool catalog" );
+    request.m_MaxProviderInputChars = 24000;
+    request.m_ToolCatalogJson = wxString::FromUTF8( tools.dump().c_str() );
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE_EQUAL( messages.size(), 2 );
+
+    const std::string userContent =
+            messages.at( 1 )["content"].is_string()
+                    ? messages.at( 1 )["content"].get<std::string>()
+                    : messages.at( 1 )["content"].dump();
+
+    BOOST_CHECK( userContent.find( "Provider callable tool catalog summary" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "summarized_tool_catalog" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "\"tool_count\":32" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "kisurf_large_tool_31" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "hash" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "RAW_VERBOSE_TOOL_DESCRIPTION_NEEDLE_31" )
+                 == std::string::npos );
+    BOOST_CHECK( userContent.find( "RAW_VERBOSE_SCHEMA_NEEDLE_31" )
+                 == std::string::npos );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+    BOOST_CHECK_EQUAL( compiled.m_ToolCatalogJson, request.m_ToolCatalogJson );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "provider.tool_catalog" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "summarized" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerSummarizesLargeResponseSchemaBlock )
+{
+    nlohmann::json properties = nlohmann::json::object();
+    nlohmann::json required = nlohmann::json::array();
+
+    for( int i = 0; i < 32; ++i )
+    {
+        const std::string name = "field_" + std::to_string( i );
+        properties[name] = {
+            { "type", "string" },
+            { "description",
+              "RAW_VERBOSE_RESPONSE_SCHEMA_NEEDLE_" + std::to_string( i )
+                      + std::string( 180, 'z' ) }
+        };
+        required.push_back( name );
+    }
+
+    nlohmann::json responseFormat = {
+        { "type", "json_schema" },
+        { "json_schema",
+          {
+              { "name", "large_next_action_review" },
+              { "schema",
+                {
+                    { "type", "object" },
+                    { "properties", properties },
+                    { "required", required },
+                    { "additionalProperties", false }
+                } }
+          } }
+    };
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 91;
+    request.m_UserText = wxS( "review compact response schema" );
+    request.m_MaxProviderInputChars = 24000;
+    request.m_ResponseFormatJson =
+            wxString::FromUTF8( responseFormat.dump().c_str() );
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE_EQUAL( messages.size(), 2 );
+
+    const std::string userContent =
+            messages.at( 1 )["content"].is_string()
+                    ? messages.at( 1 )["content"].get<std::string>()
+                    : messages.at( 1 )["content"].dump();
+
+    BOOST_CHECK( userContent.find( "Provider response contract summary" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "summarized_response_schema" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "large_next_action_review" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "\"property_count\":32" )
+                 != std::string::npos );
+    BOOST_CHECK( userContent.find( "field_31" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "hash" ) != std::string::npos );
+    BOOST_CHECK( userContent.find( "RAW_VERBOSE_RESPONSE_SCHEMA_NEEDLE_31" )
+                 == std::string::npos );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+    BOOST_CHECK_EQUAL( compiled.m_ResponseFormatJson, request.m_ResponseFormatJson );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "provider.response_format" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "summarized_response_schema" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerCompressesLargeToolResults )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 82;
+    request.m_UserText = wxS( "continue after tool" );
+    request.m_MaxToolResultChars = 180;
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 82;
+    result.m_ToolCallId = wxS( "call_large" );
+    result.m_ToolName = wxS( "generic_verbose_tool" );
+    result.m_ArgumentsJson = wxS( "{\"mode\":\"large\"}" );
+    wxString rawPayload;
+
+    for( int i = 0; i < 4000; ++i )
+        rawPayload << wxS( "x" );
+
+    result.m_ResultJson = wxS( "{\"stdout\":\"" )
+                          + rawPayload
+                          + wxS( "RAW_PAYLOAD_NEEDLE\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_REQUIRE_EQUAL( compiled.m_ToolResults.size(), 1 );
+    BOOST_CHECK( compiled.m_ProviderInputWasShrunk );
+    BOOST_CHECK_LE( compiled.m_ToolResults.front().m_ResultJson.length(),
+                    request.m_MaxToolResultChars + 256 );
+    BOOST_CHECK( compiled.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "compressed_tool_result" ) ) );
+    BOOST_CHECK( !compiled.m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "RAW_PAYLOAD_NEEDLE" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "tool_result" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerAddsArtifactReferenceForLargeToolResults )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 86;
+    request.m_UserText = wxS( "review long tool output" );
+    request.m_MaxToolResultChars = 220;
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 86;
+    result.m_ToolCallId = wxS( "call_artifact" );
+    result.m_ToolName = wxS( "generic_verbose_tool" );
+    result.m_ArgumentsJson = wxS( "{\"mode\":\"long\"}" );
+
+    wxString rawPayload;
+
+    for( int i = 0; i < 6000; ++i )
+        rawPayload << wxS( "a" );
+
+    result.m_ResultJson = wxS( "{\"stdout\":\"" ) + rawPayload + wxS( "\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_REQUIRE_EQUAL( compiled.m_ToolResults.size(), 1 );
+
+    nlohmann::json compressed = nlohmann::json::parse(
+            compiled.m_ToolResults.front().m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( compressed["status"].get<std::string>(),
+                       "compressed_tool_result" );
+    BOOST_REQUIRE( compressed.contains( "artifact_ref" ) );
+    BOOST_CHECK_EQUAL( compressed["artifact_ref"]["kind"].get<std::string>(),
+                       "tool_result" );
+    BOOST_CHECK_EQUAL( compressed["artifact_ref"]["retention"].get<std::string>(),
+                       "trace" );
+    BOOST_CHECK( compressed["artifact_ref"]["uri"].get<std::string>().find(
+                         "kisurf-artifact://tool-result/" )
+                 == 0 );
+    BOOST_CHECK_EQUAL( compressed["artifact_ref"]["tool_call_id"].get<std::string>(),
+                       "call_artifact" );
+
+    nlohmann::json promptTrace = nlohmann::json::parse(
+            compiled.m_PromptTraceJson.ToStdString() );
+
+    bool sawArtifactRef = false;
+
+    for( const nlohmann::json& block : promptTrace["blocks"] )
+    {
+        if( block.value( "id", std::string() ) != "call_artifact" )
+            continue;
+
+        sawArtifactRef = block.contains( "metadata" )
+                         && block["metadata"].contains( "artifact_ref" )
+                         && block["metadata"]["artifact_ref"].value(
+                                    "retention", std::string() )
+                            == "trace";
+    }
+
+    BOOST_CHECK( sawArtifactRef );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerUsesScriptOutputReferenceForLargeScriptResults )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 87;
+    request.m_UserText = wxS( "review long script output" );
+    request.m_MaxToolResultChars = 220;
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 87;
+    result.m_ToolCallId = wxS( "call_script_artifact" );
+    result.m_ToolName = wxS( "kisurf_run_cell" );
+    result.m_ArgumentsJson =
+            wxS( "{\"cell_id\":\"long-script\",\"cell_text\":\"print('x')\"}" );
+
+    wxString rawPayload;
+
+    for( int i = 0; i < 6000; ++i )
+        rawPayload << wxS( "s" );
+
+    result.m_ResultJson = wxS( "{\"stdout\":\"" ) + rawPayload + wxS( "\"}" );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_REQUIRE_EQUAL( compiled.m_ToolResults.size(), 1 );
+
+    nlohmann::json compressed = nlohmann::json::parse(
+            compiled.m_ToolResults.front().m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( compressed["status"].get<std::string>(),
+                       "compressed_tool_result" );
+    BOOST_REQUIRE( compressed.contains( "artifact_ref" ) );
+    BOOST_CHECK_EQUAL( compressed["artifact_ref"]["kind"].get<std::string>(),
+                       "script_output" );
+    BOOST_CHECK( compressed["artifact_ref"]["uri"].get<std::string>().find(
+                         "kisurf-artifact://script-output/" )
+                 == 0 );
+    BOOST_CHECK_EQUAL( compressed["artifact_ref"]["tool_call_id"].get<std::string>(),
+                       "call_script_artifact" );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerIncludesRetrievedLocalMemoryWithTrace )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 83;
+    request.m_UserText = wxS( "route USB pair near connector" );
+    request.m_MaxProviderInputChars = 3000;
+    request.m_MaxRetrievedMemoryRecords = 4;
+    request.m_MaxRetrievedMemoryChars = 1200;
+
+    AI_PROVIDER_INPUT_BLOCK memory;
+    memory.m_Id = wxS( "memory.rule.usb-clearance" );
+    memory.m_Kind = wxS( "retrieved_memory" );
+    memory.m_Source = wxS( "local_text_memory" );
+    memory.m_Text = wxS( "Rule memory: USB differential pair clearance is 0.20 mm" );
+    memory.m_MetadataJson =
+            wxS( "{\"project_id\":\"project-a\",\"document_id\":\"board-1\","
+                 "\"type\":\"rule_memory\"}" );
+    request.m_RetrievedMemoryBlocks.push_back( memory );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_CHECK( compiled.m_ContextCompiled );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "Retrieved local memory" ) ) );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "USB differential pair clearance" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "memory.rule.usb-clearance" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "retrieved_memory" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerIncludesVisualObservationSidecar )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 84;
+    request.m_UserText = wxS( "inspect placement preview" );
+    request.m_MaxProviderInputChars = 4000;
+    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "canvas.annotated_roi" );
+    request.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
+    request.m_ContextSnapshot.m_Visual.m_DataUri = wxS( "data:image/png;base64,dW5pdA==" );
+    request.m_ContextSnapshot.m_Visual.m_FrameId = wxS( "frame-1" );
+    request.m_ContextSnapshot.m_Visual.m_FrameKind = wxS( "annotated_roi" );
+    request.m_ContextSnapshot.m_Visual.m_WidthPx = 64;
+    request.m_ContextSnapshot.m_Visual.m_HeightPx = 64;
+    request.m_ContextSnapshot.m_Visual.m_ByteSize = 128;
+    request.m_ContextSnapshot.m_Visual.m_SidecarJson =
+            wxS( "{\"frame_id\":\"frame-1\",\"frame_kind\":\"annotated_roi\","
+                 "\"anchors\":[{\"anchor_id\":\"A1\",\"handle\":\"handle-U3\"}]}" );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_CHECK( compiled.m_ContextCompiled );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "Visual observation artifact" ) ) );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains( wxS( "frame-1" ) ) );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains( wxS( "handle-U3" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "visual_observation_artifact" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "frame-1" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerBuildsStandardMessageFlow )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 85;
+    request.m_SystemPromptOverride = wxS( "System override." );
+    request.m_UserText = wxS( "review this attempt" );
+    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "canvas.preview_after" );
+    request.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
+    request.m_ContextSnapshot.m_Visual.m_DataUri = wxS( "data:image/png;base64,dW5pdA==" );
+    request.m_ContextSnapshot.m_Visual.m_FrameId = wxS( "frame-review-1" );
+    request.m_ContextSnapshot.m_Visual.m_FrameKind = wxS( "preview_after" );
+    request.m_ContextSnapshot.m_Visual.m_WidthPx = 12;
+    request.m_ContextSnapshot.m_Visual.m_HeightPx = 8;
+    request.m_ContextSnapshot.m_Visual.m_ByteSize = 48;
+    request.m_ContextSnapshot.m_Visual.m_SidecarJson =
+            wxS( "{\"frame_id\":\"frame-review-1\","
+                 "\"anchors\":[{\"anchor_id\":\"A1\",\"handle\":\"handle-track\"}]}" );
+
+    AI_TOOL_CALL_RECORD toolResult;
+    toolResult.m_ToolCallId = wxS( "call-1" );
+    toolResult.m_ToolName = wxS( "validate_hidden_attempt" );
+    toolResult.m_ArgumentsJson = wxS( "{\"grade\":\"preview\"}" );
+    toolResult.m_ResultJson = wxS( "{\"validation_passed\":true}" );
+    toolResult.m_Allowed = true;
+    toolResult.m_Executed = true;
+    request.m_ToolResults.push_back( toolResult );
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE( messages.is_array() );
+    BOOST_REQUIRE_EQUAL( messages.size(), 4 );
+    BOOST_CHECK_EQUAL( messages.at( 0 )["role"].get<std::string>(), "system" );
+    BOOST_CHECK_EQUAL( messages.at( 0 )["content"].get<std::string>(), "System override." );
+    BOOST_CHECK_EQUAL( messages.at( 1 )["role"].get<std::string>(), "user" );
+    BOOST_REQUIRE( messages.at( 1 )["content"].is_array() );
+    BOOST_CHECK_EQUAL( messages.at( 1 )["content"].at( 0 )["type"].get<std::string>(),
+                       "text" );
+    BOOST_CHECK( messages.at( 1 )["content"].at( 0 )["text"].get<std::string>().find(
+                         "Visual observation artifact" )
+                 != std::string::npos );
+    BOOST_CHECK( messages.at( 1 )["content"].at( 0 )["text"].get<std::string>().find(
+                         "handle-track" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( messages.at( 1 )["content"].at( 1 )["type"].get<std::string>(),
+                       "image_url" );
+    BOOST_CHECK_EQUAL( messages.at( 2 )["role"].get<std::string>(), "assistant" );
+    BOOST_CHECK( messages.at( 2 ).contains( "tool_calls" ) );
+    BOOST_CHECK_EQUAL( messages.at( 3 )["role"].get<std::string>(), "tool" );
+    BOOST_CHECK_EQUAL( messages.at( 3 )["tool_call_id"].get<std::string>(), "call-1" );
+    BOOST_CHECK( messages.at( 3 )["content"].get<std::string>().find(
+                         "validation_passed" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderMessageCompilerAddsToolResultBoardStateProvenance )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 101;
+    request.m_UserText = wxS( "continue after validation" );
+    request.m_ContextVersion.m_DocumentRevision = 42;
+    request.m_ContextVersion.m_SelectionRevision = 7;
+    request.m_ContextVersion.m_ViewRevision = 9;
+    request.m_ContextSnapshot.m_Version = request.m_ContextVersion;
+
+    AI_TOOL_CALL_RECORD toolResult;
+    toolResult.m_ToolCallId = wxS( "call-provenance" );
+    toolResult.m_ToolName = wxS( "validate_hidden_attempt" );
+    toolResult.m_ResultJson = wxS( "{\"validation_passed\":true}" );
+    toolResult.m_Allowed = true;
+    toolResult.m_Executed = true;
+    request.m_ToolResults.push_back( toolResult );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "board_state_version" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "\"document_revision\":42" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "call-provenance" ) ) );
+
+    wxString messagesJson = AiCompileProviderMessagesJson(
+            request, wxS( "Default system prompt." ) );
+    nlohmann::json messages = nlohmann::json::parse( messagesJson.ToStdString() );
+
+    BOOST_REQUIRE_EQUAL( messages.size(), 4 );
+    nlohmann::json toolContent = nlohmann::json::parse(
+            messages.at( 3 )["content"].get<std::string>() );
+    BOOST_REQUIRE( toolContent.contains( "provenance" ) );
+    BOOST_CHECK_EQUAL(
+            toolContent["provenance"]["tool_call_id"].get<std::string>(),
+            "call-provenance" );
+    BOOST_CHECK_EQUAL(
+            toolContent["provenance"]["board_state_version"]["document_revision"]
+                    .get<uint64_t>(),
+            42 );
+    BOOST_CHECK( toolContent["result"].contains( "validation_passed" ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
 {
     AI_PROVIDER_SETTINGS settings;
@@ -639,7 +1430,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
 
                 BOOST_REQUIRE( body.contains( "tools" ) );
                 BOOST_REQUIRE( body["tools"].is_array() );
-                BOOST_REQUIRE_EQUAL( body["tools"].size(), 30 );
+                BOOST_REQUIRE_EQUAL( body["tools"].size(), 29 );
 
                 std::vector<std::string> toolNames;
                 nlohmann::json           toolByName;
@@ -662,7 +1453,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                              != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_visual_frame" )
-                             != toolNames.end() );
+                             == toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_activity_timeline" )
                              != toolNames.end() );
@@ -986,22 +1777,6 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( contextParameters["properties"].contains( "max_activity" ) );
                 BOOST_CHECK( contextParameters["properties"].contains( "max_anchors" ) );
                 BOOST_CHECK( contextParameters["properties"].contains( "max_panels" ) );
-                const nlohmann::json& visualParameters =
-                        toolByName["kisurf_get_visual_frame"]["function"]["parameters"];
-                BOOST_CHECK( visualParameters["required"].empty() );
-                BOOST_CHECK( !visualParameters["additionalProperties"].get<bool>() );
-                BOOST_CHECK( visualParameters["properties"].contains( "include_pixels" ) );
-                BOOST_CHECK( visualParameters["properties"].contains( "max_bytes" ) );
-                BOOST_CHECK( visualParameters["properties"].contains(
-                        "include_anchor_overlays" ) );
-                BOOST_CHECK( visualParameters["properties"].contains(
-                        "max_anchor_overlays" ) );
-                BOOST_CHECK( visualParameters["properties"].contains( "focus_layer" ) );
-                BOOST_CHECK( visualParameters["properties"].contains( "focus_net" ) );
-                BOOST_CHECK( visualParameters["properties"].contains(
-                        "dim_unfocused_layers" ) );
-                BOOST_CHECK( visualParameters["properties"].contains(
-                        "highlight_anchor_ids" ) );
                 const nlohmann::json& activityParameters =
                         toolByName["kisurf_get_activity_timeline"]["function"]["parameters"];
                 BOOST_CHECK( activityParameters["required"].empty() );
@@ -1282,8 +2057,19 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSendsToolResultContinuationMessages )
                 BOOST_CHECK_EQUAL( messages.at( 3 )["role"].get<std::string>(), "tool" );
                 BOOST_CHECK_EQUAL( messages.at( 3 )["tool_call_id"].get<std::string>(),
                                    "call_456" );
-                BOOST_CHECK_EQUAL( messages.at( 3 )["content"].get<std::string>(),
-                                   "{\"allowed\":true,\"executed\":false}" );
+                nlohmann::json toolContent = nlohmann::json::parse(
+                        messages.at( 3 )["content"].get<std::string>() );
+                BOOST_CHECK( toolContent.contains( "result" ) );
+                BOOST_CHECK( toolContent.contains( "provenance" ) );
+                BOOST_CHECK( toolContent["result"]["allowed"].get<bool>() );
+                BOOST_CHECK( !toolContent["result"]["executed"].get<bool>() );
+                BOOST_CHECK_EQUAL(
+                        toolContent["provenance"]["tool_call_id"].get<std::string>(),
+                        "call_456" );
+                BOOST_CHECK_EQUAL(
+                        toolContent["provenance"]["board_state_version"]
+                                ["document_revision"].get<uint64_t>(),
+                        0 );
 
                 aResponse.m_StatusCode = 200;
                 aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"checked\"}}]}" );
@@ -1300,6 +2086,8 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSendsToolResultContinuationMessages )
     result.m_ToolName = wxS( "kisurf_check_action" );
     result.m_ArgumentsJson = wxS( "{\"action\":\"common.Control.showAgentPanel\"}" );
     result.m_ResultJson = wxS( "{\"allowed\":true,\"executed\":false}" );
+    result.m_Allowed = true;
+    result.m_Executed = false;
     request.m_ToolResults.push_back( result );
 
     AI_PROVIDER_RESPONSE response = provider.Generate( request );

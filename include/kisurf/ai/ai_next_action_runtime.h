@@ -29,6 +29,11 @@
 
 class AI_SESSION_PREVIEW_SERVICE;
 class AI_SESSION_VALIDATION_SERVICE;
+class AI_PROMPT_TRACE_STORE;
+class AI_MEMORY_STORE;
+class AI_LOCAL_TEXT_MEMORY_INDEX;
+class AI_ARTIFACT_STORE;
+class AI_NEXT_ACTION_SESSION_STORE;
 
 enum class AI_NEXT_ACTION_STEP_STATUS
 {
@@ -59,6 +64,8 @@ enum class AI_NEXT_ACTION_DECISION_KIND
 
 struct KICOMMON_API AI_NEXT_ACTION_CONTEXT_VERSION
 {
+    wxString           m_ProjectId;
+    wxString           m_DocumentId;
     wxString           m_BoardBaseHash;
     AI_CONTEXT_VERSION m_ContextVersion;
     uint64_t           m_ToolModeVersion = 0;
@@ -207,6 +214,7 @@ struct KICOMMON_API AI_NEXT_ACTION_ATTEMPT_RECORD
 struct KICOMMON_API AI_NEXT_ACTION_RUNTIME_STEP
 {
     uint64_t                       m_Id = 0;
+    uint64_t                       m_ConversationId = 0;
     wxString                       m_SuggestionStreamId;
     AI_NEXT_ACTION_STEP_STATUS     m_Status = AI_NEXT_ACTION_STEP_STATUS::Observed;
     AI_NEXT_ACTION_CONTEXT_VERSION m_ContextVersion;
@@ -514,6 +522,11 @@ public:
                       AI_SESSION_PREVIEW_SERVICE* aPreviewService );
     void SetCurrentContextSampler(
             std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> aSampler );
+    void SetPromptTraceStore( AI_PROMPT_TRACE_STORE* aStore );
+    void SetMemoryStore( AI_MEMORY_STORE* aStore );
+    void SetLocalTextMemoryIndex( AI_LOCAL_TEXT_MEMORY_INDEX* aIndex );
+    void SetArtifactStore( AI_ARTIFACT_STORE* aStore );
+    void SetSessionStore( AI_NEXT_ACTION_SESSION_STORE* aStore );
 
     std::optional<AI_SUGGESTION_RECORD> Update( const AI_SUGGESTION_TRIGGER& aTrigger );
     std::optional<AI_SUGGESTION_RECORD> AddPublishedSuggestion(
@@ -533,6 +546,7 @@ public:
     bool MarkAccepted( uint64_t aSuggestionId );
     bool Reject( uint64_t aSuggestionId );
     bool Expire( uint64_t aSuggestionId );
+    size_t ExpireActive();
     size_t ExpireStale( const AI_CONTEXT_VERSION& aCurrentVersion );
     size_t ExpireStale( const AI_NEXT_ACTION_CONTEXT_VERSION& aCurrentVersion );
 
@@ -557,6 +571,7 @@ private:
             AI_PROVIDER_REQUEST aRequest,
             const AI_OBSERVATION_PACKET& aObservation,
             AI_NEXT_ACTION_ATTEMPT_RECORD* aAttempt );
+    void attachRetrievedMemory( AI_PROVIDER_REQUEST& aRequest ) const;
     AI_NEXT_ACTION_ATTEMPT_RECORD buildAttempt(
             const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
             const AI_OBSERVATION_PACKET& aObservation,
@@ -568,13 +583,22 @@ private:
             const AI_NEXT_ACTION_REVIEW_DECISION& aReview );
     AI_SUGGESTION_RECORD publishAttempt(
             const AI_NEXT_ACTION_RUNTIME_STEP& aStep,
+            const AI_OBSERVATION_PACKET& aObservation,
             const AI_NEXT_ACTION_ATTEMPT_RECORD& aAttempt,
             const AI_NEXT_ACTION_PUBLISH_DECISION& aPublish );
     std::optional<AI_SUGGESTION_RECORD> storeSuggestion(
             AI_SUGGESTION_RECORD aSuggestion );
     AI_SUGGESTION_RECORD* findMutable( uint64_t aSuggestionId );
+    void recordAcceptedSuggestionMemory( const AI_SUGGESTION_RECORD& aSuggestion ) const;
+    uint64_t conversationIdForEvent( const AI_SEMANTIC_EVENT& aEvent );
+    void persistSession( uint64_t aConversationId ) const;
 
     std::unique_ptr<AI_PROVIDER>              m_Provider;
+    AI_PROMPT_TRACE_STORE*                    m_PromptTraceStore = nullptr;
+    AI_MEMORY_STORE*                          m_MemoryStore = nullptr;
+    AI_LOCAL_TEXT_MEMORY_INDEX*               m_LocalTextMemoryIndex = nullptr;
+    AI_ARTIFACT_STORE*                        m_ArtifactStore = nullptr;
+    AI_NEXT_ACTION_SESSION_STORE*             m_SessionStore = nullptr;
     AI_NEXT_ACTION_SCHEDULER                  m_Scheduler;
     AI_NEXT_ACTION_TOOL_REGISTRY              m_Tools;
     std::function<AI_NEXT_ACTION_CONTEXT_VERSION()> m_CurrentContextSampler;
@@ -583,6 +607,9 @@ private:
     uint64_t                                  m_NextAttemptId = 1;
     uint64_t                                  m_NextSuggestionId = 1;
     uint64_t                                  m_NextLeaseId = 1;
+    uint64_t                                  m_NextConversationId = 1;
+    uint64_t                                  m_ActiveConversationId = 0;
+    wxString                                  m_ActiveConversationKey;
     std::vector<AI_NEXT_ACTION_RUNTIME_STEP>  m_Steps;
     std::vector<AI_NEXT_ACTION_ATTEMPT_RECORD> m_Attempts;
     std::map<uint64_t, std::unique_ptr<AI_EXECUTION_SESSION>> m_AttemptFrames;

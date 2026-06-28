@@ -53,6 +53,18 @@
               </object>
             </object>
             <object class="sizeritem" expanded="true">
+              <property name="border">6</property>
+              <property name="flag">wxALIGN_CENTER_VERTICAL|wxRIGHT</property>
+              <property name="proportion">0</property>
+              <object class="wxButton" expanded="true">
+                <property name="id">wxID_ANY</property>
+                <property name="label">New Chat</property>
+                <property name="name">m_NewChatButton</property>
+                <property name="permission">protected</property>
+                <event name="OnButtonClick">OnNewChat</event>
+              </object>
+            </object>
+            <object class="sizeritem" expanded="true">
               <property name="border">0</property>
               <property name="flag">wxALIGN_CENTER_VERTICAL</property>
               <property name="proportion">0</property>
