@@ -50,11 +50,16 @@ struct KICOMMON_API AI_PROVIDER_SETTINGS
     wxString m_BaseUrl;
     wxString m_ApiKey;
     wxString m_Model;
+    size_t   m_ContextLengthChars = 0;
 
     bool HasApiKey() const;
+    size_t EffectiveContextLengthChars() const;
+    size_t EffectiveInputBudgetChars() const;
 
     static wxString DefaultBaseUrl();
     static wxString DefaultModel();
+    static size_t DefaultContextLengthChars();
+    static size_t InputBudgetCharsForContextLength( size_t aContextLengthChars );
 };
 
 class KICOMMON_API AI_PROVIDER

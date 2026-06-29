@@ -286,6 +286,7 @@ BOOST_AUTO_TEST_CASE( AgentPanelEmptyTranscriptKeepsChatWorkflowNeutral )
     wxString html = AiAgentTranscriptHtml( {} );
 
     BOOST_CHECK( html.Contains( wxS( "Ask the Agent about the current board" ) ) );
+    BOOST_CHECK( !html.Contains( wxS( "previewed edit" ) ) );
     BOOST_CHECK( !html.Contains( wxS( "route" ) ) );
     BOOST_CHECK( !html.Contains( wxS( "place" ) ) );
 }
@@ -367,6 +368,20 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesBackgroundAgentToggleSurface )
             decltype( &AI_AGENT_PANEL::SetBackgroundAgentEnabled )> ) );
     BOOST_CHECK( ( std::is_member_function_pointer_v<
             decltype( &AI_AGENT_PANEL::BackgroundAgentEnabled )> ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTimerUsesLowFrequencySampling )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string body = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )",
+            "bool AI_AGENT_PANEL::BackgroundAgentEnabled() const" );
+
+    BOOST_CHECK( body.find( "m_BackgroundPulseTimer.Start( 1500 )" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( body.find( "m_BackgroundPulseTimer.Start( 750 )" ),
+                       std::string::npos );
 }
 
 

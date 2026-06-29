@@ -572,6 +572,15 @@ public:
         m_ProviderChoice->SetSelection( selectionForProviderKind( m_Config.m_ProviderKind ) );
         m_BaseUrl->SetValue( m_Config.m_BaseUrl );
         m_Model->SetValue( m_Config.m_Model );
+        m_ContextLengthLabel = new wxStaticText( this, wxID_ANY, _( "Context length" ) );
+        m_ContextLengthLabel->Wrap( -1 );
+        m_ContextLength = new wxTextCtrl(
+                this, wxID_ANY,
+                wxString::Format( wxS( "%llu" ),
+                                  static_cast<unsigned long long>(
+                                          m_Config.m_ContextLengthChars ) ) );
+        m_FormSizer->Add( m_ContextLengthLabel, 0, wxALIGN_CENTER_VERTICAL, 0 );
+        m_FormSizer->Add( m_ContextLength, 0, wxEXPAND, 0 );
         m_ApiKey->SetValue( m_Config.m_ApiKey );
         m_ResearchFolder->SetValue( m_Config.m_ResearchFolder );
 
@@ -609,12 +618,23 @@ public:
         config.m_Model = m_Model->GetValue();
         config.m_ApiKey = m_ApiKey->GetValue();
         config.m_ResearchFolder = m_ResearchFolder->GetValue();
+
+        unsigned long long contextLength = 0;
+
+        if( m_ContextLength
+            && m_ContextLength->GetValue().ToULongLong( &contextLength ) )
+        {
+            config.m_ContextLengthChars = static_cast<size_t>( contextLength );
+        }
+
         config.Normalize();
         return config;
     }
 
 private:
     AI_MODEL_CONFIG m_Config;
+    wxStaticText*   m_ContextLengthLabel = nullptr;
+    wxTextCtrl*     m_ContextLength = nullptr;
 };
 } // namespace
 
@@ -780,7 +800,7 @@ wxString AiAgentTranscriptHtml( const std::vector<AI_AGENT_MESSAGE>& aMessages )
         html << wxS( "<table width=\"100%\" cellspacing=\"0\" cellpadding=\"8\">" )
              << wxS( "<tr><td bgcolor=\"#f7f7f7\">" )
              << wxS( "<font color=\"#666666\">" )
-             << wxS( "Ask the Agent about the current board or request a previewed edit." )
+             << wxS( "Ask the Agent about the current board or request an edit." )
              << wxS( "</font></td></tr></table>" );
     }
 
@@ -1467,7 +1487,7 @@ void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )
         m_BackgroundAgentToggle->SetValue( aEnabled );
 
     if( aEnabled && !m_BackgroundPulseTimer.IsRunning() )
-        m_BackgroundPulseTimer.Start( 750 );
+        m_BackgroundPulseTimer.Start( 1500 );
     else if( !aEnabled && m_BackgroundPulseTimer.IsRunning() )
         m_BackgroundPulseTimer.Stop();
 

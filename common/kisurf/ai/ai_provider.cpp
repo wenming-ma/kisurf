@@ -1524,6 +1524,19 @@ bool AI_PROVIDER_SETTINGS::HasApiKey() const
 }
 
 
+size_t AI_PROVIDER_SETTINGS::EffectiveContextLengthChars() const
+{
+    return m_ContextLengthChars > 0 ? m_ContextLengthChars
+                                    : DefaultContextLengthChars();
+}
+
+
+size_t AI_PROVIDER_SETTINGS::EffectiveInputBudgetChars() const
+{
+    return InputBudgetCharsForContextLength( EffectiveContextLengthChars() );
+}
+
+
 wxString AI_PROVIDER_SETTINGS::DefaultBaseUrl()
 {
     return wxS( "https://sub2api.wenming-dev.org/v1" );
@@ -1533,6 +1546,22 @@ wxString AI_PROVIDER_SETTINGS::DefaultBaseUrl()
 wxString AI_PROVIDER_SETTINGS::DefaultModel()
 {
     return wxS( "gpt-5.5" );
+}
+
+
+size_t AI_PROVIDER_SETTINGS::DefaultContextLengthChars()
+{
+    return 200000;
+}
+
+
+size_t AI_PROVIDER_SETTINGS::InputBudgetCharsForContextLength(
+        size_t aContextLengthChars )
+{
+    const size_t contextLength =
+            aContextLengthChars > 0 ? aContextLengthChars
+                                    : DefaultContextLengthChars();
+    return std::max<size_t>( 1, ( contextLength * 8 ) / 10 );
 }
 
 
@@ -1617,6 +1646,21 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
     nlohmann::json retryHistory = nlohmann::json::array();
 
     AI_PROVIDER_REQUEST requestForCompile = aRequest;
+    const size_t defaultInputBudget =
+            AI_PROVIDER_SETTINGS::InputBudgetCharsForContextLength(
+                    AI_PROVIDER_SETTINGS::DefaultContextLengthChars() );
+    const size_t configuredInputBudget = m_Settings.EffectiveInputBudgetChars();
+
+    if( requestForCompile.m_RequestKind == AI_PROVIDER_REQUEST_KIND::Chat )
+    {
+        if( requestForCompile.m_MaxProviderInputChars >= defaultInputBudget )
+            requestForCompile.m_MaxProviderInputChars = configuredInputBudget;
+        else
+            requestForCompile.m_MaxProviderInputChars =
+                    std::min( requestForCompile.m_MaxProviderInputChars,
+                              configuredInputBudget );
+    }
+
     const AI_TOKEN_BUDGET_PLAN preflightPlan =
             AiPlanProviderInputBudgetForRequest( requestForCompile );
 
@@ -1674,7 +1718,10 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
                                       "For Chat Agent edit requests, create or update the "
                                       "AI execution session through tools; KiSurf will "
                                       "apply completed chat edits as one undoable board "
-                                      "commit. Do not describe a board mutation as done "
+                                      "commit. Do not ask the user to click Show or Accept "
+                                      "for Chat Agent edits; if a tool succeeds, continue "
+                                      "the task and let KiSurf apply the finished edit. "
+                                      "Do not describe a board mutation as done "
                                       "unless the relevant tool result reports success. "
                                       "When a tool result includes validation facts, "
                                       "report issue_count and warning/error severities "
@@ -1750,8 +1797,10 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
                             "direct user confirmation.",
                             semanticUiActionToolParameters() ),
               functionTool( "kisurf_open_session",
-                            "Open a KiSurf AI execution session for preview-first "
-                            "Python cells, typed atomic operations, rollback, and accept.",
+                            "Open a KiSurf AI execution session for Python cells, typed "
+                            "atomic operations, rollback, validation, visual observation, "
+                            "and undoable commit. In Chat Agent flows, completed edits are "
+                            "applied automatically by KiSurf after the model finishes.",
                             sessionOpenToolParameters() ),
               functionTool( "kisurf_close_session",
                             "Close the active KiSurf AI execution session without "
@@ -1764,7 +1813,8 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
                             "Run one typed KiSurf atomic operation inside the active "
                             "AI execution session. This mutates only the shadow board "
                             "and journal; it cannot publish or mutate the live board "
-                            "without kisurf_accept_session.",
+                            "during the tool call. In Chat Agent flows, KiSurf auto-applies "
+                            "completed edits after the final model response.",
                             sessionAtomicOperationToolParameters() ),
               functionTool( "kisurf_begin_step",
                             "Begin a named AI execution step. Atomic operations recorded "
@@ -2071,6 +2121,7 @@ std::unique_ptr<AI_PROVIDER> MakeAiProviderFromModelConfig(
     settings.m_BaseUrl = config.m_BaseUrl;
     settings.m_ApiKey = config.m_ApiKey;
     settings.m_Model = config.m_Model;
+    settings.m_ContextLengthChars = config.m_ContextLengthChars;
 
     if( aHandler )
         return std::make_unique<AI_OPENAI_COMPAT_PROVIDER>( std::move( settings ),

@@ -50,7 +50,7 @@ AI_TOKEN_BUDGET_POLICY AiProviderInputBudgetPolicyForRequestKind(
     switch( aRequestKind )
     {
     case AI_PROVIDER_REQUEST_KIND::Chat:
-        policy.m_TargetInputChars = 36000;
+        policy.m_TargetInputChars = 160000;
         return policy;
 
     case AI_PROVIDER_REQUEST_KIND::NextActionDecision:
@@ -148,8 +148,13 @@ AI_TOKEN_BUDGET_PLAN AiPlanProviderInputBudget(
 AI_TOKEN_BUDGET_PLAN AiPlanProviderInputBudgetForRequest(
         const AI_PROVIDER_REQUEST& aRequest )
 {
-    return AiPlanProviderInputBudget(
-            aRequest, AiProviderInputBudgetPolicyForRequestKind( aRequest.m_RequestKind ) );
+    AI_TOKEN_BUDGET_POLICY policy =
+            AiProviderInputBudgetPolicyForRequestKind( aRequest.m_RequestKind );
+
+    if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::Chat )
+        policy.m_TargetInputChars = aRequest.m_MaxProviderInputChars;
+
+    return AiPlanProviderInputBudget( aRequest, policy );
 }
 
 

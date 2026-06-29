@@ -78,7 +78,8 @@ BOOST_AUTO_TEST_CASE( PcbEditFrameDoesNotContinuouslyRequestIdleForBackgroundAge
     const std::string idleHandler = sourceSlice(
             source, "Bind( wxEVT_IDLE,", "resolveCanvasType();" );
 
-    BOOST_CHECK( idleHandler.find( "PulseBackgroundAgent" ) != std::string::npos );
+    BOOST_CHECK_EQUAL( idleHandler.find( "PulseBackgroundAgent" ),
+                       std::string::npos );
     BOOST_CHECK_EQUAL( idleHandler.find( "ShouldContinueBackgroundIdlePulse()" ),
                        std::string::npos );
     BOOST_CHECK_EQUAL( idleHandler.find( "aEvent.RequestMore()" ),

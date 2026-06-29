@@ -60,38 +60,89 @@ bool documentWriteKeysConflict( const wxString& aActiveKey,
 }
 
 
-AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
-        const std::vector<AI_AGENT_MESSAGE>& aMessages )
+size_t chatRecentTurnsTextBudget( size_t aMaxProviderInputChars )
 {
+    constexpr size_t MIN_RECENT_TURNS_TEXT_BUDGET = 16000;
+    constexpr size_t FIXED_CONTEXT_RESERVE_CHARS = 8000;
+
+    if( aMaxProviderInputChars <= FIXED_CONTEXT_RESERVE_CHARS )
+        return MIN_RECENT_TURNS_TEXT_BUDGET;
+
+    return std::max( MIN_RECENT_TURNS_TEXT_BUDGET,
+                     aMaxProviderInputChars - FIXED_CONTEXT_RESERVE_CHARS );
+}
+
+
+AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
+        const std::vector<AI_AGENT_MESSAGE>& aMessages,
+        size_t aMaxProviderInputChars )
+{
+    const size_t recentTurnsTextBudget =
+            chatRecentTurnsTextBudget( aMaxProviderInputChars );
+
     AI_PROVIDER_INPUT_BLOCK block;
 
     if( aMessages.empty() )
         return block;
 
-    size_t       originalChars = 0;
-    size_t       sentMessageChars = 0;
+    const wxString header = wxS( "Previous chat turns (current chat only):" );
+    size_t         originalChars = 0;
+    size_t         sentMessageChars = 0;
+    size_t         projectedChars = header.length();
+    size_t         omittedMessageCount = 0;
+    std::vector<size_t> includedMessageIndexes;
+
+    for( const AI_AGENT_MESSAGE& message : aMessages )
+        originalChars += message.m_Text.length();
+
+    for( size_t offset = 0; offset < aMessages.size(); ++offset )
+    {
+        const size_t            index = aMessages.size() - 1 - offset;
+        const AI_AGENT_MESSAGE& message = aMessages[index];
+        const size_t            entryChars =
+                1 + message.m_Role.length() + 2 + message.m_Text.length();
+
+        if( projectedChars + entryChars > recentTurnsTextBudget )
+        {
+            ++omittedMessageCount;
+            continue;
+        }
+
+        includedMessageIndexes.push_back( index );
+        projectedChars += entryChars;
+        sentMessageChars += message.m_Text.length();
+    }
 
     wxString text;
-    text << wxS( "Previous chat turns (current chat only):" );
+    text << header;
 
-    for( size_t i = 0; i < aMessages.size(); ++i )
+    if( omittedMessageCount > 0 )
     {
-        wxString message = aMessages[i].m_Text;
-        originalChars += message.length();
+        text << wxS( "\n[omitted chat messages due to context budget: " )
+             << static_cast<unsigned long long>( omittedMessageCount )
+             << wxS( "]" );
+    }
 
-        sentMessageChars += message.length();
-        text << wxS( "\n" ) << aMessages[i].m_Role << wxS( ": " ) << message;
+    for( auto it = includedMessageIndexes.rbegin();
+         it != includedMessageIndexes.rend(); ++it )
+    {
+        const AI_AGENT_MESSAGE& message = aMessages[*it];
+        text << wxS( "\n" ) << message.m_Role << wxS( ": " )
+             << message.m_Text;
     }
 
     nlohmann::json metadata = {
         { "message_count", aMessages.size() },
-        { "sent_message_count", aMessages.size() },
-        { "older_message_count", 0 },
+        { "sent_message_count", includedMessageIndexes.size() },
+        { "older_message_count", omittedMessageCount },
+        { "omitted_message_count", omittedMessageCount },
         { "truncated_chat_turn_count", 0 },
         { "original_message_chars", originalChars },
         { "sent_message_chars", sentMessageChars },
+        { "max_projected_chars", recentTurnsTextBudget },
+        { "max_provider_input_chars", aMaxProviderInputChars },
         { "compression_policy",
-          "full_current_chat_until_provider_input_budget" }
+          "recent_complete_messages_at_model_context_threshold" }
     };
 
     block.m_Id = wxS( "chat.recent_turns" );
@@ -394,7 +445,9 @@ AI_CHAT_REQUEST_STATE AI_AGENT_PANEL_MODEL::PrepareUserTextRequest(
     request.m_UserText = aText;
     request.m_MaxToolRounds = 6;
 
-    AI_PROVIDER_INPUT_BLOCK recentTurns = recentChatTurnsBlock( priorMessages );
+    AI_PROVIDER_INPUT_BLOCK recentTurns =
+            recentChatTurnsBlock( priorMessages,
+                                  request.m_MaxProviderInputChars );
 
     if( !recentTurns.m_Id.IsEmpty() )
         request.m_ProviderInputBlocks.push_back( std::move( recentTurns ) );

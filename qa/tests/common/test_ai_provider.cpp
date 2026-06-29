@@ -664,6 +664,9 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSystemPromptRequiresValidationIssueAccuracy 
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "warning" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "use the supplied tools" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "undoable" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "Do not ask the user to click Show or Accept" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "preview-first" ) ) );
 
                 aResponse.m_StatusCode = 200;
                 aResponse.m_Body =

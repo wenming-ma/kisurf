@@ -1454,19 +1454,27 @@ BOOST_AUTO_TEST_CASE( SendUserTextIncludesRecentToolCallSummary )
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextKeepsFullCurrentChatTurnsUntilProviderBudget )
+BOOST_AUTO_TEST_CASE( SendUserTextKeepsRecentChatTurnsWhenHistoryExceedsProjectionBudget )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
 
-    model.SendUserText( wxS( "EARLIEST_CONTEXT_NEEDLE keep JTAG away from antenna" ),
-                        AI_EDITOR_KIND::Pcb );
+    wxString earliest = wxS( "EARLIEST_CONTEXT_NEEDLE keep JTAG away from antenna " );
 
-    for( int i = 0; i < 8; ++i )
+    for( int i = 0; i < 800; ++i )
+        earliest << wxS( "old " );
+
+    model.SendUserText( earliest, AI_EDITOR_KIND::Pcb );
+
+    for( int i = 0; i < 60; ++i )
     {
-        model.SendUserText(
-                wxString::Format( wxS( "intermediate chat turn %d" ), i ),
-                AI_EDITOR_KIND::Pcb );
+        wxString intermediate =
+                wxString::Format( wxS( "intermediate chat turn %d " ), i );
+
+        for( int j = 0; j < 500; ++j )
+            intermediate << wxS( "middle " );
+
+        model.SendUserText( intermediate, AI_EDITOR_KIND::Pcb );
     }
 
     model.SendUserText( wxS( "RECENT_CONTEXT_NEEDLE keep this visible" ),
@@ -1479,12 +1487,14 @@ BOOST_AUTO_TEST_CASE( SendUserTextKeepsFullCurrentChatTurnsUntilProviderBudget )
             wxS( "Previous chat turns" ) ) );
     BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "RECENT_CONTEXT_NEEDLE" ) ) );
-    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "EARLIEST_CONTEXT_NEEDLE" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
+            wxS( "\"older_message_count\":" ) ) );
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextDoesNotTruncateIndividualChatTurnsBeforeBudget )
+BOOST_AUTO_TEST_CASE( SendUserTextOmitsOversizedOlderTurnsInsteadOfTruncatingRecentTurns )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
@@ -1496,7 +1506,7 @@ BOOST_AUTO_TEST_CASE( SendUserTextDoesNotTruncateIndividualChatTurnsBeforeBudget
 
     wxString longText = wxS( "LONG_CONTEXT_HEAD " );
 
-    for( int i = 0; i < 1600; ++i )
+    for( int i = 0; i < 170000; ++i )
         longText << wxS( "x" );
 
     longText << wxS( " LONG_CONTEXT_TAIL_SHOULD_NOT_BE_SENT" );
@@ -1513,14 +1523,40 @@ BOOST_AUTO_TEST_CASE( SendUserTextDoesNotTruncateIndividualChatTurnsBeforeBudget
     model.SendUserText( wxS( "continue after long context" ),
                         AI_EDITOR_KIND::Pcb );
 
-    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "LONG_CONTEXT_HEAD" ) ) );
-    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "LONG_CONTEXT_TAIL_SHOULD_NOT_BE_SENT" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "short recent turn 0" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "short recent turn 1" ) ) );
     BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "[truncated chat turn]" ) ) );
     BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
-            wxS( "\"older_message_count\":0" ) ) );
+            wxS( "\"older_message_count\":" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SendUserTextKeepsPriorTurnsUntilChatProjectionBudgetIsReached )
+{
+    auto* provider = new CAPTURING_AI_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+
+    wxString withinBudget;
+    withinBudget.Append( wxS( 'w' ), 18000 );
+    withinBudget << wxS( " LONG_CONTEXT_TAIL_WITHIN_CHAT_BUDGET" );
+
+    model.SendUserText( withinBudget, AI_EDITOR_KIND::Pcb );
+    model.SendUserText( wxS( "RECENT_CONTEXT_NEEDLE" ), AI_EDITOR_KIND::Pcb );
+    model.SendUserText( wxS( "current request" ), AI_EDITOR_KIND::Pcb );
+
+    const wxString compiled = provider->m_LastRequest.m_CompiledUserMessageText;
+    BOOST_CHECK( compiled.Contains(
+            wxS( "LONG_CONTEXT_TAIL_WITHIN_CHAT_BUDGET" ) ) );
+    BOOST_CHECK( compiled.Contains( wxS( "RECENT_CONTEXT_NEEDLE" ) ) );
+    BOOST_CHECK( !compiled.Contains(
+            wxS( "[omitted chat messages due to context budget" ) ) );
 }
 
 

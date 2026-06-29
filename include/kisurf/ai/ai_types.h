@@ -361,7 +361,7 @@ struct KICOMMON_API AI_PROVIDER_REQUEST
     wxString                         m_ToolCatalogJson;
     size_t                           m_MaxToolRounds = 1;
     bool                             m_DisableDefaultTools = false;
-    size_t                           m_MaxProviderInputChars = 24000;
+    size_t                           m_MaxProviderInputChars = 160000;
     size_t                           m_MaxContextActivityRecords = 24;
     size_t                           m_MaxToolResultChars = 4096;
     size_t                           m_MaxRetrievedMemoryRecords = 8;
