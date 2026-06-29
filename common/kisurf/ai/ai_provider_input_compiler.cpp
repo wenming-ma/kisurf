@@ -619,6 +619,131 @@ bool isScriptOutputTool( const wxString& aToolName )
 }
 
 
+std::string shortJsonString( const nlohmann::json& aObject,
+                             const char* aField,
+                             size_t aMaxChars = 180 )
+{
+    if( !aObject.contains( aField ) || !aObject[aField].is_string() )
+        return std::string();
+
+    std::string value = aObject[aField].get<std::string>();
+
+    if( value.size() > aMaxChars )
+        value = value.substr( 0, aMaxChars ) + "...";
+
+    return value;
+}
+
+
+nlohmann::json validationObjectFromToolResult( const nlohmann::json& aRoot )
+{
+    if( !aRoot.is_object() )
+        return nlohmann::json();
+
+    if( aRoot.contains( "validation" ) && aRoot["validation"].is_object() )
+        return aRoot["validation"];
+
+    if( aRoot.value( "status", std::string() ) == "validation_completed" )
+        return aRoot;
+
+    if( aRoot.contains( "operation_results" )
+        && aRoot["operation_results"].is_array() )
+    {
+        for( const nlohmann::json& result : aRoot["operation_results"] )
+        {
+            if( result.is_object() && result.contains( "validation" )
+                && result["validation"].is_object() )
+            {
+                return result["validation"];
+            }
+        }
+    }
+
+    return nlohmann::json();
+}
+
+
+nlohmann::json validationSummaryForCompressedToolResult(
+        const AI_TOOL_CALL_RECORD& aToolResult,
+        const wxString& aRaw )
+{
+    if( aToolResult.m_ToolName != wxS( "kisurf_run_validation" ) )
+        return nlohmann::json();
+
+    nlohmann::json root = nlohmann::json::parse(
+            toUtf8String( aRaw ), nullptr, false );
+
+    if( root.is_discarded() )
+        return nlohmann::json();
+
+    nlohmann::json validation = validationObjectFromToolResult( root );
+
+    if( !validation.is_object() )
+        return nlohmann::json();
+
+    nlohmann::json issues =
+            validation.contains( "issues" ) && validation["issues"].is_array()
+                    ? validation["issues"] : nlohmann::json::array();
+
+    const size_t issueCount =
+            validation.contains( "issue_count" )
+                            && validation["issue_count"].is_number_unsigned()
+                    ? validation["issue_count"].get<size_t>() : issues.size();
+
+    nlohmann::json severityCounts = nlohmann::json::object();
+    nlohmann::json sampleIssues = nlohmann::json::array();
+
+    for( const nlohmann::json& issue : issues )
+    {
+        if( !issue.is_object() )
+            continue;
+
+        std::string severity = shortJsonString( issue, "severity", 40 );
+
+        if( severity.empty() )
+            severity = "unknown";
+
+        severityCounts[severity] =
+                severityCounts.value( severity, static_cast<size_t>( 0 ) ) + 1;
+
+        if( sampleIssues.size() >= 5 )
+            continue;
+
+        nlohmann::json sample;
+        sample["severity"] = severity;
+
+        for( const char* field :
+             { "title", "message", "source", "code", "key", "net", "layer" } )
+        {
+            if( !issue.contains( field ) )
+                continue;
+
+            if( issue[field].is_string() )
+                sample[field] = shortJsonString( issue, field );
+            else if( issue[field].is_number_integer()
+                     || issue[field].is_number_unsigned() )
+                sample[field] = issue[field];
+        }
+
+        sampleIssues.push_back( std::move( sample ) );
+    }
+
+    nlohmann::json summary = {
+        { "status", validation.value( "status", std::string() ) },
+        { "level", validation.value( "level", std::string() ) },
+        { "native_backend", validation.value( "native_backend", std::string() ) },
+        { "issue_count", issueCount },
+        { "severity_counts", std::move( severityCounts ) },
+        { "sample_issues", std::move( sampleIssues ) }
+    };
+
+    if( validation.contains( "warnings" ) && validation["warnings"].is_array() )
+        summary["warning_count"] = validation["warnings"].size();
+
+    return summary;
+}
+
+
 wxString compressedToolResultJson( const AI_TOOL_CALL_RECORD& aToolResult,
                                    size_t aMaxChars )
 {
@@ -666,6 +791,12 @@ wxString compressedToolResultJson( const AI_TOOL_CALL_RECORD& aToolResult,
         { "hash", hash },
         { "artifact_ref", artifactRef }
     };
+
+    nlohmann::json validationSummary =
+            validationSummaryForCompressedToolResult( aToolResult, raw );
+
+    if( validationSummary.is_object() )
+        summary["validation_summary"] = std::move( validationSummary );
 
     return fromUtf8String( summary.dump() );
 }
@@ -955,10 +1086,8 @@ AI_PROVIDER_REQUEST AiCompileProviderInput( const AI_PROVIDER_REQUEST& aRequest 
     appendContextBlock( compiled, userContent, wxS( "user.request" ),
                         wxS( "user_text" ), wxS( "chat" ), userBlock, true );
 
-    appendRequestInputBlocks( compiled, userContent, aRequest.m_ProviderInputBlocks );
-    appendRetrievedMemoryBlocks( compiled, userContent );
-    appendVisualObservationArtifactBlock( compiled, userContent );
     appendProviderContractBlocks( compiled, userContent );
+    appendVisualObservationArtifactBlock( compiled, userContent );
 
     if( compiled.m_ContextSnapshot.HasContext() )
     {
@@ -976,6 +1105,9 @@ AI_PROVIDER_REQUEST AiCompileProviderInput( const AI_PROVIDER_REQUEST& aRequest 
                             wxS( "context_json" ), wxS( "editor_state" ),
                             jsonBlock, false );
     }
+
+    appendRequestInputBlocks( compiled, userContent, aRequest.m_ProviderInputBlocks );
+    appendRetrievedMemoryBlocks( compiled, userContent );
 
     compiled.m_ToolResults.clear();
     compiled.m_ToolResults.reserve( aRequest.m_ToolResults.size() );

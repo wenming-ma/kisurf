@@ -2213,6 +2213,61 @@ AI_NEXT_ACTION_DECISION_KIND parseDecisionKind( const nlohmann::json& aJson )
 }
 
 
+bool decisionHasExplicitKind( const wxString& aDecisionJson )
+{
+    nlohmann::json parsed = parseObjectBody( aDecisionJson );
+    return parsed.is_object() && parsed.contains( "decision_kind" )
+           && parsed["decision_kind"].is_string();
+}
+
+
+bool shouldAttemptAfterUnstructuredDecision(
+        const AI_NEXT_ACTION_LLM_DECISION& aDecision )
+{
+    return aDecision.m_Kind == AI_NEXT_ACTION_DECISION_KIND::Abandon
+           && !aDecision.m_RawJson.IsEmpty()
+           && !decisionHasExplicitKind( aDecision.m_RawJson );
+}
+
+
+wxString unstructuredDecisionFallbackJson(
+        const AI_NEXT_ACTION_LLM_DECISION& aDecision )
+{
+    wxString excerpt = aDecision.m_RawJson;
+
+    if( excerpt.length() > 240 )
+        excerpt = excerpt.Left( 240 );
+
+    nlohmann::json payload =
+            { { "decision_kind", "attempt" },
+              { "reason_code", "unstructured_decision_fallback" },
+              { "selected_candidate_index", 0 },
+              { "fallback_source", "work_state_candidate" },
+              { "original_decision_excerpt", toUtf8String( excerpt ) } };
+
+    return fromUtf8String( payload.dump() );
+}
+
+
+wxString workStateCandidateFallbackJson(
+        const AI_NEXT_ACTION_LLM_DECISION& aDecision )
+{
+    wxString excerpt = aDecision.m_RawJson;
+
+    if( excerpt.length() > 240 )
+        excerpt = excerpt.Left( 240 );
+
+    nlohmann::json payload =
+            { { "decision_kind", "attempt" },
+              { "reason_code", "work_state_candidate_fallback" },
+              { "selected_candidate_index", 0 },
+              { "fallback_source", "work_state_candidate" },
+              { "original_decision_excerpt", toUtf8String( excerpt ) } };
+
+    return fromUtf8String( payload.dump() );
+}
+
+
 wxString optionalString( const nlohmann::json& aJson, const char* aKey )
 {
     if( !aJson.is_object() || !aJson.contains( aKey ) || !aJson[aKey].is_string() )
@@ -2480,7 +2535,15 @@ wxString nextActionSessionTypeForStep( const AI_NEXT_ACTION_RUNTIME_STEP& aStep 
     if( semantic.is_object() && semantic.contains( "kind" )
         && semantic["kind"].is_string() )
     {
-        return fromUtf8String( semantic["kind"].get<std::string>() );
+        wxString kind = fromUtf8String( semantic["kind"].get<std::string>() ).Lower();
+
+        if( kind == wxS( "layout" ) )
+            return wxS( "placement" );
+
+        if( kind == wxS( "panel" ) || kind == wxS( "structured_surface" ) )
+            return wxS( "autofill" );
+
+        return kind;
     }
 
     return wxS( "next_action" );
@@ -7678,6 +7741,12 @@ AI_SESSION_OPERATION_KIND sessionOperationKindForCandidate(
     if( operation->IsPanelFillColumnPreview() )
         return AI_SESSION_OPERATION_KIND::SetItemProperties;
 
+    if( operation->IsCreateCopperZonePreview() )
+        return AI_SESSION_OPERATION_KIND::CreateZone;
+
+    if( operation->IsCreateShapePreview() )
+        return AI_SESSION_OPERATION_KIND::CreateShape;
+
     if( operation->IsAnchorFocusPreview() )
         return AI_SESSION_OPERATION_KIND::QueryViewport;
 
@@ -8024,6 +8093,17 @@ nlohmann::json pointJson( const VECTOR2I& aPoint )
 }
 
 
+nlohmann::json pointsJson( const std::vector<VECTOR2I>& aPoints )
+{
+    nlohmann::json points = nlohmann::json::array();
+
+    for( const VECTOR2I& point : aPoints )
+        points.push_back( pointJson( point ) );
+
+    return points;
+}
+
+
 nlohmann::json candidateLandingFactsJson(
         const AI_SUGGESTION_RECORD& aCandidate )
 {
@@ -8144,6 +8224,98 @@ bool operationCanBeAttemptedDirectly(
            || aOperation.IsCreateShapePreview()
            || aOperation.IsCreateCopperZonePreview()
            || aOperation.IsPanelFillColumnPreview();
+}
+
+
+nlohmann::json atomicArgumentsForCandidateOperation(
+        const AI_SUGGESTION_OPERATION& aOperation,
+        const nlohmann::json& aOriginalArguments )
+{
+    if( aOperation.IsPlaceViaPreview() )
+    {
+        nlohmann::json args =
+                { { "position", pointJson( aOperation.m_Position ) },
+                  { "net", toUtf8String( aOperation.m_NetName ) } };
+
+        if( aOperation.m_Diameter > 0 )
+            args["diameter"] = aOperation.m_Diameter;
+
+        if( aOperation.m_Drill > 0 )
+            args["drill"] = aOperation.m_Drill;
+
+        return args;
+    }
+
+    if( aOperation.IsRouteSegmentPreview() )
+    {
+        return { { "start", pointJson( aOperation.m_Start ) },
+                 { "end", pointJson( aOperation.m_End ) },
+                 { "layer", toUtf8String( aOperation.m_LayerName ) },
+                 { "net", toUtf8String( aOperation.m_NetName ) },
+                 { "width", aOperation.m_Width } };
+    }
+
+    if( aOperation.IsCreateShapePreview() )
+    {
+        nlohmann::json geometry = nlohmann::json::object();
+
+        if( aOperation.m_Shape.CmpNoCase( wxS( "circle" ) ) == 0 )
+        {
+            geometry["center"] = pointJson( aOperation.m_Position );
+            geometry["radius"] = aOperation.m_Diameter;
+        }
+        else if( aOperation.m_Shape.CmpNoCase( wxS( "arc" ) ) == 0 )
+        {
+            geometry["start"] = pointJson( aOperation.m_Start );
+            geometry["mid"] = pointJson( aOperation.m_Position );
+            geometry["end"] = pointJson( aOperation.m_End );
+        }
+        else if( aOperation.m_Shape.CmpNoCase( wxS( "polygon" ) ) == 0
+                 || aOperation.m_Shape.CmpNoCase( wxS( "poly" ) ) == 0 )
+        {
+            geometry["points"] = pointsJson( aOperation.m_Points );
+        }
+        else
+        {
+            geometry["start"] = pointJson( aOperation.m_Start );
+            geometry["end"] = pointJson( aOperation.m_End );
+        }
+
+        nlohmann::json args =
+                { { "shape_type", toUtf8String( aOperation.m_Shape ) },
+                  { "layer", toUtf8String( aOperation.m_LayerName ) },
+                  { "width", aOperation.m_Width },
+                  { "geometry", std::move( geometry ) } };
+
+        if( aOriginalArguments.contains( "fill" ) )
+            args["fill"] = aOriginalArguments["fill"];
+
+        return args;
+    }
+
+    if( aOperation.IsCreateCopperZonePreview() )
+    {
+        nlohmann::json outline;
+        outline["points"] = pointsJson( aOperation.m_Points );
+
+        if( !aOperation.m_Holes.empty() )
+        {
+            nlohmann::json holes = nlohmann::json::array();
+
+            for( const std::vector<VECTOR2I>& hole : aOperation.m_Holes )
+                holes.push_back( pointsJson( hole ) );
+
+            outline["holes"] = std::move( holes );
+        }
+
+        return { { "net", toUtf8String( aOperation.m_NetName ) },
+                 { "layer_set",
+                   nlohmann::json::array(
+                           { toUtf8String( aOperation.m_LayerName ) } ) },
+                 { "outline", std::move( outline ) } };
+    }
+
+    return aOriginalArguments;
 }
 
 
@@ -12084,9 +12256,15 @@ std::vector<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_TOOL_REGISTRY::GenerateCandidat
     if( packetKind == "placement" )
     {
         if( std::optional<AI_SUGGESTION_RECORD> via =
-                    AiGenerateViaPatternCandidate( trigger ) )
+                    AiGenerateViaPlacementCandidate( trigger ) )
         {
             candidates.push_back( *via );
+        }
+
+        if( std::optional<AI_SUGGESTION_RECORD> zone =
+                    AiGenerateDrawingZoneCandidate( trigger ) )
+        {
+            candidates.push_back( *zone );
         }
     }
     else if( packetKind == "routing" )
@@ -12125,6 +12303,12 @@ void AI_NEXT_ACTION_TOOL_REGISTRY::SetServices(
 {
     m_ValidationService = aValidationService;
     m_PreviewService = aPreviewService;
+}
+
+
+bool AI_NEXT_ACTION_TOOL_REGISTRY::HasHiddenAttemptServices() const
+{
+    return m_ValidationService && m_PreviewService;
 }
 
 
@@ -13969,66 +14153,6 @@ AI_TOOL_INVOCATION_RESULT AI_NEXT_ACTION_TOOL_REGISTRY::HandleToolCall(
                     || name == "observation.resolve_visual_reference" )
                 {
                     return std::string( "observation.resolve_visual_reference" );
-                }
-
-                if( name == "placement_generate_via_pattern_candidates"
-                    || name == "placement.generate_via_pattern_candidates" )
-                {
-                    return std::string( "placement.generate_via_pattern_candidates" );
-                }
-
-                if( name == "placement_generate_footprint_transform_candidates"
-                    || name == "placement.generate_footprint_transform_candidates" )
-                {
-                    return std::string(
-                            "placement.generate_footprint_transform_candidates" );
-                }
-
-                if( name == "placement_generate_footprint_orientation_candidates"
-                    || name == "placement.generate_footprint_orientation_candidates" )
-                {
-                    return std::string(
-                            "placement.generate_footprint_orientation_candidates" );
-                }
-
-                if( name == "routing_generate_segment_candidates"
-                    || name == "routing.generate_segment_candidates" )
-                {
-                    return std::string( "routing.generate_segment_candidates" );
-                }
-
-                if( name == "routing_generate_parallel_segment_candidates"
-                    || name == "routing.generate_parallel_segment_candidates" )
-                {
-                    return std::string(
-                            "routing.generate_parallel_segment_candidates" );
-                }
-
-                if( name == "routing_generate_bus_segment_candidates"
-                    || name == "routing.generate_bus_segment_candidates" )
-                {
-                    return std::string(
-                            "routing.generate_bus_segment_candidates" );
-                }
-
-                if( name == "routing_generate_replace_path_candidates"
-                    || name == "routing.generate_replace_path_candidates" )
-                {
-                    return std::string(
-                            "routing.generate_replace_path_candidates" );
-                }
-
-                if( name == "routing_generate_constraint_aware_reroute_candidates"
-                    || name == "routing.generate_constraint_aware_reroute_candidates" )
-                {
-                    return std::string(
-                            "routing.generate_constraint_aware_reroute_candidates" );
-                }
-
-                if( name == "surface_generate_fill_candidates"
-                    || name == "surface.generate_fill_candidates" )
-                {
-                    return std::string( "surface.generate_fill_candidates" );
                 }
 
                 if( name == "shadow_apply_candidate"
@@ -16335,14 +16459,6 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     step.m_LlmDecisionJson = decision.m_RawJson;
     step.m_LlmDecisionToolResultsJson = decision.m_ToolResultsJson;
 
-    if( !decision.WantsAttempt() )
-    {
-        step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
-        m_Steps.push_back( step );
-        persistSession( step.m_ConversationId );
-        return std::nullopt;
-    }
-
     std::vector<AI_SUGGESTION_RECORD> candidates =
             decisionToolGeneratedCandidates( decision, observation );
     std::vector<AI_SUGGESTION_RECORD> workStateCandidates =
@@ -16351,6 +16467,36 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
     candidates.insert( candidates.end(),
                        std::make_move_iterator( workStateCandidates.begin() ),
                        std::make_move_iterator( workStateCandidates.end() ) );
+
+    if( !decision.WantsAttempt() )
+    {
+        if( shouldAttemptAfterUnstructuredDecision( decision )
+            && !candidates.empty() )
+        {
+            decision.m_Kind = AI_NEXT_ACTION_DECISION_KIND::Attempt;
+            decision.m_ReasonCode = wxS( "unstructured_decision_fallback" );
+            decision.m_SelectedCandidateIndex = 0;
+            decision.m_RawJson = unstructuredDecisionFallbackJson( decision );
+            step.m_LlmDecisionJson = decision.m_RawJson;
+        }
+        else if( decision.m_Kind == AI_NEXT_ACTION_DECISION_KIND::Abandon
+                 && !workStateCandidates.empty()
+                 && m_Tools.HasHiddenAttemptServices() )
+        {
+            decision.m_Kind = AI_NEXT_ACTION_DECISION_KIND::Attempt;
+            decision.m_ReasonCode = wxS( "work_state_candidate_fallback" );
+            decision.m_SelectedCandidateIndex = 0;
+            decision.m_RawJson = workStateCandidateFallbackJson( decision );
+            step.m_LlmDecisionJson = decision.m_RawJson;
+        }
+        else
+        {
+            step.m_Status = AI_NEXT_ACTION_STEP_STATUS::Abandoned;
+            m_Steps.push_back( step );
+            persistSession( step.m_ConversationId );
+            return std::nullopt;
+        }
+    }
 
     if( candidates.empty() )
     {
@@ -17426,12 +17572,24 @@ AI_NEXT_ACTION_ATTEMPT_RECORD AI_NEXT_ACTION_RUNTIME::buildAttempt(
     {
         const AI_SESSION_OPERATION_KIND operationKind =
                 sessionOperationKindForCandidate( aCandidate );
+        nlohmann::json atomicArguments = candidateArguments;
+
+        if( std::optional<AI_SUGGESTION_OPERATION> operation =
+                    ParseAiSuggestionOperation( aCandidate.m_ArgumentsJson ) )
+        {
+            atomicArguments =
+                    atomicArgumentsForCandidateOperation( *operation,
+                                                          candidateArguments );
+        }
+
+        const wxString atomicArgumentsJson =
+                fromUtf8String( atomicArguments.dump() );
         AI_ATOMIC_EXECUTION_RESULT execution =
                 AI_ATOMIC_OPERATION_EXECUTOR::Execute( *session, operationKind,
-                                                       argumentsJson );
+                                                       atomicArgumentsJson );
 
         if( !execution.m_Ok )
-            appendFailedOperation( operationKind, argumentsJson, execution );
+            appendFailedOperation( operationKind, atomicArgumentsJson, execution );
     }
 
     AI_SESSION_OBSERVATION sessionObservation =

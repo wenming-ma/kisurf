@@ -49,6 +49,16 @@ struct ROUTING_SEGMENT_CANDIDATE
 };
 
 
+struct DRAWING_ZONE_CANDIDATE
+{
+    VECTOR2I          m_Position = VECTOR2I( 0, 0 );
+    std::vector<VECTOR2I> m_Points;
+    wxString          m_NetName;
+    wxString          m_LayerName;
+    int               m_Width = 100000;
+};
+
+
 struct PANEL_TABLE_FILL_CANDIDATE
 {
     wxString              m_PanelId;
@@ -273,6 +283,63 @@ std::optional<ROUTING_SEGMENT_CANDIDATE> parseRoutingCandidate(
     if( !hasEnd || samePoint( candidate.m_Start, candidate.m_End ) )
         return std::nullopt;
 
+    return candidate;
+}
+
+
+std::vector<VECTOR2I> rectangleAroundPoint( const VECTOR2I& aCenter,
+                                            int aHalfSize )
+{
+    return {
+        VECTOR2I( aCenter.x - aHalfSize, aCenter.y - aHalfSize ),
+        VECTOR2I( aCenter.x + aHalfSize, aCenter.y - aHalfSize ),
+        VECTOR2I( aCenter.x + aHalfSize, aCenter.y + aHalfSize ),
+        VECTOR2I( aCenter.x - aHalfSize, aCenter.y + aHalfSize )
+    };
+}
+
+
+std::optional<DRAWING_ZONE_CANDIDATE> parseDrawingZoneCandidate(
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    const nlohmann::json modeContext =
+            nlohmann::json::parse( toUtf8String( aToolState.m_ModeContextJson ),
+                                   nullptr, false );
+
+    if( modeContext.is_discarded() || !modeContext.is_object()
+        || !modeContext.contains( "layer" ) )
+    {
+        return std::nullopt;
+    }
+
+    DRAWING_ZONE_CANDIDATE candidate;
+    candidate.m_LayerName = jsonStringToWxString( modeContext["layer"] );
+
+    if( candidate.m_LayerName.IsEmpty() )
+        return std::nullopt;
+
+    if( modeContext.contains( "net" ) )
+        candidate.m_NetName = jsonStringToWxString( modeContext["net"] );
+
+    if( modeContext.contains( "width" ) )
+        jsonPositiveIntegerToInt( modeContext["width"], candidate.m_Width );
+
+    bool hasPosition = false;
+
+    if( modeContext.contains( "cursor" ) )
+        hasPosition = jsonPointToVector2I( modeContext["cursor"],
+                                           candidate.m_Position );
+
+    if( !hasPosition && aToolState.m_HasCursorBoardPosition )
+    {
+        candidate.m_Position = aToolState.m_CursorBoardPosition;
+        hasPosition = true;
+    }
+
+    if( !hasPosition )
+        return std::nullopt;
+
+    candidate.m_Points = rectangleAroundPoint( candidate.m_Position, 500000 );
     return candidate;
 }
 
@@ -631,6 +698,47 @@ std::optional<VIA_PATTERN_CANDIDATE> detectViaPattern(
 }
 
 
+std::optional<VIA_PATTERN_CANDIDATE> fallbackViaPlacementCandidate(
+        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+{
+    const nlohmann::json modeContext =
+            nlohmann::json::parse( toUtf8String( aToolState.m_ModeContextJson ),
+                                   nullptr, false );
+
+    if( modeContext.is_discarded() || !modeContext.is_object() )
+        return std::nullopt;
+
+    VIA_PATTERN_CANDIDATE candidate;
+
+    if( modeContext.contains( "net" ) )
+        candidate.m_NetName = jsonStringToWxString( modeContext["net"] );
+
+    if( !modeContext.contains( "diameter" ) || !modeContext.contains( "drill" )
+        || !jsonPositiveIntegerToInt( modeContext["diameter"], candidate.m_Diameter )
+        || !jsonPositiveIntegerToInt( modeContext["drill"], candidate.m_Drill ) )
+    {
+        return std::nullopt;
+    }
+
+    bool hasPosition = false;
+
+    if( modeContext.contains( "cursor" ) )
+        hasPosition = jsonPointToVector2I( modeContext["cursor"], candidate.m_Position );
+
+    if( !hasPosition && aToolState.m_HasCursorBoardPosition )
+    {
+        candidate.m_Position = aToolState.m_CursorBoardPosition;
+        hasPosition = true;
+    }
+
+    if( !hasPosition )
+        return std::nullopt;
+
+    candidate.m_LowConfidence = true;
+    return candidate;
+}
+
+
 wxString buildArgumentsJson( const VIA_PATTERN_CANDIDATE& aCandidate )
 {
     nlohmann::json operation =
@@ -655,6 +763,40 @@ wxString buildArgumentsJson( const ROUTING_SEGMENT_CANDIDATE& aCandidate )
               { "start",
                 { { "x", aCandidate.m_Start.x }, { "y", aCandidate.m_Start.y } } },
               { "end", { { "x", aCandidate.m_End.x }, { "y", aCandidate.m_End.y } } } };
+
+    return fromUtf8String( operation.dump() );
+}
+
+
+wxString buildArgumentsJson( const DRAWING_ZONE_CANDIDATE& aCandidate )
+{
+    nlohmann::json points = nlohmann::json::array();
+
+    for( const VECTOR2I& point : aCandidate.m_Points )
+        points.push_back( { { "x", point.x }, { "y", point.y } } );
+
+    if( !aCandidate.m_NetName.IsEmpty() )
+    {
+        nlohmann::json operation =
+                { { "operation", "create_copper_zone_preview" },
+                  { "net", toUtf8String( aCandidate.m_NetName ) },
+                  { "layer", toUtf8String( aCandidate.m_LayerName ) },
+                  { "points", std::move( points ) } };
+
+        return fromUtf8String( operation.dump() );
+    }
+
+    nlohmann::json operation =
+            { { "operation", "create_shape_preview" },
+              { "shape", "rectangle" },
+              { "layer", toUtf8String( aCandidate.m_LayerName ) },
+              { "width", aCandidate.m_Width },
+              { "start",
+                { { "x", aCandidate.m_Points.front().x },
+                  { "y", aCandidate.m_Points.front().y } } },
+              { "end",
+                { { "x", aCandidate.m_Points[2].x },
+                  { "y", aCandidate.m_Points[2].y } } } };
 
     return fromUtf8String( operation.dump() );
 }
@@ -697,6 +839,19 @@ AI_OBJECT_REF buildSyntheticPreviewRef( const ROUTING_SEGMENT_CANDIDATE& aCandid
 }
 
 
+AI_OBJECT_REF buildSyntheticPreviewRef( const DRAWING_ZONE_CANDIDATE& aCandidate )
+{
+    wxString label = wxString::Format( wxS( "preview:zone:%d,%d" ),
+                                       aCandidate.m_Position.x,
+                                       aCandidate.m_Position.y );
+
+    if( !aCandidate.m_NetName.IsEmpty() )
+        return AI_OBJECT_REF( KIID(), PCB_ZONE_T, label, buildArgumentsJson( aCandidate ) );
+
+    return AI_OBJECT_REF( KIID(), PCB_SHAPE_T, label, buildArgumentsJson( aCandidate ) );
+}
+
+
 bool triggerIsActiveViaPlacement( const AI_SUGGESTION_TRIGGER& aTrigger )
 {
     const AI_TOOL_STATE_SNAPSHOT& toolState = aTrigger.m_ContextSnapshot.m_ToolState;
@@ -729,6 +884,29 @@ bool triggerIsActiveRouting( const AI_SUGGESTION_TRIGGER& aTrigger )
         || aTrigger.m_ContextSnapshot.m_EditorKind != AI_EDITOR_KIND::Pcb
         || toolState.m_EditorKind != AI_EDITOR_KIND::Pcb
         || toolState.m_Kind != AI_TOOL_STATE_KIND::RoutingTrack )
+    {
+        return false;
+    }
+
+    if( toolState.m_ContextVersion.IsValid() && version.IsValid()
+        && !sameVersion( toolState.m_ContextVersion, version ) )
+    {
+        return false;
+    }
+
+    return true;
+}
+
+
+bool triggerIsActiveDrawingZone( const AI_SUGGESTION_TRIGGER& aTrigger )
+{
+    const AI_TOOL_STATE_SNAPSHOT& toolState = aTrigger.m_ContextSnapshot.m_ToolState;
+    const AI_CONTEXT_VERSION      version = effectiveVersion( aTrigger );
+
+    if( aTrigger.m_EditorKind != AI_EDITOR_KIND::Pcb
+        || aTrigger.m_ContextSnapshot.m_EditorKind != AI_EDITOR_KIND::Pcb
+        || toolState.m_EditorKind != AI_EDITOR_KIND::Pcb
+        || toolState.m_Kind != AI_TOOL_STATE_KIND::DrawingZone )
     {
         return false;
     }
@@ -795,6 +973,50 @@ std::optional<AI_SUGGESTION_RECORD> AiGenerateViaPatternCandidate(
 }
 
 
+std::optional<AI_SUGGESTION_RECORD> AiGenerateViaPlacementCandidate(
+        const AI_SUGGESTION_TRIGGER& aTrigger )
+{
+    if( std::optional<AI_SUGGESTION_RECORD> pattern =
+                AiGenerateViaPatternCandidate( aTrigger ) )
+    {
+        return pattern;
+    }
+
+    if( !triggerIsActiveViaPlacement( aTrigger ) )
+        return std::nullopt;
+
+    std::optional<VIA_PATTERN_CANDIDATE> candidate =
+            fallbackViaPlacementCandidate( aTrigger.m_ContextSnapshot.m_ToolState );
+
+    if( !candidate )
+        return std::nullopt;
+
+    AI_SUGGESTION_RECORD suggestion;
+    suggestion.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
+    suggestion.m_ContextVersion = effectiveVersion( aTrigger );
+    suggestion.m_TriggerActivitySequence = aTrigger.m_Activity.m_Sequence;
+    suggestion.m_Title = wxS( "Preview via placement" );
+    suggestion.m_Body =
+            wxS( "Preview the next via at the current placement point." );
+    suggestion.m_ContextKind = AiDynamicContextKind( aTrigger.m_ContextSnapshot );
+    suggestion.m_ContextDetailsJson =
+            AiDynamicContextDetailsJson( aTrigger.m_ContextSnapshot,
+                                         wxS( "via_placement" ) );
+    suggestion.m_ArgumentsJson = buildArgumentsJson( *candidate );
+    suggestion.m_Fingerprint << wxS( "via-placement|" )
+                             << suggestion.m_ContextVersion.AsString()
+                             << wxS( "|" ) << candidate->m_NetName
+                             << wxS( "|" ) << candidate->m_Position.x << wxS( "," )
+                             << candidate->m_Position.y << wxS( "|" )
+                             << candidate->m_Diameter << wxS( "|" )
+                             << candidate->m_Drill;
+    suggestion.m_PreviewObjects.push_back( buildSyntheticPreviewRef( *candidate ) );
+    suggestion.m_EditObjects = suggestion.m_PreviewObjects;
+    return suggestion;
+}
+
+
 std::optional<AI_SUGGESTION_RECORD> AiGenerateRoutingSegmentCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger )
 {
@@ -826,6 +1048,47 @@ std::optional<AI_SUGGESTION_RECORD> AiGenerateRoutingSegmentCandidate(
                              << candidate->m_Start.y << wxS( "|" )
                              << candidate->m_End.x << wxS( "," )
                              << candidate->m_End.y;
+    suggestion.m_PreviewObjects.push_back( buildSyntheticPreviewRef( *candidate ) );
+    suggestion.m_EditObjects = suggestion.m_PreviewObjects;
+    return suggestion;
+}
+
+
+std::optional<AI_SUGGESTION_RECORD> AiGenerateDrawingZoneCandidate(
+        const AI_SUGGESTION_TRIGGER& aTrigger )
+{
+    if( !triggerIsActiveDrawingZone( aTrigger ) )
+        return std::nullopt;
+
+    std::optional<DRAWING_ZONE_CANDIDATE> candidate =
+            parseDrawingZoneCandidate( aTrigger.m_ContextSnapshot.m_ToolState );
+
+    if( !candidate )
+        return std::nullopt;
+
+    AI_SUGGESTION_RECORD suggestion;
+    suggestion.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
+    suggestion.m_ContextVersion = effectiveVersion( aTrigger );
+    suggestion.m_TriggerActivitySequence = aTrigger.m_Activity.m_Sequence;
+    suggestion.m_Title = candidate->m_NetName.IsEmpty()
+                                 ? wxS( "Preview drawing shape" )
+                                 : wxS( "Preview copper zone" );
+    suggestion.m_Body =
+            candidate->m_NetName.IsEmpty()
+                    ? wxS( "Preview a starter shape at the current drawing point." )
+                    : wxS( "Preview a starter copper zone at the current drawing point." );
+    suggestion.m_ContextKind = AiDynamicContextKind( aTrigger.m_ContextSnapshot );
+    suggestion.m_ContextDetailsJson =
+            AiDynamicContextDetailsJson( aTrigger.m_ContextSnapshot,
+                                         wxS( "drawing_zone" ) );
+    suggestion.m_ArgumentsJson = buildArgumentsJson( *candidate );
+    suggestion.m_Fingerprint << wxS( "drawing-zone|" )
+                             << suggestion.m_ContextVersion.AsString()
+                             << wxS( "|" ) << candidate->m_LayerName
+                             << wxS( "|" ) << candidate->m_NetName
+                             << wxS( "|" ) << candidate->m_Position.x
+                             << wxS( "," ) << candidate->m_Position.y;
     suggestion.m_PreviewObjects.push_back( buildSyntheticPreviewRef( *candidate ) );
     suggestion.m_EditObjects = suggestion.m_PreviewObjects;
     return suggestion;

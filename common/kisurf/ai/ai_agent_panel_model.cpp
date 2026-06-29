@@ -74,6 +74,10 @@ AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
 
     const size_t start = aMessages.size() > CHAT_RECENT_TURN_LIMIT
                          ? aMessages.size() - CHAT_RECENT_TURN_LIMIT : 0;
+    const size_t olderMessageCount = start;
+    size_t       truncatedMessageCount = 0;
+    size_t       originalChars = 0;
+    size_t       sentMessageChars = 0;
 
     wxString text;
     text << wxS( "Previous chat turns (current chat only):" );
@@ -81,25 +85,45 @@ AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
     for( size_t i = start; i < aMessages.size(); ++i )
     {
         wxString message = aMessages[i].m_Text;
+        originalChars += message.length();
 
         if( message.length() > CHAT_MAX_CHARS_PER_RECENT_TURN )
         {
             message = message.Left( CHAT_MAX_CHARS_PER_RECENT_TURN );
             message << wxS( "\n[truncated chat turn]" );
+            ++truncatedMessageCount;
         }
 
+        sentMessageChars += message.length();
         text << wxS( "\n" ) << aMessages[i].m_Role << wxS( ": " ) << message;
     }
+
+    const bool omittedOlderMessages = olderMessageCount > 0;
+    const bool truncatedMessages = truncatedMessageCount > 0;
+
+    nlohmann::json metadata = {
+        { "message_count", aMessages.size() },
+        { "sent_message_count", aMessages.size() - start },
+        { "older_message_count", olderMessageCount },
+        { "truncated_chat_turn_count", truncatedMessageCount },
+        { "original_message_chars", originalChars },
+        { "sent_message_chars", sentMessageChars },
+        { "max_chars_per_recent_turn", CHAT_MAX_CHARS_PER_RECENT_TURN }
+    };
 
     block.m_Id = wxS( "chat.recent_turns" );
     block.m_Kind = wxS( "chat_recent_turns" );
     block.m_Source = wxS( "chat_session" );
     block.m_Text = text;
-    block.m_OriginalChars = text.length();
-    block.m_MetadataJson = wxString::Format(
-            wxS( "{\"message_count\":%llu,\"sent_message_count\":%llu}" ),
-            static_cast<unsigned long long>( aMessages.size() ),
-            static_cast<unsigned long long>( aMessages.size() - start ) );
+    block.m_OriginalChars = originalChars;
+    block.m_SentChars = text.length();
+    block.m_OmissionReason =
+            omittedOlderMessages
+                    ? wxString( wxS( "older_messages_omitted" ) )
+                    : ( truncatedMessages
+                                ? wxString( wxS( "chat_turns_truncated" ) )
+                                : wxString() );
+    block.m_MetadataJson = fromUtf8String( metadata.dump() );
     return block;
 }
 
@@ -272,6 +296,7 @@ AI_AGENT_PANEL_MODEL::AI_AGENT_PANEL_MODEL( std::unique_ptr<AI_PROVIDER> aProvid
         m_DefaultLocalTextMemoryIndex( std::make_unique<AI_LOCAL_TEXT_MEMORY_INDEX>() ),
         m_DefaultArtifactStore( std::make_unique<AI_ARTIFACT_STORE>() ),
         m_DefaultChatSessionStore( std::make_unique<AI_CHAT_SESSION_STORE>() ),
+        m_DefaultNextActionSessionStore( std::make_unique<AI_NEXT_ACTION_SESSION_STORE>() ),
         m_Runtime( std::move( aProvider ), m_ActivityLog ),
         m_NextActionRuntime( std::make_unique<AI_NEXT_ACTION_RUNTIME>(
                 MakeDefaultAiProvider(), m_NextActionValidationService,
@@ -282,6 +307,7 @@ AI_AGENT_PANEL_MODEL::AI_AGENT_PANEL_MODEL( std::unique_ptr<AI_PROVIDER> aProvid
     SetLocalTextMemoryIndex( nullptr );
     SetArtifactStore( nullptr );
     SetChatSessionStore( nullptr );
+    SetNextActionSessionStore( nullptr );
 }
 
 
@@ -306,6 +332,20 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
                                                          AI_EDITOR_KIND aEditorKind,
                                                          AI_CONTEXT_SNAPSHOT aContextSnapshot )
 {
+    AI_CHAT_REQUEST_STATE state =
+            PrepareUserTextRequest( aText, aEditorKind, std::move( aContextSnapshot ) );
+    AI_PROVIDER_RESPONSE response = ExecutePreparedChatRequest( state );
+    return FinishPreparedChatRequest( std::move( state ), std::move( response ) );
+}
+
+
+AI_CHAT_REQUEST_STATE AI_AGENT_PANEL_MODEL::PrepareUserTextRequest(
+        const wxString& aText, AI_EDITOR_KIND aEditorKind,
+        AI_CONTEXT_SNAPSHOT aContextSnapshot )
+{
+    AI_CHAT_REQUEST_STATE state;
+    const std::vector<AI_AGENT_MESSAGE> priorMessages = m_Messages;
+
     AI_PROVIDER_REQUEST request;
     request.m_ConversationId = m_ActiveChatSessionId;
     request.m_EditorKind = aEditorKind;
@@ -314,10 +354,12 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
     if( request.m_ContextSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
         request.m_ContextSnapshot.m_EditorKind = aEditorKind;
 
-    refreshLocalTextResearchDirectory( request.m_ContextSnapshot );
-
     m_LastChatProjectId = request.m_ContextSnapshot.m_ProjectId;
     m_LastChatDocumentId = request.m_ContextSnapshot.m_DocumentId;
+    m_Messages.push_back( { wxS( "user" ), aText } );
+    persistActiveChatSession();
+
+    refreshLocalTextResearchDirectory( request.m_ContextSnapshot );
 
     std::vector<AI_ACTIVITY_RECORD> activity = ActivityRecords();
 
@@ -331,7 +373,7 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
     request.m_UserText = aText;
     request.m_MaxToolRounds = 6;
 
-    AI_PROVIDER_INPUT_BLOCK recentTurns = recentChatTurnsBlock( m_Messages );
+    AI_PROVIDER_INPUT_BLOCK recentTurns = recentChatTurnsBlock( priorMessages );
 
     if( !recentTurns.m_Id.IsEmpty() )
         request.m_ProviderInputBlocks.push_back( std::move( recentTurns ) );
@@ -384,36 +426,61 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::SendUserText( const wxString& aText,
         }
     }
 
-    m_Messages.push_back( { wxS( "user" ), aText } );
-
     AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext;
     ownershipContext.m_ContextVersion = request.m_ContextVersion;
     ownershipContext.m_ProjectId = request.m_ContextSnapshot.m_ProjectId;
     ownershipContext.m_DocumentId = request.m_ContextSnapshot.m_DocumentId;
-    const bool chatOwnsDocument =
+    state.m_OwnershipContext = ownershipContext;
+    state.m_DocumentWriteOwned =
             TryAcquireDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
 
-    if( !chatOwnsDocument )
+    if( !state.m_DocumentWriteOwned )
     {
         AI_PROVIDER_RESPONSE response;
         response.m_Title = wxS( "Document write ownership unavailable" );
         response.m_Body =
                 wxS( "Cannot run chat tool calls because document write ownership "
                      "is currently held by another AI runtime." );
-        m_Messages.push_back( { wxS( "assistant" ), response.m_Body } );
-        persistActiveChatSession();
-        return response;
+        state.m_PreflightCompleted = true;
+        state.m_PreflightResponse = std::move( response );
     }
 
-    AI_PROVIDER_RESPONSE response = m_Runtime.Submit( request );
-    m_LastRequestId = response.m_RequestId;
+    state.m_Request = std::move( request );
+    return state;
+}
 
-    ReleaseDocumentWriteOwnership( wxS( "chat" ), ownershipContext );
 
-    m_Messages.push_back( { wxS( "assistant" ), response.m_Body } );
+AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::ExecutePreparedChatRequest(
+        const AI_CHAT_REQUEST_STATE& aState )
+{
+    return ExecutePreparedChatRequest( aState, AI_RUNTIME_STREAM_EVENT_SINK() );
+}
+
+
+AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::ExecutePreparedChatRequest(
+        const AI_CHAT_REQUEST_STATE& aState,
+        AI_RUNTIME_STREAM_EVENT_SINK aEventSink )
+{
+    if( aState.m_PreflightCompleted )
+        return aState.m_PreflightResponse;
+
+    return m_Runtime.Submit( aState.m_Request, std::move( aEventSink ) );
+}
+
+
+AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::FinishPreparedChatRequest(
+        AI_CHAT_REQUEST_STATE aState, AI_PROVIDER_RESPONSE aResponse )
+{
+    if( aResponse.m_RequestId != 0 )
+        m_LastRequestId = aResponse.m_RequestId;
+
+    if( aState.m_DocumentWriteOwned )
+        ReleaseDocumentWriteOwnership( wxS( "chat" ), aState.m_OwnershipContext );
+
+    m_Messages.push_back( { wxS( "assistant" ), aResponse.m_Body } );
     persistActiveChatSession();
 
-    return response;
+    return aResponse;
 }
 
 
@@ -498,7 +565,10 @@ void AI_AGENT_PANEL_MODEL::StartNewChat()
         m_NextActionRuntime->ExpireActive();
 
     m_Messages.clear();
-    ++m_ActiveChatSessionId;
+    m_ActiveChatSessionId =
+            m_ChatSessionStore
+                    ? m_ChatSessionStore->NextConversationId( m_ActiveChatSessionId + 1 )
+                    : m_ActiveChatSessionId + 1;
     m_LastChatProjectId.Clear();
     m_LastChatDocumentId.Clear();
 
@@ -630,6 +700,10 @@ const wxString& AI_AGENT_PANEL_MODEL::ArtifactStorePath() const
 void AI_AGENT_PANEL_MODEL::SetChatSessionStore( AI_CHAT_SESSION_STORE* aStore )
 {
     m_ChatSessionStore = aStore ? aStore : m_DefaultChatSessionStore.get();
+
+    if( m_ChatSessionStore && m_Messages.empty() )
+        m_ActiveChatSessionId =
+                m_ChatSessionStore->NextConversationId();
 }
 
 
@@ -637,6 +711,24 @@ const wxString& AI_AGENT_PANEL_MODEL::ChatSessionStoreDirectory() const
 {
     return m_ChatSessionStore ? m_ChatSessionStore->Directory()
                               : m_DefaultChatSessionStore->Directory();
+}
+
+
+void AI_AGENT_PANEL_MODEL::SetNextActionSessionStore(
+        AI_NEXT_ACTION_SESSION_STORE* aStore )
+{
+    m_NextActionSessionStore =
+            aStore ? aStore : m_DefaultNextActionSessionStore.get();
+
+    if( m_NextActionRuntime )
+        m_NextActionRuntime->SetSessionStore( m_NextActionSessionStore );
+}
+
+
+const wxString& AI_AGENT_PANEL_MODEL::NextActionSessionStoreDirectory() const
+{
+    return m_NextActionSessionStore ? m_NextActionSessionStore->Directory()
+                                    : m_DefaultNextActionSessionStore->Directory();
 }
 
 
@@ -898,6 +990,9 @@ void AI_AGENT_PANEL_MODEL::SetNextActionProvider( std::unique_ptr<AI_PROVIDER> a
 
         if( m_ArtifactStore )
             m_NextActionRuntime->SetArtifactStore( m_ArtifactStore );
+
+        if( m_NextActionSessionStore )
+            m_NextActionRuntime->SetSessionStore( m_NextActionSessionStore );
     }
     else
     {

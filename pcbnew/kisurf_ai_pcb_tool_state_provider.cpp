@@ -62,6 +62,10 @@ AI_TOOL_STATE_KIND classifyName( const wxString& aName )
         return AI_TOOL_STATE_KIND::PlacingFootprint;
 
     if( contains( aName, wxS( "InteractiveDrawing.zone" ) )
+            || contains( aName, wxS( "InteractiveDrawing.copperThievingZone" ) )
+            || contains( aName, wxS( "InteractiveDrawing.ruleArea" ) )
+            || contains( aName, wxS( "InteractiveDrawing.zoneCutout" ) )
+            || contains( aName, wxS( "InteractiveDrawing.similarZone" ) )
             || contains( aName, wxS( "InteractiveDrawing.drawZone" ) ) )
     {
         return AI_TOOL_STATE_KIND::DrawingZone;
@@ -578,8 +582,13 @@ AI_TOOL_STATE_SNAPSHOT KISURF_AI_PCB_TOOL_STATE_PROVIDER::BuildToolState(
 
 void KISURF_AI_PCB_TOOL_STATE_PROVIDER::RecordToolEvent( const TOOL_EVENT& aEvent )
 {
-    if( aEvent.Category() == TC_COMMAND && !aEvent.CommandString().empty() )
-        m_LastActionName = wxString::FromUTF8( aEvent.CommandString().c_str() );
+    if( aEvent.Category() == TC_COMMAND )
+    {
+        if( aEvent.IsCancel() )
+            m_LastActionName.Clear();
+        else if( !aEvent.CommandString().empty() )
+            m_LastActionName = wxString::FromUTF8( aEvent.CommandString().c_str() );
+    }
 
     if( aEvent.HasPosition() )
     {
@@ -591,16 +600,17 @@ void KISURF_AI_PCB_TOOL_STATE_PROVIDER::RecordToolEvent( const TOOL_EVENT& aEven
 
 AI_TOOL_STATE_KIND KISURF_AI_PCB_TOOL_STATE_PROVIDER::classifyActiveState() const
 {
-    const AI_TOOL_STATE_KIND actionKind = classifyName( m_LastActionName );
-
-    if( actionKind != AI_TOOL_STATE_KIND::Idle )
-        return actionKind;
-
     if( m_ToolManager )
     {
         if( TOOL_BASE* currentTool = m_ToolManager->GetCurrentTool() )
-            return classifyName( wxString::FromUTF8( currentTool->GetName().c_str() ) );
+        {
+            const AI_TOOL_STATE_KIND currentKind =
+                    classifyName( wxString::FromUTF8( currentTool->GetName().c_str() ) );
+
+            if( currentKind != AI_TOOL_STATE_KIND::Idle )
+                return currentKind;
+        }
     }
 
-    return AI_TOOL_STATE_KIND::Idle;
+    return classifyName( m_LastActionName );
 }

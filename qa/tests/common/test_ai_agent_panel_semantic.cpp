@@ -2,6 +2,10 @@
 
 #include <json_common.h>
 #include <kisurf/ai/ai_agent_panel_semantic.h>
+#include <kisurf/ai/ai_panel_state_wx_adapter.h>
+#include <kisurf/ai/ai_structured_surface_apply_adapter.h>
+
+#include <utility>
 
 namespace
 {
@@ -16,6 +20,58 @@ const nlohmann::json* findNodeJson( const nlohmann::json& aNodes,
 
     return nullptr;
 }
+
+
+class RECORDING_PANEL_GRID_IO : public AI_STRUCTURED_SURFACE_GRID_IO
+{
+public:
+    explicit RECORDING_PANEL_GRID_IO( std::vector<std::vector<wxString>> aCells ) :
+            m_Cells( std::move( aCells ) )
+    {
+        m_RowLabels.resize( m_Cells.size() );
+        m_ColumnLabels.resize( m_Cells.empty() ? 0 : m_Cells.front().size() );
+    }
+
+    int RowCount() const override
+    {
+        return static_cast<int>( m_Cells.size() );
+    }
+
+    int ColumnCount() const override
+    {
+        return m_Cells.empty() ? 0 : static_cast<int>( m_Cells.front().size() );
+    }
+
+    wxString RowLabel( int aRow ) const override
+    {
+        return m_RowLabels.at( aRow );
+    }
+
+    wxString ColumnLabel( int aColumn ) const override
+    {
+        return m_ColumnLabels.at( aColumn );
+    }
+
+    wxString CellValue( int aRow, int aColumn ) const override
+    {
+        return m_Cells.at( aRow ).at( aColumn );
+    }
+
+    void SetCellValue( int aRow, int aColumn, const wxString& aValue ) override
+    {
+        m_Cells.at( aRow ).at( aColumn ) = aValue;
+    }
+
+    std::vector<std::pair<int, int>> SelectedCells() const override
+    {
+        return m_SelectedCells;
+    }
+
+    std::vector<std::vector<wxString>> m_Cells;
+    std::vector<wxString>              m_RowLabels;
+    std::vector<wxString>              m_ColumnLabels;
+    std::vector<std::pair<int, int>>   m_SelectedCells;
+};
 } // namespace
 
 BOOST_AUTO_TEST_SUITE( AiAgentPanelSemantic )
@@ -360,6 +416,47 @@ BOOST_AUTO_TEST_CASE( PanelStateRecordProjectsSemanticTreeSafely )
                        "plain" );
     BOOST_CHECK_EQUAL( ( *transcript )["text_value"].get<std::string>(),
                        "2 messages" );
+}
+
+
+BOOST_AUTO_TEST_CASE( GridIoPanelStateProjectsTablesForNextAction )
+{
+    RECORDING_PANEL_GRID_IO grid(
+            { { wxS( "Default" ), wxS( "0.20 mm" ) },
+              { wxS( "Power" ), wxEmptyString },
+              { wxS( "Signal" ), wxEmptyString } } );
+    grid.m_RowLabels[0] = wxS( "Default" );
+    grid.m_RowLabels[1] = wxS( "Power" );
+    grid.m_RowLabels[2] = wxS( "Signal" );
+    grid.m_ColumnLabels[0] = wxS( "Class" );
+    grid.m_ColumnLabels[1] = wxS( "Clearance" );
+    grid.m_SelectedCells = { { 0, 1 } };
+
+    AI_PANEL_STATE_RECORD record = AiPanelStateRecordFromGridIo(
+            wxS( "board_setup.clearance" ), wxS( "Board Setup" ),
+            wxS( "clearance.rules" ), wxS( "Clearance rules" ), grid );
+
+    BOOST_CHECK_EQUAL( record.m_Id, wxString( wxS( "board_setup.clearance" ) ) );
+    BOOST_CHECK_EQUAL( record.m_Title, wxString( wxS( "Board Setup" ) ) );
+    BOOST_CHECK_EQUAL( record.m_FocusedControlId,
+                       wxString( wxS( "clearance.rules.r0.c1" ) ) );
+    BOOST_CHECK_EQUAL( record.m_FocusedControlLabel,
+                       wxString( wxS( "Clearance" ) ) );
+
+    nlohmann::json state = nlohmann::json::parse( record.m_StateJson.ToStdString() );
+    BOOST_REQUIRE( state.contains( "tables" ) );
+    BOOST_REQUIRE_EQUAL( state["tables"].size(), 1 );
+
+    const nlohmann::json& table = state["tables"][0];
+    BOOST_CHECK_EQUAL( table["id"].get<std::string>(), "clearance.rules" );
+    BOOST_CHECK_EQUAL( table["title"].get<std::string>(), "Clearance rules" );
+    BOOST_CHECK_EQUAL( table["focused_cell"]["row_id"].get<std::string>(), "r0" );
+    BOOST_CHECK_EQUAL( table["focused_cell"]["column_id"].get<std::string>(), "c1" );
+    BOOST_CHECK_EQUAL( table["columns"][1]["label"].get<std::string>(), "Clearance" );
+    BOOST_CHECK_EQUAL( table["rows"][0]["label"].get<std::string>(), "Default" );
+    BOOST_CHECK_EQUAL( table["rows"][0]["cells"]["c1"].get<std::string>(), "0.20 mm" );
+    BOOST_CHECK_EQUAL( table["rows"][1]["cells"]["c1"].get<std::string>(), "" );
+    BOOST_CHECK_EQUAL( table["rows"][2]["cells"]["c1"].get<std::string>(), "" );
 }
 
 

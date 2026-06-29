@@ -5,12 +5,49 @@
 #include <kisurf/ai/ai_agent_panel_model.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 
+#include <fstream>
+#include <sstream>
+#include <string>
 #include <type_traits>
 #include <vector>
 #include <wx/defs.h>
 #include <wx/panel.h>
 
+#ifndef QA_SRC_ROOT
+#error QA_SRC_ROOT must be defined for AI agent panel tests.
+#endif
+
 BOOST_AUTO_TEST_SUITE( AiAgentPanel )
+
+
+static std::string readAiAgentPanelSource()
+{
+    const std::string path = std::string( QA_SRC_ROOT )
+                             + "/common/kisurf/ai/ai_agent_panel.cpp";
+    std::ifstream     in( path, std::ios::binary );
+
+    BOOST_REQUIRE_MESSAGE( in.good(), "Unable to read source file: " << path );
+
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+
+static std::string sourceFunctionBody( const std::string& aSource,
+                                       const std::string& aFunctionName,
+                                       const std::string& aNextFunctionName )
+{
+    const size_t start = aSource.find( aFunctionName );
+    BOOST_REQUIRE_MESSAGE( start != std::string::npos,
+                           "Unable to find function: " << aFunctionName );
+
+    const size_t end = aSource.find( aNextFunctionName, start + aFunctionName.size() );
+    BOOST_REQUIRE_MESSAGE( end != std::string::npos,
+                           "Unable to find next function: " << aNextFunctionName );
+
+    return aSource.substr( start, end - start );
+}
 
 
 BOOST_AUTO_TEST_CASE( AgentPanelExposesWxPanelSurface )
@@ -160,6 +197,90 @@ BOOST_AUTO_TEST_CASE( AgentPanelTranscriptHtmlEscapesMessageText )
 }
 
 
+BOOST_AUTO_TEST_CASE( AgentPanelStreamingTextShowsToolProgressAfterTextDelta )
+{
+    AI_RUNTIME_STREAM_EVENT textDelta;
+    textDelta.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::TextDelta;
+    textDelta.m_TextDelta = wxS( "I will inspect the board." );
+
+    wxString visible = AiAgentStreamingAssistantTextAfterEvent( wxString(), textDelta );
+    BOOST_CHECK_EQUAL( visible, wxString( wxS( "I will inspect the board." ) ) );
+
+    AI_RUNTIME_STREAM_EVENT toolStarted;
+    toolStarted.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::ToolCallStarted;
+    toolStarted.m_ToolCall.m_ToolName = wxS( "kisurf_render_preview" );
+
+    visible = AiAgentStreamingAssistantTextAfterEvent( visible, toolStarted );
+
+    BOOST_CHECK( visible.Contains( wxS( "I will inspect the board." ) ) );
+    BOOST_CHECK( visible.Contains( wxS( "Executing tool: kisurf_render_preview" ) ) );
+
+    AI_RUNTIME_STREAM_EVENT toolFinished;
+    toolFinished.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::ToolCallFinished;
+    toolFinished.m_ToolCall.m_ToolName = wxS( "kisurf_render_preview" );
+    toolFinished.m_ToolResult.m_Message = wxS( "preview rendered" );
+
+    visible = AiAgentStreamingAssistantTextAfterEvent( visible, toolFinished );
+
+    BOOST_CHECK( visible.Contains( wxS( "Finished tool: kisurf_render_preview" ) ) );
+    BOOST_CHECK( visible.Contains( wxS( "preview rendered" ) ) );
+
+    AI_RUNTIME_STREAM_EVENT finalResponse;
+    finalResponse.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse;
+    finalResponse.m_TextDelta = wxS( "Done." );
+
+    visible = AiAgentStreamingAssistantTextAfterEvent( visible, finalResponse );
+    BOOST_CHECK_EQUAL( visible, wxString( wxS( "Done." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelStreamingTextKeepsDeltaWhenFinalResponseHasNoText )
+{
+    AI_RUNTIME_STREAM_EVENT textDelta;
+    textDelta.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::TextDelta;
+    textDelta.m_TextDelta = wxS( "Streaming answer" );
+
+    wxString visible = AiAgentStreamingAssistantTextAfterEvent( wxString(), textDelta );
+
+    AI_RUNTIME_STREAM_EVENT finalResponse;
+    finalResponse.m_Kind = AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse;
+
+    visible = AiAgentStreamingAssistantTextAfterEvent( visible, finalResponse );
+
+    BOOST_CHECK_EQUAL( visible, wxString( wxS( "Streaming answer" ) ) );
+    BOOST_CHECK( !visible.Contains( wxS( "Finalizing response" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelSendCurrentTextRendersPendingUserBeforeContextSampling )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string sendBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::SendCurrentText()",
+            "void AI_AGENT_PANEL::prepareAndRunPendingChatRequest(" );
+
+    const size_t pendingUser = sendBody.find( "m_PendingUserText = text" );
+    const size_t pendingRender = sendBody.find( "renderPendingChatRequest()" );
+    const size_t deferredWork = sendBody.find( "wxTheApp->CallAfter" );
+
+    BOOST_REQUIRE( pendingUser != std::string::npos );
+    BOOST_REQUIRE( pendingRender != std::string::npos );
+    BOOST_REQUIRE( deferredWork != std::string::npos );
+    BOOST_CHECK_LT( pendingUser, pendingRender );
+    BOOST_CHECK_LT( pendingRender, deferredWork );
+    BOOST_CHECK_EQUAL( sendBody.find( "contextSnapshotWithPanelState()" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( sendBody.find( "PrepareUserTextRequest(" ),
+                       std::string::npos );
+
+    const std::string renderBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::renderPendingChatRequest()",
+            "void AI_AGENT_PANEL::handlePreparedChatStreamEvent(" );
+
+    BOOST_CHECK( renderBody.find( "m_PendingUserText" ) != std::string::npos );
+}
+
+
 BOOST_AUTO_TEST_CASE( AgentPanelEmptyTranscriptKeepsChatWorkflowNeutral )
 {
     wxString html = AiAgentTranscriptHtml( {} );
@@ -231,7 +352,7 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesProviderRecoveryCommand )
 }
 
 
-BOOST_AUTO_TEST_CASE( ReviewCommandsPreferPendingChatSession )
+BOOST_AUTO_TEST_CASE( ReviewCommandsTargetPendingChatSession )
 {
     BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( false, true ) );
     BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( true, true ) );
@@ -291,6 +412,116 @@ BOOST_AUTO_TEST_CASE( AgentPanelMapsToolStateToWorkspaceContext )
 }
 
 
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickTargetsActiveSemanticStates )
+{
+    AI_CONTEXT_SNAPSHOT routing;
+    routing.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( routing ) );
+
+    AI_CONTEXT_SNAPSHOT placing;
+    placing.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    placing.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    placing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::PlacingVia;
+    BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( placing ) );
+
+    AI_CONTEXT_SNAPSHOT panel;
+    panel.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    AI_PANEL_STATE_RECORD panelState;
+    panelState.m_Id = wxS( "board_setup.layers" );
+    panelState.m_Title = wxS( "Board Setup" );
+    panelState.m_FocusedControlId = wxS( "board_setup.layers.grid.r0.c1" );
+    panelState.m_FocusedControlLabel = wxS( "Layer name" );
+    panel.m_PanelStates.push_back( panelState );
+    BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( panel ) );
+
+    AI_CONTEXT_SNAPSHOT idle;
+    idle.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    idle.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    idle.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    BOOST_CHECK( !AiAgentSnapshotNeedsBackgroundTick( idle ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelContinuousBackgroundIdleOnlyTargetsActiveTools )
+{
+    AI_CONTEXT_SNAPSHOT routing;
+    routing.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    BOOST_CHECK( AiAgentSnapshotNeedsContinuousBackgroundIdle( routing ) );
+
+    AI_CONTEXT_SNAPSHOT panel;
+    panel.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    AI_PANEL_STATE_RECORD panelState;
+    panelState.m_Id = wxS( "board_setup.layers" );
+    panelState.m_FocusedControlId = wxS( "board_setup.layers.grid.r0.c1" );
+    panel.m_PanelStates.push_back( panelState );
+    BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( panel ) );
+    BOOST_CHECK( !AiAgentSnapshotNeedsContinuousBackgroundIdle( panel ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickFingerprintTracksSemanticState )
+{
+    AI_CONTEXT_SNAPSHOT first;
+    first.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_Version.m_DocumentRevision = 10;
+    first.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    first.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"routing_track\",\"start\":{\"x\":1,\"y\":2}}" );
+
+    AI_CONTEXT_SNAPSHOT second = first;
+    second.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"routing_track\",\"start\":{\"x\":3,\"y\":4}}" );
+
+    BOOST_CHECK( !AiAgentBackgroundTickFingerprint( first ).IsEmpty() );
+    BOOST_CHECK( AiAgentBackgroundTickFingerprint( first )
+                 != AiAgentBackgroundTickFingerprint( second ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelQueuesRepeatedActiveToolBackgroundTicks )
+{
+    AI_CONTEXT_SNAPSHOT routing;
+    routing.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_Version.m_DocumentRevision = 10;
+    routing.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    routing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    routing.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"routing_track\",\"start\":{\"x\":1,\"y\":2}}" );
+
+    const wxString routingFingerprint =
+            AiAgentBackgroundTickFingerprint( routing );
+    BOOST_REQUIRE( !routingFingerprint.IsEmpty() );
+    BOOST_CHECK( AiAgentShouldQueueBackgroundTick( routing,
+                                                   routingFingerprint ) );
+
+    AI_CONTEXT_SNAPSHOT panel;
+    panel.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_Version.m_DocumentRevision = 10;
+    panel.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    panel.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    AI_PANEL_STATE_RECORD panelState;
+    panelState.m_Id = wxS( "board_setup.layers" );
+    panelState.m_Title = wxS( "Board Setup" );
+    panelState.m_FocusedControlId = wxS( "board_setup.layers.grid.r0.c1" );
+    panelState.m_FocusedControlLabel = wxS( "Layer name" );
+    panel.m_PanelStates.push_back( panelState );
+
+    const wxString panelFingerprint = AiAgentBackgroundTickFingerprint( panel );
+    BOOST_REQUIRE( !panelFingerprint.IsEmpty() );
+    BOOST_CHECK( !AiAgentShouldQueueBackgroundTick( panel,
+                                                    panelFingerprint ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( AgentPanelFormatsWorkspaceContextTitlesAndSuggestionSummary )
 {
     BOOST_CHECK_EQUAL( AiAgentWorkspaceContextTitle( AI_AGENT_WORKSPACE_CONTEXT_KIND::Routing ),
@@ -322,6 +553,13 @@ BOOST_AUTO_TEST_CASE( AgentPanelFormatsComposerStatusLifecycle )
     BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
                        wxString( wxS( "Ready to send" ) ) );
 
+    view.m_ChatAgentBusy = true;
+    view.m_LatestRequestId = 7;
+    BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
+                       wxString( wxS( "Agent thinking" ) ) );
+
+    view.m_ChatAgentBusy = false;
+    view.m_LatestRequestId = 0;
     view.m_InputHasText = false;
     view.m_BackgroundAgentEnabled = true;
     BOOST_CHECK_EQUAL( AiAgentComposerStatusText( view ),
@@ -368,6 +606,72 @@ BOOST_AUTO_TEST_CASE( AgentPanelQueuesBackgroundUpdatesAsAsyncWork )
     view.m_HasContextProvider = false;
     BOOST_CHECK( AiAgentBackgroundUpdateAction( view )
                  == AI_AGENT_BACKGROUND_UPDATE_ACTION::Ignore );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundQueueUsesConfiguredModelRuntime )
+{
+    const std::string source = readAiAgentPanelSource();
+
+    BOOST_CHECK_EQUAL( source.find( "AI_AGENT_PANEL_MODEL workerModel" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( source.find( "immediateBackgroundCandidate(" ),
+                       std::string::npos );
+    BOOST_CHECK( source.find( "model->UpdateSuggestionsIfBackgroundEnabled" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelResetsBackgroundTickAfterSuggestionReview )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string acceptBody = sourceFunctionBody(
+            source, "bool AI_AGENT_PANEL::AcceptLatestSuggestion()",
+            "bool AI_AGENT_PANEL::RejectLatestSuggestion()" );
+    const std::string rejectBody = sourceFunctionBody(
+            source, "bool AI_AGENT_PANEL::RejectLatestSuggestion()",
+            "bool AI_AGENT_PANEL::HandlePreviewShortcut" );
+
+    BOOST_CHECK( acceptBody.find( "m_LastBackgroundTickFingerprint.Clear()" )
+                 != std::string::npos );
+    BOOST_CHECK( rejectBody.find( "m_LastBackgroundTickFingerprint.Clear()" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelDoesNotAutoAcceptPendingChatSessionWhenResponseFinishes )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string finishBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::runPreparedChatRequest(",
+            "void AI_AGENT_PANEL::ConfigureActionToolCalls(" );
+
+    BOOST_CHECK( finishBody.find(
+            "autoAcceptCompletedChatSession()" ) == std::string::npos );
+    BOOST_CHECK( finishBody.find(
+            "model->FinishPreparedChatRequest( std::move( state )," )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelSemanticViewEnablesReviewForPendingChatSession )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string semanticBody = sourceFunctionBody(
+            source, "AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const",
+            "AI_PANEL_STATE_RECORD AI_AGENT_PANEL::SemanticPanelStateRecord() const" );
+    const std::string modeBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::updateModeControls()",
+            "void AI_AGENT_PANEL::updateComposerStatus()" );
+
+    BOOST_CHECK( semanticBody.find( "HasPendingChatSessionPreview()" )
+                 != std::string::npos );
+    BOOST_CHECK( semanticBody.find( "pendingChatSessionPreview" )
+                 != std::string::npos );
+    BOOST_CHECK( modeBody.find( "HasPendingChatSessionPreview()" )
+                 != std::string::npos );
+    BOOST_CHECK( modeBody.find( "m_PreviewButton->Enable( canPreviewSuggestion )" )
+                 != std::string::npos );
 }
 
 
@@ -500,19 +804,58 @@ BOOST_AUTO_TEST_CASE( AgentPanelDetectsWorkspacePreviewSuggestions )
                  "\"position\":{\"x\":100,\"y\":200}}" );
     BOOST_CHECK( AiAgentSuggestionTargetsWorkspacePreview( anchorPreview ) );
 
+    AI_SUGGESTION_RECORD routePreview;
+    routePreview.m_ArgumentsJson =
+            wxS( "{\"operation\":\"route_segment_preview\","
+                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":200000,"
+                 "\"start\":{\"x\":1000000,\"y\":2000000},"
+                 "\"end\":{\"x\":3000000,\"y\":2000000}}" );
+    BOOST_CHECK( AiAgentSuggestionTargetsWorkspacePreview( routePreview ) );
+    BOOST_CHECK( AiAgentSuggestionTargetsAutomaticPreview( routePreview ) );
+
+    AI_SUGGESTION_RECORD viaPreview;
+    viaPreview.m_ArgumentsJson =
+            wxS( "{\"operation\":\"place_via_preview\","
+                 "\"net\":\"GND\",\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":3000000,\"y\":2000000}}" );
+    BOOST_CHECK( AiAgentSuggestionTargetsWorkspacePreview( viaPreview ) );
+    BOOST_CHECK( AiAgentSuggestionTargetsAutomaticPreview( viaPreview ) );
+
+    AI_SUGGESTION_RECORD shapePreview;
+    shapePreview.m_ArgumentsJson =
+            wxS( "{\"operation\":\"create_shape_preview\","
+                 "\"shape\":\"segment\",\"layer\":\"Dwgs.User\",\"width\":100000,"
+                 "\"start\":{\"x\":1000000,\"y\":1000000},"
+                 "\"end\":{\"x\":2000000,\"y\":1000000}}" );
+    BOOST_CHECK( AiAgentSuggestionTargetsWorkspacePreview( shapePreview ) );
+    BOOST_CHECK( AiAgentSuggestionTargetsAutomaticPreview( shapePreview ) );
+
+    AI_SUGGESTION_RECORD zonePreview;
+    zonePreview.m_ArgumentsJson =
+            wxS( "{\"operation\":\"create_copper_zone_preview\","
+                 "\"net\":\"GND\",\"layer\":\"F.Cu\","
+                 "\"points\":[{\"x\":1000000,\"y\":1000000},"
+                 "{\"x\":3000000,\"y\":1000000},"
+                 "{\"x\":3000000,\"y\":3000000},"
+                 "{\"x\":1000000,\"y\":3000000}]}" );
+    BOOST_CHECK( AiAgentSuggestionTargetsWorkspacePreview( zonePreview ) );
+    BOOST_CHECK( AiAgentSuggestionTargetsAutomaticPreview( zonePreview ) );
+
     AI_SUGGESTION_RECORD panelPreview;
     panelPreview.m_ArgumentsJson =
             wxS( "{\"operation\":\"panel_fill_column_preview\","
                  "\"panel_id\":\"board_setup.clearance\","
                  "\"table_id\":\"clearance.rules\","
                  "\"column_id\":\"clearance\","
+                 "\"value\":\"0.20 mm\","
                  "\"source_row_id\":\"row.default\","
                  "\"target_row_ids\":[\"row.power\"]}" );
     BOOST_CHECK( !AiAgentSuggestionTargetsWorkspacePreview( panelPreview ) );
+    BOOST_CHECK( AiAgentSuggestionTargetsAutomaticPreview( panelPreview ) );
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelAutoPreviewsOnlyNewPreviewableWorkspaceSuggestions )
+BOOST_AUTO_TEST_CASE( AgentPanelAutoPreviewsOnlyNewPreviewableSuggestions )
 {
     AI_AGENT_BACKGROUND_PREVIEW_VIEW view;
     view.m_BackgroundAgentEnabled = true;
@@ -520,13 +863,18 @@ BOOST_AUTO_TEST_CASE( AgentPanelAutoPreviewsOnlyNewPreviewableWorkspaceSuggestio
     view.m_HasPreviewHandler = true;
     view.m_CanPreviewSuggestion = true;
     view.m_TargetsWorkspacePreview = true;
+    view.m_TargetsAutomaticPreview = true;
 
     BOOST_CHECK( AiAgentShouldAutoPreviewBackgroundSuggestion( view ) );
 
     view.m_TargetsWorkspacePreview = false;
-    BOOST_CHECK( !AiAgentShouldAutoPreviewBackgroundSuggestion( view ) );
+    BOOST_CHECK( AiAgentShouldAutoPreviewBackgroundSuggestion( view ) );
 
     view.m_TargetsWorkspacePreview = true;
+    view.m_TargetsAutomaticPreview = false;
+    BOOST_CHECK( AiAgentShouldAutoPreviewBackgroundSuggestion( view ) );
+
+    view.m_TargetsAutomaticPreview = true;
     view.m_HasPreviewHandler = false;
     BOOST_CHECK( !AiAgentShouldAutoPreviewBackgroundSuggestion( view ) );
 

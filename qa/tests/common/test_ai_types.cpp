@@ -335,6 +335,32 @@ BOOST_AUTO_TEST_CASE( ContextSnapshotProjectsPanelDynamicContext )
 }
 
 
+BOOST_AUTO_TEST_CASE( ContextSnapshotGivesFocusedPanelPriorityOverIdleToolState )
+{
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+
+    AI_PANEL_STATE_RECORD panel;
+    panel.m_Id = wxS( "pcb.board_setup.layers" );
+    panel.m_Title = wxS( "Board Setup" );
+    panel.m_FocusedControlId = wxS( "board_setup.layers.grid.r2.c1" );
+    panel.m_FocusedControlLabel = wxS( "Layer name" );
+    snapshot.m_PanelStates.push_back( panel );
+
+    nlohmann::json context = contextJson( snapshot );
+    const nlohmann::json& dynamicContext = context["dynamic_context"];
+    BOOST_CHECK_EQUAL( dynamicContext["kind"].get<std::string>(), "panel" );
+    BOOST_CHECK_EQUAL( dynamicContext["source"].get<std::string>(),
+                       "panel_state" );
+    BOOST_CHECK_EQUAL( dynamicContext["tool_state_kind"].get<std::string>(),
+                       "idle" );
+    BOOST_CHECK_EQUAL( dynamicContext["focused_panel_id"].get<std::string>(),
+                       "pcb.board_setup.layers" );
+}
+
+
 BOOST_AUTO_TEST_CASE( ContextSnapshotProjectsGeneralAndIdleDynamicContexts )
 {
     AI_CONTEXT_SNAPSHOT selecting;

@@ -168,8 +168,10 @@ std::string dynamicContextKind( const AI_CONTEXT_SNAPSHOT& aSnapshot,
 {
     std::string kind = dynamicContextKindForToolState( aSnapshot.m_ToolState.m_Kind );
 
-    if( kind == "unknown" && aFocusedPanel )
+    if( aFocusedPanel && ( kind == "unknown" || kind == "idle" ) )
+    {
         return "panel";
+    }
 
     return kind;
 }
@@ -178,6 +180,13 @@ std::string dynamicContextKind( const AI_CONTEXT_SNAPSHOT& aSnapshot,
 std::string dynamicContextSource( const AI_CONTEXT_SNAPSHOT& aSnapshot,
                                   const AI_PANEL_STATE_RECORD* aFocusedPanel )
 {
+    if( aFocusedPanel
+        && ( aSnapshot.m_ToolState.m_Kind == AI_TOOL_STATE_KIND::Unknown
+             || aSnapshot.m_ToolState.m_Kind == AI_TOOL_STATE_KIND::Idle ) )
+    {
+        return "panel_state";
+    }
+
     if( aSnapshot.m_ToolState.m_Kind != AI_TOOL_STATE_KIND::Unknown )
         return "tool_state";
 

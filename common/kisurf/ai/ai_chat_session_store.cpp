@@ -2,6 +2,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <utility>
 
 #include <wx/ffile.h>
@@ -129,6 +130,18 @@ wxString AI_CHAT_SESSION_STORE::SessionPath( uint64_t aConversationId ) const
             wxS( "chat_session_%llu.json" ),
             static_cast<unsigned long long>( aConversationId ) ) );
     return path.GetFullPath();
+}
+
+
+uint64_t AI_CHAT_SESSION_STORE::NextConversationId(
+        uint64_t aMinimumConversationId ) const
+{
+    uint64_t conversationId = std::max<uint64_t>( 1, aMinimumConversationId );
+
+    while( wxFileExists( SessionPath( conversationId ) ) )
+        ++conversationId;
+
+    return conversationId;
 }
 
 

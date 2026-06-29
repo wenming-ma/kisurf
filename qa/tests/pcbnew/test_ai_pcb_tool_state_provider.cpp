@@ -22,7 +22,13 @@
 #include <tool/tool_manager.h>
 #include <view/view.h>
 
+#include <fstream>
+#include <sstream>
 #include <string>
+
+#ifndef QA_SRC_ROOT
+#error QA_SRC_ROOT must be defined for AI PCB tool state provider tests.
+#endif
 
 namespace
 {
@@ -32,10 +38,51 @@ nlohmann::json parseJson( const wxString& aJson )
     return nlohmann::json::parse(
             buffer.data() ? std::string( buffer.data(), buffer.length() ) : std::string() );
 }
+
+
+std::string readPcbEditFrameSource()
+{
+    const std::string path = std::string( QA_SRC_ROOT ) + "/pcbnew/pcb_edit_frame.cpp";
+    std::ifstream     in( path, std::ios::binary );
+
+    BOOST_REQUIRE_MESSAGE( in.good(), "Unable to read source file: " << path );
+
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+
+std::string sourceSlice( const std::string& aSource, const std::string& aStartNeedle,
+                         const std::string& aEndNeedle )
+{
+    const size_t start = aSource.find( aStartNeedle );
+    BOOST_REQUIRE_MESSAGE( start != std::string::npos,
+                           "Unable to find source marker: " << aStartNeedle );
+
+    const size_t end = aSource.find( aEndNeedle, start + aStartNeedle.size() );
+    BOOST_REQUIRE_MESSAGE( end != std::string::npos,
+                           "Unable to find source marker: " << aEndNeedle );
+
+    return aSource.substr( start, end - start );
+}
 } // namespace
 
 
 BOOST_AUTO_TEST_SUITE( AiPcbToolStateProvider )
+
+
+BOOST_AUTO_TEST_CASE( PcbEditFrameRequestsMoreIdleTicksWhileBackgroundAgentCanObserve )
+{
+    const std::string source = readPcbEditFrameSource();
+    const std::string idleHandler = sourceSlice(
+            source, "Bind( wxEVT_IDLE,", "resolveCanvasType();" );
+
+    BOOST_CHECK( idleHandler.find( "PulseBackgroundAgent" ) != std::string::npos );
+    BOOST_CHECK( idleHandler.find( "aEvent.RequestMore()" ) != std::string::npos );
+    BOOST_CHECK( idleHandler.find( "aEvent.RequestMore()" )
+                 < idleHandler.find( "aEvent.Skip()" ) );
+}
 
 
 BOOST_AUTO_TEST_CASE( MapsRecentPcbActionsIntoToolStateKinds )
@@ -81,6 +128,18 @@ BOOST_AUTO_TEST_CASE( MapsRecentPcbActionsIntoToolStateKinds )
                        static_cast<int>( AI_TOOL_STATE_KIND::DrawingZone ) );
 
     provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing.ruleArea" ) );
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::DrawingZone ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing.zoneCutout" ) );
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::DrawingZone ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
                                           "pcbnew.InteractiveMove.move" ) );
     snapshot = provider.BuildToolState( version );
     BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
@@ -107,6 +166,26 @@ BOOST_AUTO_TEST_CASE( ObservesToolManagerEvents )
     BOOST_REQUIRE( snapshot.m_HasCursorBoardPosition );
     BOOST_CHECK_EQUAL( snapshot.m_CursorBoardPosition.x, 12 );
     BOOST_CHECK_EQUAL( snapshot.m_CursorBoardPosition.y, 34 );
+}
+
+
+BOOST_AUTO_TEST_CASE( CancelClearsStaleActiveActionState )
+{
+    KISURF_AI_PCB_TOOL_STATE_PROVIDER provider( nullptr );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveRouter.SingleTrack" ) );
+
+    AI_TOOL_STATE_SNAPSHOT active = provider.BuildToolState( AI_CONTEXT_VERSION() );
+    BOOST_CHECK_EQUAL( static_cast<int>( active.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::RoutingTrack ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_CANCEL_TOOL ) );
+
+    AI_TOOL_STATE_SNAPSHOT cancelled = provider.BuildToolState( AI_CONTEXT_VERSION() );
+    BOOST_CHECK_EQUAL( static_cast<int>( cancelled.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::Idle ) );
+    BOOST_CHECK( cancelled.m_ActiveActionName.IsEmpty() );
 }
 
 

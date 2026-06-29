@@ -5,11 +5,13 @@
 #include <kisurf/ai/ai_artifact_store.h>
 #include <kisurf/ai/ai_chat_session_store.h>
 #include <kisurf/ai/ai_local_text_memory.h>
+#include <kisurf/ai/ai_next_action_session_store.h>
 #include <kisurf/ai/ai_provider.h>
 #include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
 
+#include <algorithm>
 #include <memory>
 #include <deque>
 #include <wx/arrstr.h> // for MSVC to see std::vector<wxString> is exported from wx
@@ -77,6 +79,25 @@ wxString uniquePanelChatSessionDirectory( const wxString& aSuffix )
 }
 
 
+wxString uniquePanelNextActionSessionDirectory( const wxString& aSuffix )
+{
+    wxString base = wxFileName::CreateTempFileName( wxS( "ksn" ) );
+
+    if( wxFileExists( base ) )
+        wxRemoveFile( base );
+
+    wxFileName path( base );
+    path.SetFullName( wxString::Format( wxS( "kisurf_panel_next_action_sessions_%s_%lu" ),
+                                        aSuffix,
+                                        static_cast<unsigned long>( wxGetProcessId() ) ) );
+
+    if( wxDirExists( path.GetFullPath() ) )
+        wxFileName::Rmdir( path.GetFullPath(), wxPATH_RMDIR_RECURSIVE );
+
+    return path.GetFullPath();
+}
+
+
 AI_PROVIDER_REQUEST sessionRequestWithContext()
 {
     AI_PROVIDER_REQUEST request;
@@ -116,6 +137,7 @@ class CAPTURING_AI_PROVIDER : public AI_PROVIDER
 public:
     AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
     {
+        ++m_CallCount;
         m_LastRequest = aRequest;
 
         AI_PROVIDER_RESPONSE response;
@@ -126,6 +148,7 @@ public:
     }
 
     AI_PROVIDER_REQUEST m_LastRequest;
+    int                 m_CallCount = 0;
 };
 
 
@@ -184,6 +207,43 @@ public:
         call.m_ToolName = wxS( "kisurf_run_action" );
         call.m_ArgumentsJson = wxS( "{\"action\":\"common.Control.showAgentPanel\"}" );
         response.m_ToolCalls.push_back( call );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class SESSION_MUTATION_CHAT_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "session mutation chat" );
+
+        if( aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Creating a via through the session runtime." );
+
+            AI_TOOL_CALL_RECORD call;
+            call.m_RequestId = aRequest.m_RequestId;
+            call.m_ToolCallId = wxS( "call_create_via" );
+            call.m_ToolName = wxS( "kisurf_run_atomic_operation" );
+            call.m_ArgumentsJson =
+                    wxS( "{\"kind\":\"pcb.create_via\","
+                         "\"arguments\":{\"alias\":\"chat-auto-via\","
+                         "\"position\":{\"x\":25,\"y\":50}}}" );
+            response.m_ToolCalls.push_back( call );
+            return response;
+        }
+
+        response.m_Body = wxS( "Placed the via." );
         return response;
     }
 
@@ -839,23 +899,133 @@ BOOST_AUTO_TEST_CASE( SendAppendsUserAndAgentMessages )
 }
 
 
+BOOST_AUTO_TEST_CASE( PreparedChatRequestAppendsUserBeforeProviderRuns )
+{
+    auto provider = std::make_unique<CAPTURING_AI_PROVIDER>();
+    CAPTURING_AI_PROVIDER* providerPtr = provider.get();
+    AI_AGENT_PANEL_MODEL model( std::move( provider ) );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "inspect this board" ), AI_EDITOR_KIND::Pcb, snapshot );
+
+    BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 0 );
+    BOOST_REQUIRE_EQUAL( model.Messages().size(), 1 );
+    BOOST_CHECK_EQUAL( model.Messages().front().m_Role, wxString( wxS( "user" ) ) );
+    BOOST_CHECK_EQUAL( model.Messages().front().m_Text,
+                       wxString( wxS( "inspect this board" ) ) );
+    BOOST_CHECK( state.m_DocumentWriteOwned );
+    BOOST_CHECK_EQUAL( state.m_Request.m_UserText,
+                       wxString( wxS( "inspect this board" ) ) );
+
+    AI_PROVIDER_RESPONSE response = model.ExecutePreparedChatRequest( state );
+    BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 1 );
+
+    model.FinishPreparedChatRequest( std::move( state ), response );
+
+    BOOST_REQUIRE_EQUAL( model.Messages().size(), 2 );
+    BOOST_CHECK_EQUAL( model.Messages().back().m_Role,
+                       wxString( wxS( "assistant" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( PreparedChatRequestDoesNotDuplicateCurrentUserInRecentTurns )
+{
+    auto provider = std::make_unique<CAPTURING_AI_PROVIDER>();
+    AI_AGENT_PANEL_MODEL model( std::move( provider ) );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+
+    model.SendUserText( wxS( "prior constraint" ), AI_EDITOR_KIND::Pcb, snapshot );
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "current task" ), AI_EDITOR_KIND::Pcb, snapshot );
+
+    BOOST_REQUIRE_EQUAL( model.Messages().size(), 3 );
+    BOOST_CHECK_EQUAL( model.Messages().back().m_Role, wxString( wxS( "user" ) ) );
+    BOOST_CHECK_EQUAL( model.Messages().back().m_Text, wxString( wxS( "current task" ) ) );
+
+    bool sawRecentTurns = false;
+
+    for( const AI_PROVIDER_INPUT_BLOCK& block : state.m_Request.m_ProviderInputBlocks )
+    {
+        if( block.m_Id != wxS( "chat.recent_turns" ) )
+            continue;
+
+        sawRecentTurns = true;
+        BOOST_CHECK( block.m_Text.Contains( wxS( "prior constraint" ) ) );
+        BOOST_CHECK( !block.m_Text.Contains( wxS( "current task" ) ) );
+    }
+
+    BOOST_CHECK( sawRecentTurns );
+}
+
+
+BOOST_AUTO_TEST_CASE( PreparedChatRequestStreamsRuntimeProgressEvents )
+{
+    auto* provider = new RUNTIME_ACTIVITY_CAPTURE_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_PANEL_TOOL_CALL_HANDLER handler;
+    model.SetToolCallHandler( &handler );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "show panel" ), AI_EDITOR_KIND::Pcb, snapshot );
+
+    std::vector<AI_RUNTIME_STREAM_EVENT> events;
+    AI_PROVIDER_RESPONSE response =
+            model.ExecutePreparedChatRequest(
+                    state,
+                    [&]( const AI_RUNTIME_STREAM_EVENT& aEvent )
+                    {
+                        events.push_back( aEvent );
+                    } );
+
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool result received." ) ) );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+
+    const auto toolStarted = std::find_if(
+            events.begin(), events.end(),
+            []( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                return aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ToolCallStarted;
+            } );
+
+    BOOST_REQUIRE( toolStarted != events.end() );
+    BOOST_CHECK_EQUAL( toolStarted->m_ToolCall.m_ToolName,
+                       wxString( wxS( "kisurf_run_action" ) ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( events.back().m_Kind ),
+                       static_cast<int>( AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse ) );
+
+    model.FinishPreparedChatRequest( std::move( state ), response );
+    BOOST_REQUIRE_EQUAL( model.Messages().size(), 2 );
+    BOOST_CHECK_EQUAL( model.Messages().back().m_Text,
+                       wxString( wxS( "Tool result received." ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( StartNewChatCreatesModelConversationBoundary )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    const uint64_t firstSession = model.ActiveChatSessionId();
 
     model.SendUserText( wxS( "old raw transcript should stay archived" ),
                         AI_EDITOR_KIND::Pcb );
 
     BOOST_REQUIRE_EQUAL( model.Messages().size(), 2 );
-    BOOST_CHECK_EQUAL( provider->m_LastRequest.m_ConversationId, 1 );
+    BOOST_CHECK_EQUAL( provider->m_LastRequest.m_ConversationId, firstSession );
 
     AI_ACTIVITY_RECORD oldActivity;
     oldActivity.m_ActionName = wxS( "old.chat.tool" );
     oldActivity.m_Message = wxS( "OLD_ACTIVITY_NEEDLE" );
     model.RecordActivity( oldActivity );
-
-    const uint64_t firstSession = model.ActiveChatSessionId();
 
     model.StartNewChat();
 
@@ -950,6 +1120,44 @@ BOOST_AUTO_TEST_CASE( StartNewChatCancelsActiveExecutionSessionBoundary )
 }
 
 
+BOOST_AUTO_TEST_CASE( SendUserTextKeepsCompletedChatExecutionSessionPendingAcceptance )
+{
+    auto* provider = new SESSION_MUTATION_CHAT_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+
+    RECORDING_PANEL_RECOVERY_ACCEPT_ADAPTER acceptAdapter;
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &acceptAdapter );
+    model.SetToolCallHandler( &handler );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_Version.m_DocumentRevision = 10;
+    snapshot.m_Version.m_SelectionRevision = 2;
+    snapshot.m_Version.m_ViewRevision = 4;
+
+    AI_PROVIDER_RESPONSE response =
+            model.SendUserText( wxS( "place one via" ), AI_EDITOR_KIND::Pcb,
+                                snapshot );
+
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Placed the via." ) ) );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_CommitCount, 0 );
+    BOOST_CHECK( acceptAdapter.m_OperationKinds.empty() );
+    BOOST_CHECK( handler.ActiveSession() );
+    BOOST_CHECK( handler.HasPendingSessionPreview() );
+
+    const std::vector<AI_ACTIVITY_RECORD> activity = model.ActivityRecords();
+    BOOST_CHECK(
+            std::none_of( activity.begin(), activity.end(),
+                          []( const AI_ACTIVITY_RECORD& aRecord )
+                          {
+                              return aRecord.m_ToolCallId
+                                             == wxS( "chat_session_auto_accept" );
+                          } ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( SendUserTextIncludesCurrentSessionRecentTurns )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
@@ -980,6 +1188,7 @@ BOOST_AUTO_TEST_CASE( StartNewChatArchivesPreviousTranscriptArtifact )
     AI_ARTIFACT_STORE artifactStore( path );
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
     model.SetArtifactStore( &artifactStore );
+    const uint64_t conversationId = model.ActiveChatSessionId();
 
     AI_CONTEXT_SNAPSHOT snapshot;
     snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
@@ -1006,7 +1215,8 @@ BOOST_AUTO_TEST_CASE( StartNewChatArchivesPreviousTranscriptArtifact )
     BOOST_CHECK_EQUAL( artifacts.front().m_RetentionClass,
                        wxString( wxS( "session_archive" ) ) );
     BOOST_CHECK( artifacts.front().m_MetadataJson.Contains(
-            wxS( "\"conversation_id\":1" ) ) );
+            wxString::Format( wxS( "\"conversation_id\":%llu" ),
+                              static_cast<unsigned long long>( conversationId ) ) ) );
     BOOST_CHECK( artifacts.front().m_MetadataJson.Contains(
             wxS( "\"message_count\":2" ) ) );
 
@@ -1092,6 +1302,101 @@ BOOST_AUTO_TEST_CASE( ChatSessionStoreWritesCurrentSessionJsonFile )
 }
 
 
+BOOST_AUTO_TEST_CASE( PreparedChatRequestPersistsUserMessageBeforeProviderRuns )
+{
+    wxString directory =
+            uniquePanelChatSessionDirectory( wxS( "prepared_user" ) );
+
+    AI_CHAT_SESSION_STORE store( directory );
+    AI_AGENT_PANEL_MODEL  model( std::make_unique<AI_STUB_PROVIDER>() );
+    model.SetChatSessionStore( &store );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ProjectId = wxS( "project-prepared-chat" );
+    snapshot.m_DocumentId = wxS( "board-prepared-chat" );
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "persist before provider runs" ), AI_EDITOR_KIND::Pcb,
+            snapshot );
+
+    wxString error;
+    AI_CHAT_SESSION_RECORD session =
+            store.LoadSession( model.ActiveChatSessionId(), error );
+
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_REQUIRE_EQUAL( session.m_Messages.size(), 1 );
+    BOOST_CHECK_EQUAL( session.m_Messages.front().m_Role,
+                       wxString( wxS( "user" ) ) );
+    BOOST_CHECK( session.m_Messages.front().m_Text.Contains(
+            wxS( "persist before provider runs" ) ) );
+    BOOST_CHECK_EQUAL( session.m_ProjectId,
+                       wxString( wxS( "project-prepared-chat" ) ) );
+    BOOST_CHECK_EQUAL( session.m_DocumentId,
+                       wxString( wxS( "board-prepared-chat" ) ) );
+
+    AI_PROVIDER_RESPONSE response = model.ExecutePreparedChatRequest( state );
+    model.FinishPreparedChatRequest( std::move( state ), std::move( response ) );
+
+    AI_CHAT_SESSION_RECORD finished =
+            store.LoadSession( model.ActiveChatSessionId(), error );
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_REQUIRE_EQUAL( finished.m_Messages.size(), 2 );
+    BOOST_CHECK_EQUAL( finished.m_Messages.back().m_Role,
+                       wxString( wxS( "assistant" ) ) );
+
+    wxFileName::Rmdir( directory, wxPATH_RMDIR_RECURSIVE );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatSessionStoreStartsAfterExistingSessionFiles )
+{
+    wxString directory = uniquePanelChatSessionDirectory( wxS( "existing_json" ) );
+
+    AI_CHAT_SESSION_STORE store( directory );
+
+    AI_CHAT_SESSION_RECORD existing;
+    existing.m_ConversationId = 1;
+    existing.m_ProjectId = wxS( "project-existing" );
+    existing.m_DocumentId = wxS( "board-existing" );
+    existing.m_Messages.push_back(
+            { wxS( "user" ), wxS( "DO_NOT_OVERWRITE_EXISTING_SESSION" ) } );
+
+    wxString error;
+    BOOST_REQUIRE( store.WriteSession( existing, error ) );
+    BOOST_CHECK( error.IsEmpty() );
+
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    model.SetChatSessionStore( &store );
+
+    BOOST_CHECK_EQUAL( model.ActiveChatSessionId(), 2 );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ProjectId = wxS( "project-new" );
+    snapshot.m_DocumentId = wxS( "board-new" );
+
+    model.SendUserText( wxS( "start without overwriting old chat" ),
+                        AI_EDITOR_KIND::Pcb, snapshot );
+
+    AI_CHAT_SESSION_RECORD previous = store.LoadSession( 1, error );
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_REQUIRE_EQUAL( previous.m_Messages.size(), 1 );
+    BOOST_CHECK( previous.m_Messages.front().m_Text.Contains(
+            wxS( "DO_NOT_OVERWRITE_EXISTING_SESSION" ) ) );
+
+    AI_CHAT_SESSION_RECORD current =
+            store.LoadSession( model.ActiveChatSessionId(), error );
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_CHECK_EQUAL( current.m_ConversationId, 2 );
+    BOOST_REQUIRE_EQUAL( current.m_Messages.size(), 2 );
+    BOOST_CHECK( current.m_Messages.front().m_Text.Contains(
+            wxS( "start without overwriting old chat" ) ) );
+
+    wxFileName::Rmdir( directory, wxPATH_RMDIR_RECURSIVE );
+}
+
+
 BOOST_AUTO_TEST_CASE( ChatSessionStoreWritesToolCallsInCurrentSessionJsonFile )
 {
     wxString directory = uniquePanelChatSessionDirectory( wxS( "tool_calls" ) );
@@ -1172,6 +1477,48 @@ BOOST_AUTO_TEST_CASE( SendUserTextDropsOlderChatTurnsFromProviderInput )
             wxS( "Earlier chat summary" ) ) );
     BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "EARLIEST_CONTEXT_NEEDLE" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( SendUserTextTracesTruncatedChatTurnsInProviderInput )
+{
+    auto* provider = new CAPTURING_AI_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+
+    model.SendUserText( wxS( "older message one should be omitted" ),
+                        AI_EDITOR_KIND::Pcb );
+    model.SendUserText( wxS( "older message two stays near boundary" ),
+                        AI_EDITOR_KIND::Pcb );
+
+    wxString longText = wxS( "LONG_CONTEXT_HEAD " );
+
+    for( int i = 0; i < 1600; ++i )
+        longText << wxS( "x" );
+
+    longText << wxS( " LONG_CONTEXT_TAIL_SHOULD_NOT_BE_SENT" );
+
+    model.SendUserText( longText, AI_EDITOR_KIND::Pcb );
+
+    for( int i = 0; i < 2; ++i )
+    {
+        model.SendUserText(
+                wxString::Format( wxS( "short recent turn %d" ), i ),
+                AI_EDITOR_KIND::Pcb );
+    }
+
+    model.SendUserText( wxS( "continue after long context" ),
+                        AI_EDITOR_KIND::Pcb );
+
+    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "LONG_CONTEXT_HEAD" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "[truncated chat turn]" ) ) );
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "LONG_CONTEXT_TAIL_SHOULD_NOT_BE_SENT" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
+            wxS( "truncated_chat_turn_count" ) ) );
+    BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
+            wxS( "older_message_count" ) ) );
 }
 
 
@@ -2105,6 +2452,7 @@ BOOST_AUTO_TEST_CASE( ChatRuntimeWritesPromptTraceThroughPanelModelStore )
     AI_PROMPT_TRACE_STORE store( path );
     AI_AGENT_PANEL_MODEL  model( std::make_unique<AI_STUB_PROVIDER>() );
     model.SetPromptTraceStore( &store );
+    const uint64_t conversationId = model.ActiveChatSessionId();
 
     model.SendUserText( wxS( "trace this chat request" ), AI_EDITOR_KIND::Pcb );
 
@@ -2112,7 +2460,7 @@ BOOST_AUTO_TEST_CASE( ChatRuntimeWritesPromptTraceThroughPanelModelStore )
     std::vector<AI_PROMPT_TRACE_ENTRY> entries = store.LoadAll( error );
 
     BOOST_REQUIRE_EQUAL( entries.size(), 1 );
-    BOOST_CHECK_EQUAL( entries.front().m_ConversationId, 1 );
+    BOOST_CHECK_EQUAL( entries.front().m_ConversationId, conversationId );
     BOOST_CHECK_EQUAL( entries.front().m_ProviderStatus,
                        wxString( wxS( "provider_response" ) ) );
     BOOST_CHECK( entries.front().m_PromptTraceJson.Contains( wxS( "user.request" ) ) );
@@ -2164,6 +2512,68 @@ BOOST_AUTO_TEST_CASE( NextActionRuntimeWritesPromptTraceThroughPanelModelStore )
 
     if( wxFileExists( path ) )
         wxRemoveFile( path );
+}
+
+
+BOOST_AUTO_TEST_CASE( NextActionRuntimeWritesSessionJsonThroughPanelModelStore )
+{
+    wxString directory =
+            uniquePanelNextActionSessionDirectory( wxS( "next_action" ) );
+
+    AI_NEXT_ACTION_SESSION_STORE store( directory );
+    AI_AGENT_PANEL_MODEL         model( std::make_unique<AI_STUB_PROVIDER>() );
+    model.SetNextActionSessionStore( &store );
+
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\","
+                   "\"reason_code\":\"panel_session_probe\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    context.m_ProjectId = wxS( "project-panel-next-action-session" );
+    context.m_DocumentId = wxS( "board-panel-next-action-session" );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled( context,
+                                                        makeSuggestionActivity(),
+                                                        wxS( "activity" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( nextActionProvider->m_Requests.size(), 1 );
+
+    const uint64_t conversationId =
+            nextActionProvider->m_Requests.front().m_ConversationId;
+    BOOST_CHECK( wxFileExists( store.SessionPath( conversationId ) ) );
+
+    wxString error;
+    AI_NEXT_ACTION_SESSION_RECORD record =
+            store.LoadSession( conversationId, error );
+    BOOST_CHECK( error.IsEmpty() );
+    BOOST_CHECK_EQUAL( record.m_ConversationId, conversationId );
+    BOOST_CHECK_EQUAL( record.m_SessionType, wxString( wxS( "placement" ) ) );
+    BOOST_CHECK_EQUAL( record.m_ProjectId,
+                       wxString( wxS( "project-panel-next-action-session" ) ) );
+    BOOST_CHECK_EQUAL( record.m_DocumentId,
+                       wxString( wxS( "board-panel-next-action-session" ) ) );
+    BOOST_REQUIRE_EQUAL( record.m_Steps.size(), 1 );
+    BOOST_CHECK_EQUAL( record.m_Steps.front().m_Status,
+                       wxString( wxS( "published" ) ) );
+    BOOST_CHECK( record.m_Steps.front().m_LlmDecisionJson.Contains(
+            wxS( "panel_session_probe" ) ) );
+
+    wxFileName::Rmdir( directory, wxPATH_RMDIR_RECURSIVE );
 }
 
 

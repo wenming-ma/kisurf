@@ -31,6 +31,12 @@ public:
     virtual ~AI_SESSION_SHADOW_BOARD_SEEDER() = default;
 
     virtual void Seed( AI_EXECUTION_SESSION& aSession ) = 0;
+    virtual void Seed( AI_EXECUTION_SESSION& aSession,
+                       const AI_PROVIDER_REQUEST& aRequest )
+    {
+        wxUnusedVar( aRequest );
+        Seed( aSession );
+    }
 };
 
 struct KICOMMON_API AI_SESSION_PREVIEW_RESULT
@@ -104,6 +110,7 @@ public:
     bool CancelActiveSession( const wxString& aReason );
     const AI_EXECUTION_SESSION* ActiveSession() const;
     bool HasPendingSessionPreview() const;
+    bool HasAcceptApplyAdapter() const { return m_AcceptAdapter != nullptr; }
     wxString ToolCatalogJson() const;
 
 private:
@@ -124,6 +131,7 @@ private:
     AI_EXECUTION_SESSION& openSessionFromRequest(
             const AI_PROVIDER_REQUEST& aRequest, const wxString& aBoardId,
             const wxString& aBaseHash );
+    bool ensureShadowBoardSeeded( wxString& aErrorCode, wxString& aMessage );
 
     void rememberCheckpointPreviewState( uint64_t aCheckpointId );
     void rememberRenderedPreview( const wxString& aArgumentsJson );
@@ -143,6 +151,8 @@ private:
     AI_SESSION_PREVIEW_SERVICE*          m_PreviewService = nullptr;
     AI_SESSION_SHADOW_BOARD_SEEDER*      m_ShadowBoardSeeder = nullptr;
     AI_SESSION_VALIDATION_SERVICE*       m_ValidationService = nullptr;
+    bool                                 m_ShadowBoardSeeded = false;
+    AI_CONTEXT_SNAPSHOT                  m_SessionOpenContextSnapshot;
     PREVIEW_RESTORE_STATE               m_CurrentPreviewState;
     std::map<uint64_t, PREVIEW_RESTORE_STATE> m_CheckpointPreviewStates;
     mutable std::mutex                  m_PythonEventMutex;

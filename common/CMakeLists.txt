@@ -137,10 +137,12 @@ set( KICOMMON_SRCS
     kisurf/ai/ai_model_config.cpp
     kisurf/ai/ai_model_settings_dialog_base.cpp
     kisurf/ai/ai_observability_log.cpp
+    kisurf/ai/ai_panel_state_wx_adapter.cpp
     kisurf/ai/ai_callback_action_runner.cpp
     kisurf/ai/ai_context_index.cpp
     kisurf/ai/ai_provider_input_compiler.cpp
     kisurf/ai/ai_local_text_memory.cpp
+    kisurf/ai/ai_marshaled_tool_call_handler.cpp
     kisurf/ai/ai_memory_store.cpp
     kisurf/ai/ai_token_budget_manager.cpp
     kisurf/ai/ai_prompt_trace_store.cpp

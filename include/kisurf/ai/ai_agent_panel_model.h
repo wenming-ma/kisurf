@@ -7,6 +7,7 @@
 #include <kisurf/ai/ai_local_text_memory.h>
 #include <kisurf/ai/ai_memory_store.h>
 #include <kisurf/ai/ai_next_action_runtime.h>
+#include <kisurf/ai/ai_next_action_session_store.h>
 #include <kisurf/ai/ai_observability_log.h>
 #include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_runtime.h>
@@ -26,6 +27,15 @@ struct KICOMMON_API AI_AGENT_MESSAGE
     wxString m_Text;
 };
 
+struct KICOMMON_API AI_CHAT_REQUEST_STATE
+{
+    AI_PROVIDER_REQUEST            m_Request;
+    AI_NEXT_ACTION_CONTEXT_VERSION m_OwnershipContext;
+    bool                           m_DocumentWriteOwned = false;
+    bool                           m_PreflightCompleted = false;
+    AI_PROVIDER_RESPONSE           m_PreflightResponse;
+};
+
 class KICOMMON_API AI_AGENT_PANEL_MODEL
 {
 public:
@@ -35,6 +45,16 @@ public:
     AI_PROVIDER_RESPONSE SendUserText( const wxString& aText, AI_EDITOR_KIND aEditorKind );
     AI_PROVIDER_RESPONSE SendUserText( const wxString& aText, AI_EDITOR_KIND aEditorKind,
                                        AI_CONTEXT_SNAPSHOT aContextSnapshot );
+    AI_CHAT_REQUEST_STATE PrepareUserTextRequest(
+            const wxString& aText, AI_EDITOR_KIND aEditorKind,
+            AI_CONTEXT_SNAPSHOT aContextSnapshot );
+    AI_PROVIDER_RESPONSE ExecutePreparedChatRequest(
+            const AI_CHAT_REQUEST_STATE& aState );
+    AI_PROVIDER_RESPONSE ExecutePreparedChatRequest(
+            const AI_CHAT_REQUEST_STATE& aState,
+            AI_RUNTIME_STREAM_EVENT_SINK aEventSink );
+    AI_PROVIDER_RESPONSE FinishPreparedChatRequest(
+            AI_CHAT_REQUEST_STATE aState, AI_PROVIDER_RESPONSE aResponse );
 
     bool CancelLastRequest();
     bool CancelRequest( uint64_t aRequestId );
@@ -62,6 +82,8 @@ public:
     const wxString& ArtifactStorePath() const;
     void SetChatSessionStore( AI_CHAT_SESSION_STORE* aStore );
     const wxString& ChatSessionStoreDirectory() const;
+    void SetNextActionSessionStore( AI_NEXT_ACTION_SESSION_STORE* aStore );
+    const wxString& NextActionSessionStoreDirectory() const;
     AI_PROVIDER_RECOVERY_POLICY LatestChatProviderRecoveryPolicy() const;
     AI_PROVIDER_RECOVERY_POLICY LatestNextActionProviderRecoveryPolicy() const;
     AI_PROVIDER_RECOVERY_RESUME_PACKET LatestChatProviderRecoveryResumePacket() const;
@@ -159,6 +181,8 @@ private:
     AI_ARTIFACT_STORE*                      m_ArtifactStore = nullptr;
     std::unique_ptr<AI_CHAT_SESSION_STORE>  m_DefaultChatSessionStore;
     AI_CHAT_SESSION_STORE*                  m_ChatSessionStore = nullptr;
+    std::unique_ptr<AI_NEXT_ACTION_SESSION_STORE> m_DefaultNextActionSessionStore;
+    AI_NEXT_ACTION_SESSION_STORE*           m_NextActionSessionStore = nullptr;
     AI_RUNTIME                              m_Runtime;
     AI_TOOL_CALL_HANDLER*                   m_ToolCallHandler = nullptr;
     std::unique_ptr<AI_NEXT_ACTION_RUNTIME> m_NextActionRuntime;

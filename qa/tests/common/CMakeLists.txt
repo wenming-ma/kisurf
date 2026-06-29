@@ -238,6 +238,10 @@ target_link_libraries( qa_common
     )
 
 if( WIN32 )
+    target_link_libraries( qa_common ws2_32 )
+endif()
+
+if( WIN32 )
     function( copy_runtime_dlls_for_qa_common aTarget )
         add_custom_command( TARGET qa_common POST_BUILD
             COMMAND ${CMAKE_COMMAND}
@@ -298,6 +302,7 @@ include_directories(
 )
 
 set_source_files_properties(
+        test_ai_agent_panel.cpp
         test_ai_agent_menu_discoverability.cpp
         test_ai_python_worker.cpp
         test_remote_provider_metadata.cpp

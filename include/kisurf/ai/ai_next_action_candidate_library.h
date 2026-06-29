@@ -17,7 +17,11 @@
 
 KICOMMON_API std::optional<AI_SUGGESTION_RECORD> AiGenerateViaPatternCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger );
+KICOMMON_API std::optional<AI_SUGGESTION_RECORD> AiGenerateViaPlacementCandidate(
+        const AI_SUGGESTION_TRIGGER& aTrigger );
 KICOMMON_API std::optional<AI_SUGGESTION_RECORD> AiGenerateRoutingSegmentCandidate(
+        const AI_SUGGESTION_TRIGGER& aTrigger );
+KICOMMON_API std::optional<AI_SUGGESTION_RECORD> AiGenerateDrawingZoneCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger );
 KICOMMON_API std::optional<AI_SUGGESTION_RECORD> AiGeneratePanelTableFillCandidate(
         const AI_SUGGESTION_TRIGGER& aTrigger );

@@ -8,6 +8,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <map>
+#include <string>
 #include <utility>
 #include <wx/utils.h>
 
@@ -36,6 +38,31 @@ wxString joinUrl( const wxString& aBaseUrl, const wxString& aPath )
 }
 
 
+struct PROVIDER_STREAM_WRITE_CONTEXT
+{
+    std::string*                  m_Buffer = nullptr;
+    const AI_HTTP_STREAM_HANDLER* m_Handler = nullptr;
+};
+
+
+size_t providerStreamWriteCallback( char* aContents, size_t aSize,
+                                    size_t aNmemb, void* aUserp )
+{
+    const size_t realSize = aSize * aNmemb;
+    auto* context =
+            static_cast<PROVIDER_STREAM_WRITE_CONTEXT*>( aUserp );
+    std::string chunk( aContents, realSize );
+
+    if( context && context->m_Buffer )
+        context->m_Buffer->append( chunk );
+
+    if( context && context->m_Handler && *context->m_Handler )
+        ( *context->m_Handler )( chunk );
+
+    return realSize;
+}
+
+
 bool defaultHttpHandler( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse,
                          wxString& aError )
 {
@@ -53,6 +80,18 @@ bool defaultHttpHandler( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aRes
     for( const AI_HTTP_HEADER& header : aRequest.m_Headers )
         curl.SetHeader( header.m_Name.ToStdString(), header.m_Value.ToStdString() );
 
+    std::string streamBuffer;
+    PROVIDER_STREAM_WRITE_CONTEXT streamContext{
+        &streamBuffer, &aRequest.m_StreamHandler
+    };
+
+    if( aRequest.m_StreamHandler )
+    {
+        curl_easy_setopt( curl.GetCurl(), CURLOPT_WRITEFUNCTION,
+                          providerStreamWriteCallback );
+        curl_easy_setopt( curl.GetCurl(), CURLOPT_WRITEDATA, &streamContext );
+    }
+
     if( aRequest.m_Method == wxS( "POST" ) )
         curl.SetPostFields( aRequest.m_Body.ToStdString() );
 
@@ -65,7 +104,9 @@ bool defaultHttpHandler( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aRes
     }
 
     aResponse.m_StatusCode = curl.GetResponseStatusCode();
-    aResponse.m_Body = wxString::FromUTF8( curl.GetBuffer().c_str() );
+    aResponse.m_Body = aRequest.m_StreamHandler
+                               ? wxString::FromUTF8( streamBuffer.c_str() )
+                               : wxString::FromUTF8( curl.GetBuffer().c_str() );
     return true;
 }
 
@@ -544,13 +585,17 @@ nlohmann::json queryItemsFilterSchema()
              { "properties",
                { { "type", { { "type", "string" } } },
                  { "net", { { "type", "string" } } },
-                 { "layer", { { "type", "string" } } },
-                 { "alias", { { "type", "string" } } },
-                 { "selection", { { "type", "boolean" } } },
-                 { "bbox",
-                   internalBoxSchema(
-                           "Bounding box intersection filter in internal coordinates." ) },
-                 { "handle", queryHandleFilterSchema() } } } };
+                  { "layer", { { "type", "string" } } },
+                  { "alias", { { "type", "string" } } },
+                  { "selection", { { "type", "boolean" } } },
+                  { "live_board",
+                    { { "type", "boolean" },
+                      { "description",
+                        "Opt in to seeding live-board items into the active session shadow board." } } },
+                  { "bbox",
+                    internalBoxSchema(
+                            "Bounding box intersection filter in internal coordinates." ) },
+                  { "handle", queryHandleFilterSchema() } } } };
 }
 
 
@@ -837,7 +882,11 @@ nlohmann::json sessionQueryItemsToolParameters()
 {
     return { { "type", "object" },
              { "properties",
-               { { "filter", queryItemsFilterSchema() } } },
+               { { "filter", queryItemsFilterSchema() },
+                 { "live_board",
+                   { { "type", "boolean" },
+                     { "description",
+                       "Opt in to seeding live-board items into the active session shadow board." } } } } },
              { "additionalProperties", false } };
 }
 
@@ -1247,6 +1296,214 @@ bool parseToolCalls( const nlohmann::json& aMessage, uint64_t aRequestId,
 
     return true;
 }
+
+
+struct OPENAI_STREAM_TOOL_CALL_PART
+{
+    std::string m_Id;
+    std::string m_Name;
+    std::string m_Arguments;
+};
+
+
+struct OPENAI_STREAM_STATE
+{
+    std::string                            m_Buffer;
+    wxString                               m_Content;
+    std::vector<OPENAI_STREAM_TOOL_CALL_PART> m_ToolCalls;
+    bool                                   m_SawEvent = false;
+    bool                                   m_Done = false;
+    wxString                               m_Error;
+};
+
+
+std::string trimSseDataPrefix( std::string aLine )
+{
+    if( !aLine.empty() && aLine.back() == '\r' )
+        aLine.pop_back();
+
+    constexpr char prefix[] = "data:";
+
+    if( aLine.rfind( prefix, 0 ) != 0 )
+        return {};
+
+    aLine.erase( 0, sizeof( prefix ) - 1 );
+
+    if( !aLine.empty() && aLine.front() == ' ' )
+        aLine.erase( 0, 1 );
+
+    return aLine;
+}
+
+
+void emitProviderTextDelta( const AI_PROVIDER_STREAM_EVENT_SINK& aSink,
+                            uint64_t aRequestId, const wxString& aDelta )
+{
+    if( !aSink || aDelta.IsEmpty() )
+        return;
+
+    AI_PROVIDER_STREAM_EVENT event;
+    event.m_RequestId = aRequestId;
+    event.m_TextDelta = aDelta;
+    aSink( event );
+}
+
+
+void accumulateStreamToolCalls( OPENAI_STREAM_STATE& aState,
+                                const nlohmann::json& aToolCalls )
+{
+    if( !aToolCalls.is_array() )
+        return;
+
+    for( const nlohmann::json& toolCall : aToolCalls )
+    {
+        if( !toolCall.is_object() )
+            continue;
+
+        const size_t index =
+                toolCall.contains( "index" ) && toolCall["index"].is_number_unsigned()
+                        ? toolCall["index"].get<size_t>()
+                        : aState.m_ToolCalls.size();
+
+        if( index >= aState.m_ToolCalls.size() )
+            aState.m_ToolCalls.resize( index + 1 );
+
+        OPENAI_STREAM_TOOL_CALL_PART& partial = aState.m_ToolCalls[index];
+
+        if( toolCall.contains( "id" ) && toolCall["id"].is_string() )
+            partial.m_Id += toolCall["id"].get<std::string>();
+
+        if( !toolCall.contains( "function" ) || !toolCall["function"].is_object() )
+            continue;
+
+        const nlohmann::json& function = toolCall["function"];
+
+        if( function.contains( "name" ) && function["name"].is_string() )
+            partial.m_Name += function["name"].get<std::string>();
+
+        if( function.contains( "arguments" ) && function["arguments"].is_string() )
+            partial.m_Arguments += function["arguments"].get<std::string>();
+    }
+}
+
+
+void processOpenAiStreamData( OPENAI_STREAM_STATE& aState,
+                              const std::string& aData,
+                              uint64_t aRequestId,
+                              const AI_PROVIDER_STREAM_EVENT_SINK& aSink )
+{
+    if( aData.empty() )
+        return;
+
+    aState.m_SawEvent = true;
+
+    if( aData == "[DONE]" )
+    {
+        aState.m_Done = true;
+        return;
+    }
+
+    nlohmann::json parsed = nlohmann::json::parse( aData, nullptr, false );
+
+    if( parsed.is_discarded() )
+    {
+        aState.m_Error = wxS( "AI provider returned malformed stream data." );
+        return;
+    }
+
+    if( !parsed.contains( "choices" ) || !parsed["choices"].is_array() )
+        return;
+
+    for( const nlohmann::json& choice : parsed["choices"] )
+    {
+        if( !choice.is_object() || !choice.contains( "delta" )
+            || !choice["delta"].is_object() )
+        {
+            continue;
+        }
+
+        const nlohmann::json& delta = choice["delta"];
+
+        if( delta.contains( "content" ) && delta["content"].is_string() )
+        {
+            wxString text = wxString::FromUTF8(
+                    delta["content"].get_ref<const std::string&>().c_str() );
+            aState.m_Content << text;
+            emitProviderTextDelta( aSink, aRequestId, text );
+        }
+
+        if( delta.contains( "tool_calls" ) )
+            accumulateStreamToolCalls( aState, delta["tool_calls"] );
+    }
+}
+
+
+void parseOpenAiStreamChunk( OPENAI_STREAM_STATE& aState,
+                             const std::string& aChunk,
+                             uint64_t aRequestId,
+                             const AI_PROVIDER_STREAM_EVENT_SINK& aSink )
+{
+    if( !aState.m_Error.IsEmpty() )
+        return;
+
+    aState.m_Buffer += aChunk;
+
+    size_t newline = std::string::npos;
+
+    while( ( newline = aState.m_Buffer.find( '\n' ) ) != std::string::npos )
+    {
+        std::string line = aState.m_Buffer.substr( 0, newline );
+        aState.m_Buffer.erase( 0, newline + 1 );
+
+        std::string data = trimSseDataPrefix( std::move( line ) );
+
+        if( !data.empty() )
+            processOpenAiStreamData( aState, data, aRequestId, aSink );
+
+        if( !aState.m_Error.IsEmpty() )
+            return;
+    }
+}
+
+
+void flushOpenAiStreamChunk( OPENAI_STREAM_STATE& aState,
+                             uint64_t aRequestId,
+                             const AI_PROVIDER_STREAM_EVENT_SINK& aSink )
+{
+    if( aState.m_Buffer.empty() )
+        return;
+
+    std::string pending = std::move( aState.m_Buffer );
+    aState.m_Buffer.clear();
+    parseOpenAiStreamChunk( aState, pending + "\n", aRequestId, aSink );
+}
+
+
+std::vector<AI_TOOL_CALL_RECORD> streamToolCallRecords(
+        const OPENAI_STREAM_STATE& aState, uint64_t aRequestId )
+{
+    std::vector<AI_TOOL_CALL_RECORD> records;
+
+    for( const OPENAI_STREAM_TOOL_CALL_PART& partial : aState.m_ToolCalls )
+    {
+        if( partial.m_Id.empty() || partial.m_Name.empty() )
+            continue;
+
+        AI_TOOL_CALL_RECORD record;
+        record.m_RequestId = aRequestId;
+        record.m_ToolCallId = wxString::FromUTF8( partial.m_Id.c_str() );
+        record.m_ToolName = wxString::FromUTF8( partial.m_Name.c_str() );
+        record.m_ArgumentsJson =
+                partial.m_Arguments.empty()
+                        ? wxString( wxS( "{}" ) )
+                        : wxString::FromUTF8( partial.m_Arguments.c_str() );
+        records.push_back( std::move( record ) );
+    }
+
+    return records;
+}
+
+
 } // namespace
 
 wxString AI_HTTP_REQUEST::HeaderValue( const wxString& aName ) const
@@ -1276,6 +1533,14 @@ wxString AI_PROVIDER_SETTINGS::DefaultBaseUrl()
 wxString AI_PROVIDER_SETTINGS::DefaultModel()
 {
     return wxS( "gpt-5.5" );
+}
+
+
+AI_PROVIDER_RESPONSE AI_PROVIDER::Generate( const AI_PROVIDER_REQUEST& aRequest,
+                                            AI_PROVIDER_STREAM_EVENT_SINK aStreamSink )
+{
+    wxUnusedVar( aStreamSink );
+    return Generate( aRequest );
 }
 
 
@@ -1341,6 +1606,14 @@ AI_OPENAI_COMPAT_PROVIDER::AI_OPENAI_COMPAT_PROVIDER( AI_PROVIDER_SETTINGS aSett
 
 AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQUEST& aRequest )
 {
+    return Generate( aRequest, AI_PROVIDER_STREAM_EVENT_SINK() );
+}
+
+
+AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
+        const AI_PROVIDER_REQUEST& aRequest,
+        AI_PROVIDER_STREAM_EVENT_SINK aStreamSink )
+{
     nlohmann::json retryHistory = nlohmann::json::array();
 
     AI_PROVIDER_REQUEST requestForCompile = aRequest;
@@ -1383,6 +1656,8 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     if( m_Settings.m_Model.IsEmpty() )
         m_Settings.m_Model = AI_PROVIDER_SETTINGS::DefaultModel();
 
+    const bool useStreaming = static_cast<bool>( aStreamSink );
+
     auto buildBody =
             [&]( const AI_PROVIDER_REQUEST& compiledRequestForBody )
             {
@@ -1394,9 +1669,17 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     const wxString systemPrompt =
             compiledRequestForBody.m_SystemPromptOverride.IsEmpty()
                     ? wxString( wxS( "You are KiSurf's native KiCad assistant. Use the "
-                                      "supplied editor context and tool catalog, propose "
-                                      "safe previews before edits, and never assume an edit "
-                                      "has been accepted until the user accepts it." ) )
+                                      "supplied editor context and use the supplied tools "
+                                      "for any concrete KiCad inspection or edit task. "
+                                      "For Chat Agent edit requests, create or update the "
+                                      "AI execution session through tools; KiSurf will "
+                                      "apply completed chat edits as one undoable board "
+                                      "commit. Do not describe a board mutation as done "
+                                      "unless the relevant tool result reports success. "
+                                      "When a tool result includes validation facts, "
+                                      "report issue_count and warning/error severities "
+                                      "exactly; do not describe a board with warnings or "
+                                      "issues as completely clean." ) )
                     : compiledRequestForBody.m_SystemPromptOverride;
 
     nlohmann::json messages = nlohmann::json::parse(
@@ -1560,25 +1843,50 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
     }
 
     body["parallel_tool_calls"] = false;
+
+    if( body.contains( "tools" ) && body["tools"].is_array()
+        && !body["tools"].empty() )
+    {
+        body["tool_choice"] = "auto";
+    }
+
+    if( useStreaming )
+        body["stream"] = true;
+
     return body;
             };
 
     AI_HTTP_RESPONSE httpResponse;
     wxString         error;
     bool             gotHttpResponse = false;
+    OPENAI_STREAM_STATE streamState;
 
     for( size_t providerAttempt = 0; providerAttempt < 2; ++providerAttempt )
     {
+        streamState = OPENAI_STREAM_STATE();
         nlohmann::json body = buildBody( compiledRequest );
 
         AI_HTTP_REQUEST request;
         request.m_Method = wxS( "POST" );
         request.m_Url = joinUrl( m_Settings.m_BaseUrl, wxS( "/chat/completions" ) );
         request.m_Body = wxString::FromUTF8( body.dump().c_str() );
-        request.m_Headers.push_back( { wxS( "Accept" ), wxS( "application/json" ) } );
+        request.m_Headers.push_back( { wxS( "Accept" ),
+                                       useStreaming ? wxString( wxS( "text/event-stream" ) )
+                                                    : wxString( wxS( "application/json" ) ) } );
         request.m_Headers.push_back( { wxS( "Content-Type" ), wxS( "application/json" ) } );
         request.m_Headers.push_back( { wxS( "Authorization" ),
                                        wxS( "Bearer " ) + m_Settings.m_ApiKey } );
+
+        if( useStreaming )
+        {
+            request.m_StreamHandler =
+                    [&]( const std::string& aChunk )
+                    {
+                        parseOpenAiStreamChunk( streamState, aChunk,
+                                                compiledRequest.m_RequestId,
+                                                aStreamSink );
+                    };
+        }
 
         error.Clear();
 
@@ -1616,7 +1924,7 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
                     { "estimated_input_chars", compiledRequest.m_ContextEstimatedChars },
                     { "max_provider_input_chars", compiledRequest.m_MaxProviderInputChars }
             } );
-            compiledRequest = shrinkProviderRequestForRetry( compiledRequest );
+            compiledRequest = shrinkProviderRequestForRetry( requestForCompile );
             continue;
         }
 
@@ -1635,6 +1943,43 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate( const AI_PROVIDER_REQU
                                providerHttpFailureMessage( httpResponse.m_StatusCode,
                                                            httpResponse.m_Body ) ),
                 retryHistory );
+    }
+
+    if( useStreaming )
+    {
+        if( !streamState.m_SawEvent && !httpResponse.m_Body.IsEmpty() )
+        {
+            parseOpenAiStreamChunk( streamState, toUtf8String( httpResponse.m_Body ),
+                                    compiledRequest.m_RequestId, aStreamSink );
+        }
+
+        flushOpenAiStreamChunk( streamState, compiledRequest.m_RequestId,
+                                aStreamSink );
+
+        if( !streamState.m_Error.IsEmpty() )
+        {
+            return attachProviderTrace( providerError( compiledRequest,
+                                                       streamState.m_Error ),
+                                        retryHistory );
+        }
+
+        std::vector<AI_TOOL_CALL_RECORD> streamedToolCalls =
+                streamToolCallRecords( streamState, compiledRequest.m_RequestId );
+
+        if( streamState.m_SawEvent
+            && ( !streamState.m_Content.IsEmpty() || !streamedToolCalls.empty() ) )
+        {
+            AI_PROVIDER_RESPONSE response;
+            response.m_RequestId = compiledRequest.m_RequestId;
+            response.m_Kind = AI_SUGGESTION_KIND::Chat;
+            response.m_Title = wxS( "AI Provider" );
+            response.m_Body = streamState.m_Content.IsEmpty()
+                                      ? wxString( wxS( "Tool call requested." ) )
+                                      : streamState.m_Content;
+            response.m_ProviderTraceJson = providerTraceJson( retryHistory );
+            response.m_ToolCalls = std::move( streamedToolCalls );
+            return response;
+        }
     }
 
     try

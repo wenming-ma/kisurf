@@ -145,9 +145,69 @@ if( MSVC )
    set_target_properties(kicad-cli PROPERTIES LINK_FLAGS_MINSIZEREL "/SUBSYSTEM:CONSOLE")
 
    # Allow running from build dir
+   function( copy_runtime_dlls_for_kicad aTarget )
+       add_custom_command( TARGET kicad POST_BUILD
+           COMMAND ${CMAKE_COMMAND}
+               "-DKISURF_RUNTIME_DLLS=$<JOIN:$<TARGET_RUNTIME_DLLS:${aTarget}>,,>"
+               "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:kicad>"
+               -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDlls.cmake"
+           )
+   endfunction()
+
+   copy_runtime_dlls_for_kicad( kicad )
    add_custom_command( TARGET kicad POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicommon>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gal>" "$<TARGET_FILE_DIR:kicad>"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:eeschema_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pcbnew_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:cvpcb_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gerbview_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pl_editor_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pcb_calculator_kiface>" "$<TARGET_FILE_DIR:kicad>"
+        COMMAND ${CMAKE_COMMAND}
+            "-DKISURF_RUNTIME_DLL_DIRS=$<TARGET_FILE_DIR:kicommon>,$<TARGET_FILE_DIR:gal>,$<TARGET_FILE_DIR:eeschema_kiface>,$<TARGET_FILE_DIR:pcbnew_kiface>,$<TARGET_FILE_DIR:cvpcb_kiface>,$<TARGET_FILE_DIR:gerbview_kiface>,$<TARGET_FILE_DIR:pl_editor_kiface>,$<TARGET_FILE_DIR:pcb_calculator_kiface>"
+            "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:kicad>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDirectoryDlls.cmake"
         )
+   copy_runtime_dlls_for_kicad( kicommon )
+   copy_runtime_dlls_for_kicad( gal )
+   copy_runtime_dlls_for_kicad( kiapi )
+   add_custom_target( kicad_runtime_dll_sync
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicommon>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gal>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:eeschema_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pcbnew_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:cvpcb_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gerbview_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pl_editor_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:pcb_calculator_kiface>" "$<TARGET_FILE_DIR:kicad>"
+       COMMAND ${CMAKE_COMMAND}
+           "-DKISURF_RUNTIME_DLL_DIRS=$<TARGET_FILE_DIR:kicommon>,$<TARGET_FILE_DIR:gal>,$<TARGET_FILE_DIR:eeschema_kiface>,$<TARGET_FILE_DIR:pcbnew_kiface>,$<TARGET_FILE_DIR:cvpcb_kiface>,$<TARGET_FILE_DIR:gerbview_kiface>,$<TARGET_FILE_DIR:pl_editor_kiface>,$<TARGET_FILE_DIR:pcb_calculator_kiface>"
+           "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:kicad>"
+           -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDirectoryDlls.cmake"
+       )
+   add_dependencies( kicad_runtime_dll_sync
+       kicommon
+       gal
+       kiapi
+       eeschema_kiface
+       pcbnew_kiface
+       cvpcb_kiface
+       gerbview_kiface
+       pl_editor_kiface
+       pcb_calculator_kiface
+       )
+   add_dependencies( kicad
+       kicad_runtime_dll_sync
+       eeschema_kiface
+       pcbnew_kiface
+       cvpcb_kiface
+       gerbview_kiface
+       pl_editor_kiface
+       pcb_calculator_kiface
+       )
 endif()
 
 if( UNIX )

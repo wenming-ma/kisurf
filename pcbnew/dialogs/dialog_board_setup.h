@@ -20,9 +20,17 @@
 
 #pragma once
 
+#include <kisurf/ai/ai_types.h>
 #include <widgets/paged_dialog.h>
 #include "panel_setup_formatting.h"
 
+#include <cstdint>
+#include <memory>
+#include <vector>
+
+class AI_AGENT_PANEL_MODEL;
+class AI_PREVIEW_ADAPTER;
+class AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO;
 class PCB_EDIT_FRAME;
 class PANEL_SETUP_CONSTRAINTS;
 class PANEL_SETUP_LAYERS;
@@ -44,6 +52,12 @@ class DIALOG_BOARD_SETUP : public PAGED_DIALOG
 public:
     DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aWindow = nullptr );
     ~DIALOG_BOARD_SETUP();
+
+    AI_PANEL_STATE_RECORD SemanticPanelStateRecord();
+    bool PreviewAiSuggestion( AI_AGENT_PANEL_MODEL& aModel,
+                              uint64_t aSuggestionId,
+                              AI_PREVIEW_ADAPTER* aWorkspaceAdapter = nullptr );
+    void ClearAiSuggestionPreview();
 
 protected:
     // event handlers
@@ -77,4 +91,7 @@ private:
     size_t m_severitiesPage;
     size_t m_embeddedFilesPage;
     size_t m_tuningProfilesPage;
+    uint64_t m_aiActivePreviewId = 0;
+    std::vector<std::unique_ptr<AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO>>
+            m_aiGridPreviewOverlayIos;
 };

@@ -61,6 +61,21 @@ class KiSurfSession:
 
         self.emit("session.rollback_to", **args)
 
+    def point_relative_to(self, reference: Any, *, anchor: str = "center",
+                          offset: Any = None) -> dict[str, Any]:
+        point: dict[str, Any] = {"relative_to": reference}
+        _set_optional(point, "anchor", anchor)
+        _set_optional(point, "offset", offset)
+        return point
+
+    def point_between(self, first: Any, second: Any, *, t: float | None = None,
+                      percent: float | None = None, offset: Any = None) -> dict[str, Any]:
+        point: dict[str, Any] = {"between": [first, second]}
+        _set_optional(point, "t", t)
+        _set_optional(point, "percent", percent)
+        _set_optional(point, "offset", offset)
+        return point
+
     def create_via(self, *, position: Any, net: str = "", diameter: Any = None,
                    drill: Any = None, layer_pair: Any = None, alias: str = "",
                    metadata: dict[str, Any] | None = None) -> None:
@@ -73,16 +88,36 @@ class KiSurfSession:
         _set_optional(args, "metadata", metadata)
         self.emit("pcb.create_via", **args)
 
-    def create_track_segment(self, *, start: Any, end: Any, layer: str = "",
-                             net: str = "", width: Any = None, alias: str = "",
+    def create_track_segment(self, *, start: Any = None, end: Any = None,
+                             parallel_to: Any = None, offset: Any = None,
+                             layer: str = "", net: str = "", width: Any = None,
+                             alias: str = "",
                              metadata: dict[str, Any] | None = None) -> None:
-        args: dict[str, Any] = {"start": start, "end": end}
+        args: dict[str, Any] = {}
+        _set_optional(args, "start", start)
+        _set_optional(args, "end", end)
+        _set_optional(args, "parallel_to", parallel_to)
+        _set_optional(args, "offset", offset)
         _set_optional(args, "layer", layer)
         _set_optional(args, "net", net)
         _set_optional(args, "width", width)
         _set_optional(args, "alias", alias)
         _set_optional(args, "metadata", metadata)
         self.emit("pcb.create_track_segment", **args)
+
+    def create_parallel_track_segment(self, *, parallel_to: Any, offset: Any,
+                                      layer: str = "", net: str = "",
+                                      width: Any = None, alias: str = "",
+                                      metadata: dict[str, Any] | None = None) -> None:
+        self.create_track_segment(
+            parallel_to=parallel_to,
+            offset=offset,
+            layer=layer,
+            net=net,
+            width=width,
+            alias=alias,
+            metadata=metadata,
+        )
 
     def create_track_polyline(self, *, points: list[Any], layer: str = "",
                               net: str = "", width: Any = None, alias: str = "") -> None:

@@ -17,6 +17,7 @@
 #include <kisurf_ai_pcb_preview_adapter.h>
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 class BOARD;
@@ -31,6 +32,9 @@ class VIEW;
 class KISURF_AI_PCB_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
 {
 public:
+    using BOARD_PROVIDER = std::function<BOARD*()>;
+    using VIEW_PROVIDER = std::function<KIGFX::VIEW*()>;
+    using CANVAS_PROVIDER = std::function<EDA_DRAW_PANEL_GAL*()>;
     using PREVIEW_FRAME_CAPTURE_PROVIDER =
             std::function<AI_VISUAL_SNAPSHOT( uint64_t,
                                                const AI_EXECUTION_SESSION& )>;
@@ -38,6 +42,9 @@ public:
     KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
             BOARD& aBoard, KIGFX::VIEW& aView,
             EDA_DRAW_PANEL_GAL* aCanvas = nullptr );
+    KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
+            BOARD_PROVIDER aBoardProvider, VIEW_PROVIDER aViewProvider,
+            CANVAS_PROVIDER aCanvasProvider = CANVAS_PROVIDER() );
 
     AI_SESSION_PREVIEW_RESULT RenderPreview(
             const AI_EXECUTION_SESSION& aSession,
@@ -47,17 +54,19 @@ public:
             PREVIEW_FRAME_CAPTURE_PROVIDER aProvider );
 
     uint64_t ActiveSessionId() const { return m_ActiveSessionId; }
-    const std::vector<BOARD_ITEM*>& PreviewedItems() const
-    {
-        return m_Adapter.PreviewedItems();
-    }
+    const std::vector<BOARD_ITEM*>& PreviewedItems() const;
 
 private:
-    BOARD&                         m_Board;
-    KISURF_AI_PCB_OBJECT_RESOLVER  m_Resolver;
-    KISURF_AI_PCB_PREVIEW_ADAPTER  m_Adapter;
-    AI_PREVIEW_MANAGER             m_PreviewManager;
+    bool ensureBackend( AI_SESSION_PREVIEW_RESULT& aResult );
+
+    BOARD_PROVIDER                 m_BoardProvider;
+    VIEW_PROVIDER                  m_ViewProvider;
+    CANVAS_PROVIDER                m_CanvasProvider;
+    BOARD*                         m_CurrentBoard = nullptr;
+    KIGFX::VIEW*                   m_CurrentView = nullptr;
+    std::unique_ptr<KISURF_AI_PCB_OBJECT_RESOLVER> m_Resolver;
+    std::unique_ptr<KISURF_AI_PCB_PREVIEW_ADAPTER> m_Adapter;
+    std::unique_ptr<AI_PREVIEW_MANAGER>            m_PreviewManager;
     uint64_t                       m_ActiveSessionId = 0;
-    EDA_DRAW_PANEL_GAL*            m_Canvas = nullptr;
     PREVIEW_FRAME_CAPTURE_PROVIDER m_PreviewFrameCaptureProvider;
 };

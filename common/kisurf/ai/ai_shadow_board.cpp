@@ -110,6 +110,44 @@ bool itemMatchesHandleFilter( const AI_SHADOW_ITEM& aItem,
 }
 
 
+bool metadataValueMatches( const wxString& aActual,
+                           const nlohmann::json& aExpected )
+{
+    if( aExpected.is_boolean() )
+    {
+        const wxString actual = aActual.Lower();
+        const bool actualBool = actual == wxS( "true" ) || actual == wxS( "1" )
+                                || actual == wxS( "yes" );
+
+        return actualBool == aExpected.get<bool>();
+    }
+
+    return aActual == stringFromJson( aExpected );
+}
+
+
+bool metadataMatches( const AI_SHADOW_ITEM& aItem,
+                      const nlohmann::json& aMetadataFilter )
+{
+    if( !aMetadataFilter.is_object() )
+        return false;
+
+    for( const auto& [key, expected] : aMetadataFilter.items() )
+    {
+        const wxString metadataKey = wxString::FromUTF8( key.c_str() );
+        const auto metadataIt = aItem.m_Metadata.find( metadataKey );
+
+        if( metadataIt == aItem.m_Metadata.end() )
+            return false;
+
+        if( !metadataValueMatches( metadataIt->second, expected ) )
+            return false;
+    }
+
+    return true;
+}
+
+
 struct SHADOW_BOX
 {
     long long m_MinX = 0;
@@ -411,6 +449,12 @@ std::vector<AI_SHADOW_ITEM> AI_SHADOW_BOARD::QueryItems(
 
         if( filter.contains( "handle" )
             && !itemMatchesHandleFilter( item, filter["handle"] ) )
+        {
+            continue;
+        }
+
+        if( filter.contains( "metadata" )
+            && !metadataMatches( item, filter["metadata"] ) )
         {
             continue;
         }

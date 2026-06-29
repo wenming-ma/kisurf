@@ -3,9 +3,12 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -37,6 +40,19 @@ wxString valueToWxString( const nlohmann::json& aValue )
         return wxString::FromUTF8( aValue.get_ref<const std::string&>().c_str() );
 
     return fromJson( aValue );
+}
+
+
+std::string stringMemberOr( const nlohmann::json& aObject, const char* aName,
+                            const char* aFallback )
+{
+    if( aObject.is_object() && aObject.contains( aName )
+        && aObject[aName].is_string() )
+    {
+        return aObject[aName].get_ref<const std::string&>();
+    }
+
+    return aFallback;
 }
 
 
@@ -122,6 +138,471 @@ std::vector<AI_SESSION_HANDLE> resolveHandles( const AI_EXECUTION_SESSION& aSess
     }
 
     return handles;
+}
+
+
+struct POINT_COORDINATES
+{
+    long long m_X = 0;
+    long long m_Y = 0;
+};
+
+
+struct LOCAL_GEOMETRY_BOX
+{
+    long long m_MinX = 0;
+    long long m_MinY = 0;
+    long long m_MaxX = 0;
+    long long m_MaxY = 0;
+    bool      m_HasPoint = false;
+};
+
+
+std::optional<POINT_COORDINATES> pointCoordinates( const nlohmann::json& aPoint )
+{
+    if( !aPoint.is_object() || !aPoint.contains( "x" ) || !aPoint.contains( "y" )
+        || !aPoint["x"].is_number() || !aPoint["y"].is_number() )
+    {
+        return std::nullopt;
+    }
+
+    return POINT_COORDINATES{
+        static_cast<long long>( std::llround( aPoint["x"].get<double>() ) ),
+        static_cast<long long>( std::llround( aPoint["y"].get<double>() ) )
+    };
+}
+
+
+nlohmann::json pointJson( const POINT_COORDINATES& aPoint )
+{
+    return { { "x", aPoint.m_X }, { "y", aPoint.m_Y } };
+}
+
+
+POINT_COORDINATES offsetPoint( const POINT_COORDINATES& aPoint,
+                               const POINT_COORDINATES& aOffset )
+{
+    return { aPoint.m_X + aOffset.m_X, aPoint.m_Y + aOffset.m_Y };
+}
+
+
+std::optional<POINT_COORDINATES> optionalOffset( const nlohmann::json& aContainer,
+                                                 wxString& aError )
+{
+    if( !aContainer.contains( "offset" ) )
+        return POINT_COORDINATES{};
+
+    std::optional<POINT_COORDINATES> offset = pointCoordinates( aContainer["offset"] );
+
+    if( !offset )
+        aError = wxS( "Relative point offset must be an x/y point." );
+
+    return offset;
+}
+
+
+void includePoint( LOCAL_GEOMETRY_BOX& aBox, const POINT_COORDINATES& aPoint )
+{
+    if( !aBox.m_HasPoint )
+    {
+        aBox.m_MinX = aBox.m_MaxX = aPoint.m_X;
+        aBox.m_MinY = aBox.m_MaxY = aPoint.m_Y;
+        aBox.m_HasPoint = true;
+        return;
+    }
+
+    aBox.m_MinX = std::min( aBox.m_MinX, aPoint.m_X );
+    aBox.m_MinY = std::min( aBox.m_MinY, aPoint.m_Y );
+    aBox.m_MaxX = std::max( aBox.m_MaxX, aPoint.m_X );
+    aBox.m_MaxY = std::max( aBox.m_MaxY, aPoint.m_Y );
+}
+
+
+void collectGeometryPoints( const nlohmann::json& aGeometry, LOCAL_GEOMETRY_BOX& aBox )
+{
+    if( std::optional<POINT_COORDINATES> point = pointCoordinates( aGeometry ) )
+        includePoint( aBox, *point );
+
+    if( aGeometry.is_object() )
+    {
+        for( const auto& [key, value] : aGeometry.items() )
+        {
+            wxUnusedVar( key );
+            collectGeometryPoints( value, aBox );
+        }
+    }
+    else if( aGeometry.is_array() )
+    {
+        for( const nlohmann::json& value : aGeometry )
+            collectGeometryPoints( value, aBox );
+    }
+}
+
+
+std::optional<POINT_COORDINATES> fieldPoint( const nlohmann::json& aGeometry,
+                                             const char* aField )
+{
+    if( aGeometry.is_object() && aGeometry.contains( aField ) )
+        return pointCoordinates( aGeometry[aField] );
+
+    return std::nullopt;
+}
+
+
+std::optional<POINT_COORDINATES> itemAnchorPoint( const AI_SHADOW_ITEM& aItem,
+                                                  const std::string& aAnchor )
+{
+    nlohmann::json geometry =
+            nlohmann::json::parse( toUtf8String( aItem.m_GeometryJson ), nullptr, false );
+
+    if( geometry.is_discarded() || !geometry.is_object() )
+        return std::nullopt;
+
+    if( aAnchor == "position" )
+        return fieldPoint( geometry, "position" );
+
+    if( aAnchor == "start" )
+        return fieldPoint( geometry, "start" );
+
+    if( aAnchor == "end" )
+        return fieldPoint( geometry, "end" );
+
+    if( aAnchor == "center" || aAnchor == "midpoint" || aAnchor.empty() )
+    {
+        if( std::optional<POINT_COORDINATES> position =
+                    fieldPoint( geometry, "position" ) )
+        {
+            return position;
+        }
+
+        std::optional<POINT_COORDINATES> start = fieldPoint( geometry, "start" );
+        std::optional<POINT_COORDINATES> end = fieldPoint( geometry, "end" );
+
+        if( start && end )
+        {
+            return POINT_COORDINATES{ ( start->m_X + end->m_X ) / 2,
+                                      ( start->m_Y + end->m_Y ) / 2 };
+        }
+
+        if( std::optional<POINT_COORDINATES> center = fieldPoint( geometry, "center" ) )
+            return center;
+
+        LOCAL_GEOMETRY_BOX box;
+        collectGeometryPoints( geometry, box );
+
+        if( box.m_HasPoint )
+        {
+            return POINT_COORDINATES{ ( box.m_MinX + box.m_MaxX ) / 2,
+                                      ( box.m_MinY + box.m_MaxY ) / 2 };
+        }
+    }
+
+    if( aAnchor == "bbox_min" || aAnchor == "min" )
+    {
+        LOCAL_GEOMETRY_BOX box;
+        collectGeometryPoints( geometry, box );
+
+        if( box.m_HasPoint )
+            return POINT_COORDINATES{ box.m_MinX, box.m_MinY };
+    }
+
+    if( aAnchor == "bbox_max" || aAnchor == "max" )
+    {
+        LOCAL_GEOMETRY_BOX box;
+        collectGeometryPoints( geometry, box );
+
+        if( box.m_HasPoint )
+            return POINT_COORDINATES{ box.m_MaxX, box.m_MaxY };
+    }
+
+    return std::nullopt;
+}
+
+
+std::optional<AI_SESSION_HANDLE> resolveReferenceHandle(
+        const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aReference )
+{
+    if( aReference.is_object() )
+    {
+        if( aReference.contains( "handle" ) )
+            return resolveHandle( aSession, aReference["handle"] );
+
+        if( aReference.contains( "alias" ) && aReference["alias"].is_string()
+            && !aReference.contains( "handle_id" ) )
+        {
+            return aSession.ResolveAlias(
+                    wxString::FromUTF8(
+                            aReference["alias"].get_ref<const std::string&>().c_str() ) );
+        }
+    }
+
+    return resolveHandle( aSession, aReference );
+}
+
+
+std::optional<POINT_COORDINATES> resolveReferenceAnchor(
+        const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aReference,
+        const std::string& aAnchor, wxString& aError )
+{
+    std::optional<AI_SESSION_HANDLE> handle =
+            resolveReferenceHandle( aSession, aReference );
+
+    if( !handle )
+    {
+        aError = wxS( "Relative point reference did not resolve to a live handle." );
+        return std::nullopt;
+    }
+
+    const AI_SHADOW_ITEM* item = aSession.ShadowBoard().FindItem( *handle );
+
+    if( !item )
+    {
+        aError = wxS( "Relative point reference did not resolve to a live item." );
+        return std::nullopt;
+    }
+
+    std::optional<POINT_COORDINATES> point = itemAnchorPoint( *item, aAnchor );
+
+    if( !point )
+    {
+        aError = wxString::Format( wxS( "Relative point anchor '%s' is not available." ),
+                                   wxString::FromUTF8( aAnchor.c_str() ) );
+        return std::nullopt;
+    }
+
+    return point;
+}
+
+
+std::optional<POINT_COORDINATES> resolvePointExpression(
+        const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aPoint,
+        wxString& aError )
+{
+    if( std::optional<POINT_COORDINATES> point = pointCoordinates( aPoint ) )
+        return point;
+
+    if( aPoint.is_string() || aPoint.is_number_unsigned()
+        || aPoint.is_number_integer() )
+    {
+        return resolveReferenceAnchor( aSession, aPoint, "center", aError );
+    }
+
+    if( !aPoint.is_object() )
+    {
+        aError = wxS( "Point expression must be an object." );
+        return std::nullopt;
+    }
+
+    if( aPoint.contains( "relative_to" ) )
+    {
+        const std::string anchor = stringMemberOr( aPoint, "anchor", "center" );
+        std::optional<POINT_COORDINATES> base =
+                resolveReferenceAnchor( aSession, aPoint["relative_to"],
+                                        anchor.empty() ? "center" : anchor, aError );
+
+        if( !base )
+            return std::nullopt;
+
+        std::optional<POINT_COORDINATES> offset = optionalOffset( aPoint, aError );
+
+        if( !offset )
+            return std::nullopt;
+
+        return offsetPoint( *base, *offset );
+    }
+
+    if( aPoint.contains( "between" ) && aPoint["between"].is_array()
+        && aPoint["between"].size() >= 2 )
+    {
+        wxString firstError;
+        wxString secondError;
+        std::optional<POINT_COORDINATES> first =
+                resolvePointExpression( aSession, aPoint["between"][0], firstError );
+        std::optional<POINT_COORDINATES> second =
+                resolvePointExpression( aSession, aPoint["between"][1], secondError );
+
+        if( !first || !second )
+        {
+            if( firstError.IsEmpty() && secondError.IsEmpty() )
+                aError = wxS( "between endpoints did not resolve." );
+            else
+                aError = !firstError.IsEmpty() ? firstError : secondError;
+
+            return std::nullopt;
+        }
+
+        double t = 0.5;
+
+        if( aPoint.contains( "t" ) && aPoint["t"].is_number() )
+            t = aPoint["t"].get<double>();
+        else if( aPoint.contains( "fraction" ) && aPoint["fraction"].is_number() )
+            t = aPoint["fraction"].get<double>();
+        else if( aPoint.contains( "percent" ) && aPoint["percent"].is_number() )
+            t = aPoint["percent"].get<double>() / 100.0;
+
+        POINT_COORDINATES interpolated{
+            static_cast<long long>( std::llround(
+                    static_cast<double>( first->m_X )
+                    + ( static_cast<double>( second->m_X - first->m_X ) * t ) ) ),
+            static_cast<long long>( std::llround(
+                    static_cast<double>( first->m_Y )
+                    + ( static_cast<double>( second->m_Y - first->m_Y ) * t ) ) )
+        };
+
+        std::optional<POINT_COORDINATES> offset = optionalOffset( aPoint, aError );
+
+        if( !offset )
+            return std::nullopt;
+
+        return offsetPoint( interpolated, *offset );
+    }
+
+    if( aPoint.contains( "handle" ) || aPoint.contains( "alias" ) )
+    {
+        const nlohmann::json reference = aPoint.contains( "handle" )
+                                                 ? aPoint["handle"]
+                                                 : aPoint;
+        const std::string anchor = stringMemberOr( aPoint, "anchor", "center" );
+        return resolveReferenceAnchor( aSession, reference,
+                                       anchor.empty() ? "center" : anchor, aError );
+    }
+
+    aError = wxS( "Point expression must contain x/y, relative_to, between, or handle." );
+    return std::nullopt;
+}
+
+
+bool resolvePointInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::json& aPoint,
+                          wxString& aError )
+{
+    if( !aPoint.is_object() )
+        return true;
+
+    if( aPoint.contains( "relative_to" ) || aPoint.contains( "between" )
+        || aPoint.contains( "handle" )
+        || ( aPoint.contains( "alias" ) && !aPoint.contains( "handle_id" ) ) )
+    {
+        std::optional<POINT_COORDINATES> resolved =
+                resolvePointExpression( aSession, aPoint, aError );
+
+        if( !resolved )
+            return false;
+
+        aPoint = pointJson( *resolved );
+        return true;
+    }
+
+    return true;
+}
+
+
+bool resolvePointTreeInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::json& aValue,
+                              wxString& aError )
+{
+    if( aValue.is_object() )
+    {
+        if( !resolvePointInPlace( aSession, aValue, aError ) )
+            return false;
+
+        if( pointCoordinates( aValue ) )
+            return true;
+
+        for( auto& [key, value] : aValue.items() )
+        {
+            wxUnusedVar( key );
+
+            if( !resolvePointTreeInPlace( aSession, value, aError ) )
+                return false;
+        }
+    }
+    else if( aValue.is_array() )
+    {
+        for( nlohmann::json& value : aValue )
+        {
+            if( !resolvePointTreeInPlace( aSession, value, aError ) )
+                return false;
+        }
+    }
+
+    return true;
+}
+
+
+std::optional<nlohmann::json> normalizedCreatePointArgs(
+        const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aArgs,
+        std::initializer_list<const char*> aPointFields, wxString& aError )
+{
+    nlohmann::json normalized = aArgs;
+
+    for( const char* field : aPointFields )
+    {
+        if( normalized.contains( field )
+            && !resolvePointTreeInPlace( aSession, normalized[field], aError ) )
+        {
+            return std::nullopt;
+        }
+    }
+
+    return normalized;
+}
+
+
+std::optional<nlohmann::json> normalizedTrackSegmentArgs(
+        const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aArgs,
+        wxString& aError )
+{
+    nlohmann::json normalized = aArgs;
+
+    if( normalized.contains( "parallel_to" )
+        && ( !normalized.contains( "start" ) || !normalized.contains( "end" ) ) )
+    {
+        std::optional<AI_SESSION_HANDLE> handle =
+                resolveReferenceHandle( aSession, normalized["parallel_to"] );
+
+        if( !handle )
+        {
+            aError = wxS( "parallel_to did not resolve to a live handle." );
+            return std::nullopt;
+        }
+
+        const AI_SHADOW_ITEM* item = aSession.ShadowBoard().FindItem( *handle );
+
+        if( !item )
+        {
+            aError = wxS( "parallel_to did not resolve to a live item." );
+            return std::nullopt;
+        }
+
+        std::optional<POINT_COORDINATES> start = itemAnchorPoint( *item, "start" );
+        std::optional<POINT_COORDINATES> end = itemAnchorPoint( *item, "end" );
+
+        if( !start || !end )
+        {
+            aError = wxS( "parallel_to requires a reference item with start/end geometry." );
+            return std::nullopt;
+        }
+
+        std::optional<POINT_COORDINATES> offset = optionalOffset( normalized, aError );
+
+        if( !offset )
+            return std::nullopt;
+
+        normalized["start"] = pointJson( offsetPoint( *start, *offset ) );
+        normalized["end"] = pointJson( offsetPoint( *end, *offset ) );
+        normalized.erase( "parallel_to" );
+        normalized.erase( "offset" );
+    }
+
+    for( const char* field : { "start", "end" } )
+    {
+        if( normalized.contains( field )
+            && !resolvePointTreeInPlace( aSession, normalized[field], aError ) )
+        {
+            return std::nullopt;
+        }
+    }
+
+    return normalized;
 }
 
 
@@ -385,26 +866,35 @@ AI_SHADOW_ITEM makeCreateItem( const AI_SESSION_HANDLE& aHandle,
 AI_ATOMIC_EXECUTION_RESULT createVia( AI_EXECUTION_SESSION& aSession,
                                       const nlohmann::json& aArgs )
 {
-    if( !aArgs.contains( "position" ) || !aArgs["position"].is_object() )
+    wxString argumentError;
+    std::optional<nlohmann::json> normalized =
+            normalizedCreatePointArgs( aSession, aArgs, { "position" }, argumentError );
+
+    if( !normalized )
+        return errorResult( wxS( "invalid_arguments" ), argumentError );
+
+    const nlohmann::json& args = *normalized;
+
+    if( !args.contains( "position" ) || !pointCoordinates( args["position"] ) )
         return errorResult( wxS( "invalid_arguments" ), wxS( "CreateVia requires position." ) );
 
     AI_ATOMIC_EXECUTION_RESULT result;
-    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( aArgs, "alias" ) );
+    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( args, "alias" ) );
     result.m_CreatedHandles.push_back( handle );
 
     nlohmann::json geometry;
-    geometry["position"] = aArgs["position"];
+    geometry["position"] = args["position"];
 
     for( const char* key : { "diameter", "drill", "layer_pair" } )
     {
-        if( aArgs.contains( key ) )
-            geometry[key] = aArgs[key];
+        if( args.contains( key ) )
+            geometry[key] = args[key];
     }
 
-    appendRecord( aSession, result, AI_SESSION_OPERATION_KIND::CreateVia, aArgs, {},
+    appendRecord( aSession, result, AI_SESSION_OPERATION_KIND::CreateVia, args, {},
                   { handle } );
     aSession.ShadowBoard().UpsertItem(
-            makeCreateItem( handle, AI_SESSION_OPERATION_KIND::CreateVia, aArgs,
+            makeCreateItem( handle, AI_SESSION_OPERATION_KIND::CreateVia, args,
                             wxS( "via" ), geometry, aSession.Epoch() ) );
     result.m_Ok = true;
     return result;
@@ -414,28 +904,38 @@ AI_ATOMIC_EXECUTION_RESULT createVia( AI_EXECUTION_SESSION& aSession,
 AI_ATOMIC_EXECUTION_RESULT createTrackSegment( AI_EXECUTION_SESSION& aSession,
                                                const nlohmann::json& aArgs )
 {
-    if( !aArgs.contains( "start" ) || !aArgs.contains( "end" ) )
+    wxString argumentError;
+    std::optional<nlohmann::json> normalized =
+            normalizedTrackSegmentArgs( aSession, aArgs, argumentError );
+
+    if( !normalized )
+        return errorResult( wxS( "invalid_arguments" ), argumentError );
+
+    const nlohmann::json& args = *normalized;
+
+    if( !args.contains( "start" ) || !args.contains( "end" )
+        || !pointCoordinates( args["start"] ) || !pointCoordinates( args["end"] ) )
     {
         return errorResult( wxS( "invalid_arguments" ),
                             wxS( "CreateTrackSegment requires start and end." ) );
     }
 
     AI_ATOMIC_EXECUTION_RESULT result;
-    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( aArgs, "alias" ) );
+    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( args, "alias" ) );
     result.m_CreatedHandles.push_back( handle );
 
     nlohmann::json geometry;
-    geometry["start"] = aArgs["start"];
-    geometry["end"] = aArgs["end"];
+    geometry["start"] = args["start"];
+    geometry["end"] = args["end"];
 
-    if( aArgs.contains( "width" ) )
-        geometry["width"] = aArgs["width"];
+    if( args.contains( "width" ) )
+        geometry["width"] = args["width"];
 
     appendRecord( aSession, result, AI_SESSION_OPERATION_KIND::CreateTrackSegment,
-                  aArgs, {}, { handle } );
+                  args, {}, { handle } );
     aSession.ShadowBoard().UpsertItem(
             makeCreateItem( handle, AI_SESSION_OPERATION_KIND::CreateTrackSegment,
-                            aArgs, wxS( "track_segment" ), geometry, aSession.Epoch() ) );
+                            args, wxS( "track_segment" ), geometry, aSession.Epoch() ) );
     result.m_Ok = true;
     return result;
 }
@@ -444,22 +944,31 @@ AI_ATOMIC_EXECUTION_RESULT createTrackSegment( AI_EXECUTION_SESSION& aSession,
 AI_ATOMIC_EXECUTION_RESULT createTrackPolyline( AI_EXECUTION_SESSION& aSession,
                                                 const nlohmann::json& aArgs )
 {
-    if( !aArgs.contains( "points" ) || !aArgs["points"].is_array()
-        || aArgs["points"].size() < 2 )
+    wxString argumentError;
+    std::optional<nlohmann::json> normalized =
+            normalizedCreatePointArgs( aSession, aArgs, { "points" }, argumentError );
+
+    if( !normalized )
+        return errorResult( wxS( "invalid_arguments" ), argumentError );
+
+    const nlohmann::json& args = *normalized;
+
+    if( !args.contains( "points" ) || !args["points"].is_array()
+        || args["points"].size() < 2 )
     {
         return errorResult( wxS( "invalid_arguments" ),
                             wxS( "CreateTrackPolyline requires at least two points." ) );
     }
 
     AI_ATOMIC_EXECUTION_RESULT result;
-    const wxString alias = stringField( aArgs, "alias" );
+    const wxString alias = stringField( args, "alias" );
 
-    for( size_t i = 0; i + 1 < aArgs["points"].size(); ++i )
+    for( size_t i = 0; i + 1 < args["points"].size(); ++i )
     {
-        nlohmann::json segment = aArgs;
+        nlohmann::json segment = args;
         segment.erase( "points" );
-        segment["start"] = aArgs["points"][i];
-        segment["end"] = aArgs["points"][i + 1];
+        segment["start"] = args["points"][i];
+        segment["end"] = args["points"][i + 1];
 
         if( !alias.IsEmpty() )
         {
@@ -493,16 +1002,26 @@ AI_ATOMIC_EXECUTION_RESULT createSimpleItem( AI_EXECUTION_SESSION& aSession,
                                              const wxString& aType,
                                              const char* aGeometryField )
 {
+    nlohmann::json args = aArgs;
+
+    if( args.contains( aGeometryField ) )
+    {
+        wxString argumentError;
+
+        if( !resolvePointTreeInPlace( aSession, args[aGeometryField], argumentError ) )
+            return errorResult( wxS( "invalid_arguments" ), argumentError );
+    }
+
     if( aKind == AI_SESSION_OPERATION_KIND::CreateZone )
     {
         if( std::optional<AI_ATOMIC_EXECUTION_RESULT> error =
-                    validateCreateZoneTypedProperties( aArgs ) )
+                    validateCreateZoneTypedProperties( args ) )
         {
             return *error;
         }
     }
 
-    if( !aArgs.contains( aGeometryField ) )
+    if( !args.contains( aGeometryField ) )
     {
         return errorResult( wxS( "invalid_arguments" ),
                             wxString::Format( wxS( "%s requires %s." ),
@@ -511,16 +1030,16 @@ AI_ATOMIC_EXECUTION_RESULT createSimpleItem( AI_EXECUTION_SESSION& aSession,
     }
 
     AI_ATOMIC_EXECUTION_RESULT result;
-    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( aArgs, "alias" ) );
+    AI_SESSION_HANDLE handle = aSession.CreateHandle( stringField( args, "alias" ) );
     result.m_CreatedHandles.push_back( handle );
 
-    nlohmann::json geometry = aArgs.contains( aGeometryField )
-                                      ? aArgs[aGeometryField]
-                                      : aArgs;
+    nlohmann::json geometry = args.contains( aGeometryField )
+                                      ? args[aGeometryField]
+                                      : args;
 
-    appendRecord( aSession, result, aKind, aArgs, {}, { handle } );
+    appendRecord( aSession, result, aKind, args, {}, { handle } );
     aSession.ShadowBoard().UpsertItem(
-            makeCreateItem( handle, aKind, aArgs, aType, geometry, aSession.Epoch() ) );
+            makeCreateItem( handle, aKind, args, aType, geometry, aSession.Epoch() ) );
     result.m_Ok = true;
     return result;
 }

@@ -25,6 +25,7 @@ struct KICOMMON_API AI_AGENT_COMPOSER_STATUS_VIEW
 {
     bool                 m_BackgroundAgentEnabled = false;
     bool                 m_BackgroundAgentBusy = false;
+    bool                 m_ChatAgentBusy = false;
     bool                 m_InputHasText = false;
     bool                 m_HasActiveSuggestion = false;
     uint64_t             m_LatestRequestId = 0;
@@ -53,6 +54,7 @@ struct KICOMMON_API AI_AGENT_BACKGROUND_PREVIEW_VIEW
     bool m_HasPreviewHandler = false;
     bool m_CanPreviewSuggestion = false;
     bool m_TargetsWorkspacePreview = false;
+    bool m_TargetsAutomaticPreview = false;
 };
 
 enum class AI_AGENT_BACKGROUND_UPDATE_ACTION
@@ -118,8 +120,16 @@ public:
     bool HandlePreviewShortcut( int aKeyCode, bool aHasModifier = false,
                                 bool aFocusInsideAgentPanel = false );
     bool HandlePreviewPointer( bool aFocusInsideAgentPanel = false );
+    bool PulseBackgroundAgent( const wxString& aReason = wxS( "semantic_tick" ) );
+    bool ShouldContinueBackgroundIdlePulse() const;
 
 private:
+    struct CHAT_SEND_STATE
+    {
+        std::atomic_bool      m_Alive{ true };
+        std::atomic<uint64_t> m_Generation{ 0 };
+    };
+
     void OnModelSettings( wxCommandEvent& aEvent ) override;
     void OnNewChat( wxCommandEvent& aEvent ) override;
     void OnBackgroundAgentToggled( wxCommandEvent& aEvent ) override;
@@ -152,14 +162,23 @@ private:
             uint64_t aGeneration,
             std::optional<AI_SUGGESTION_RECORD> aSuggestion );
     bool backgroundSuggestionUpdateInFlight() const;
+    void renderPendingChatRequest();
+    void handlePreparedChatStreamEvent( const AI_RUNTIME_STREAM_EVENT& aEvent,
+                                        uint64_t aGeneration );
+    void prepareAndRunPendingChatRequest( wxString aText, uint64_t aGeneration );
+    void runPreparedChatRequest( std::shared_ptr<AI_AGENT_PANEL_MODEL> aModel,
+                                 std::shared_ptr<CHAT_SEND_STATE> aChatState,
+                                 AI_CHAT_REQUEST_STATE aState,
+                                 uint64_t aGeneration );
 
     AI_EDITOR_KIND                            m_EditorKind;
     CONTEXT_PROVIDER                          m_ContextProvider;
-    std::unique_ptr<AI_AGENT_PANEL_MODEL>     m_Model;
+    std::shared_ptr<AI_AGENT_PANEL_MODEL>     m_Model;
     AI_TOOL_EXECUTION_POLICY                  m_ToolExecutionPolicy;
     AI_ACTIVITY_LOG                           m_ToolActivityLog;
     std::unique_ptr<AI_ACTION_RUNNER>         m_ActionRunner;
-    std::unique_ptr<AI_TOOL_CALL_HANDLER>        m_ToolCallHandler;
+    std::unique_ptr<AI_TOOL_CALL_HANDLER>     m_ToolCallHandler;
+    std::unique_ptr<AI_TOOL_CALL_HANDLER>     m_RuntimeToolCallHandler;
     AI_SESSION_TOOL_CALL_HANDLER*             m_SessionToolCallHandler = nullptr;
     bool                                      m_HasSessionPreviewService = false;
     bool                                      m_HasSessionAcceptAdapter = false;
@@ -176,6 +195,11 @@ private:
     };
 
     std::shared_ptr<BACKGROUND_UPDATE_STATE> m_BackgroundUpdateState;
+    std::shared_ptr<CHAT_SEND_STATE>         m_ChatSendState;
+    wxString                                 m_LastBackgroundTickFingerprint;
+    bool                                     m_ChatSendInFlight = false;
+    wxString                                 m_PendingUserText;
+    wxString                                 m_StreamingAssistantText;
 };
 
 KICOMMON_API wxString AiAgentWorkspaceContextTitle( AI_AGENT_WORKSPACE_CONTEXT_KIND aMode );
@@ -188,11 +212,16 @@ KICOMMON_API wxString AiAgentObservabilityEntryText(
         const AI_AGENT_OBSERVABILITY_ENTRY& aEntry );
 KICOMMON_API wxString AiAgentComposerStatusText(
         const AI_AGENT_COMPOSER_STATUS_VIEW& aView );
+KICOMMON_API wxString AiAgentStreamingAssistantTextAfterEvent(
+        const wxString& aCurrentText,
+        const AI_RUNTIME_STREAM_EVENT& aEvent );
 KICOMMON_API AI_AGENT_PREVIEW_SHORTCUT_ACTION AiAgentPreviewShortcutAction(
         const AI_AGENT_PREVIEW_SHORTCUT_VIEW& aView, int aKeyCode );
 KICOMMON_API AI_AGENT_PREVIEW_SHORTCUT_ACTION AiAgentPreviewPointerAction(
         const AI_AGENT_PREVIEW_SHORTCUT_VIEW& aView );
 KICOMMON_API bool AiAgentSuggestionTargetsWorkspacePreview(
+        const AI_SUGGESTION_RECORD& aSuggestion );
+KICOMMON_API bool AiAgentSuggestionTargetsAutomaticPreview(
         const AI_SUGGESTION_RECORD& aSuggestion );
 KICOMMON_API bool AiAgentShouldAutoPreviewBackgroundSuggestion(
         const AI_AGENT_BACKGROUND_PREVIEW_VIEW& aView );
@@ -200,3 +229,12 @@ KICOMMON_API AI_AGENT_BACKGROUND_UPDATE_ACTION AiAgentBackgroundUpdateAction(
         const AI_AGENT_BACKGROUND_UPDATE_VIEW& aView );
 KICOMMON_API bool AiAgentReviewCommandTargetsChatSession(
         bool aHasActiveSuggestion, bool aHasPendingChatSession );
+KICOMMON_API bool AiAgentSnapshotNeedsBackgroundTick(
+        const AI_CONTEXT_SNAPSHOT& aSnapshot );
+KICOMMON_API wxString AiAgentBackgroundTickFingerprint(
+        const AI_CONTEXT_SNAPSHOT& aSnapshot );
+KICOMMON_API bool AiAgentSnapshotNeedsContinuousBackgroundIdle(
+        const AI_CONTEXT_SNAPSHOT& aSnapshot );
+KICOMMON_API bool AiAgentShouldQueueBackgroundTick(
+        const AI_CONTEXT_SNAPSHOT& aSnapshot,
+        const wxString& aLastBackgroundTickFingerprint );

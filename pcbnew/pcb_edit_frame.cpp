@@ -87,6 +87,7 @@
 #include <settings/settings_manager.h>
 #include <kisurf/ai/ai_action_catalog.h>
 #include <kisurf/ai/ai_agent_panel.h>
+#include <kisurf/ai/ai_agent_panel_semantic.h>
 #include <kisurf/ai/ai_callback_action_runner.h>
 #include <kisurf/ai/ai_context_anchor_provider.h>
 #include <kisurf/ai/ai_editor_activity_recorder.h>
@@ -406,27 +407,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_netInspectorPanel = new PCB_NET_INSPECTOR_PANEL( this, this );
     m_designBlocksPane = new PCB_DESIGN_BLOCK_PANE( this, nullptr, m_designBlockHistoryList );
 
-    if( GetToolManager() )
-    {
-        m_aiToolStateProvider = std::make_unique<KISURF_AI_PCB_TOOL_STATE_PROVIDER>( GetToolManager() );
-        m_aiSessionApplyAdapter =
-                std::make_unique<KISURF_AI_PCB_SESSION_APPLY_ADAPTER>( *this );
-
-        if( GetBoard() )
-        {
-            m_aiSessionShadowSeeder =
-                    std::make_unique<KISURF_AI_PCB_SESSION_SHADOW_SEEDER>( *GetBoard() );
-            m_aiSessionValidationService =
-                    std::make_unique<KISURF_AI_PCB_SESSION_VALIDATION_SERVICE>( *GetBoard() );
-        }
-    }
-
-    if( GetBoard() && GetCanvas() && GetCanvas()->GetView() )
-    {
-        m_aiSessionPreviewService =
-                std::make_unique<KISURF_AI_PCB_SESSION_PREVIEW_SERVICE>(
-                        *GetBoard(), *GetCanvas()->GetView(), GetCanvas() );
-    }
+    refreshAiPcbSessionServices();
 
     m_agentPanel = new AI_AGENT_PANEL( this, AI_EDITOR_KIND::Pcb,
             [this]()
@@ -458,27 +439,14 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                             GetToolManager()->GetActionManager(), AI_EDITOR_KIND::Pcb, 128 );
                 }
 
+                if( m_boardSetupDlg && m_boardSetupDlg->IsShown() )
+                    AiUpsertPanelStateRecord( snapshot,
+                                              m_boardSetupDlg->SemanticPanelStateRecord() );
+
                 return snapshot;
             } );
 
-    if( GetToolManager() )
-    {
-        TOOL_MANAGER* toolManager = GetToolManager();
-
-        m_agentPanel->ConfigureActionToolCalls(
-                std::make_unique<AI_CALLBACK_ACTION_RUNNER>(
-                        [toolManager]( const wxString& aActionName, wxString& aError )
-                        {
-                            return runAiToolManagerAction( toolManager, aActionName, aError );
-                        } ),
-                { wxS( "common.Control.showAgentPanel" ) },
-                AI_ACTION_CATALOG::Build( toolManager->GetActionManager(),
-                                          AI_EDITOR_KIND::Pcb, 128 ),
-                m_aiSessionApplyAdapter.get(),
-                m_aiSessionPreviewService.get(),
-                m_aiSessionShadowSeeder.get(),
-                m_aiSessionValidationService.get() );
-    }
+    configureAiAgentPanelToolCalls();
 
     m_agentPanel->ConfigureSuggestionReview(
             [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )
@@ -497,6 +465,11 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 KISURF_AI_PCB_OBJECT_RESOLVER resolver( *GetBoard() );
                 KISURF_AI_PCB_PREVIEW_ADAPTER adapter( resolver, *GetCanvas()->GetView(),
                                                         delta );
+
+                if( m_boardSetupDlg && m_boardSetupDlg->IsShown() )
+                    return m_boardSetupDlg->PreviewAiSuggestion(
+                            aModel, aSuggestionId, &adapter );
+
                 AI_PREVIEW_MANAGER            session( adapter );
                 return aModel.PreviewSuggestion( aSuggestionId, session );
             },
@@ -527,6 +500,9 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 if( accepted && GetCanvas() && GetCanvas()->GetView() )
                     GetCanvas()->GetView()->ClearPreview();
 
+                if( accepted && m_boardSetupDlg )
+                    m_boardSetupDlg->ClearAiSuggestionPreview();
+
                 return accepted;
             },
             [this]( AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId )
@@ -535,6 +511,9 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
 
                 if( rejected && GetCanvas() && GetCanvas()->GetView() )
                     GetCanvas()->GetView()->ClearPreview();
+
+                if( rejected && m_boardSetupDlg )
+                    m_boardSetupDlg->ClearAiSuggestionPreview();
 
                 return rejected;
             } );
@@ -550,7 +529,14 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                     auto record = MakeAiActivityRecordFromToolEvent( aEvent, AI_EDITOR_KIND::Pcb );
 
                     if( record )
-                        m_agentPanel->RecordActivity( *record );
+                    {
+                        CallAfter(
+                                [this, record = *record]()
+                                {
+                                    if( m_agentPanel )
+                                        m_agentPanel->RecordActivity( record );
+                                } );
+                    }
                 } );
     }
 
@@ -776,6 +762,15 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
               {
                   redrawNetnames();
                   m_lastNetnamesViewport = viewport;
+              }
+
+              if( m_agentPanel )
+              {
+                  const bool queuedPulse =
+                          m_agentPanel->PulseBackgroundAgent( wxS( "pcbnew.idle" ) );
+
+                  if( queuedPulse || m_agentPanel->ShouldContinueBackgroundIdlePulse() )
+                      aEvent.RequestMore();
               }
 
               // Do not forget to pass the Idle event to other clients:
@@ -1131,6 +1126,75 @@ void PCB_EDIT_FRAME::detachTextVarTracker()
 }
 
 
+void PCB_EDIT_FRAME::refreshAiPcbSessionServices()
+{
+    if( !GetToolManager() )
+    {
+        m_aiToolStateProvider.reset();
+        m_aiSessionApplyAdapter.reset();
+        m_aiSessionShadowSeeder.reset();
+        m_aiSessionValidationService.reset();
+        m_aiSessionPreviewService.reset();
+        return;
+    }
+
+    if( !m_aiToolStateProvider )
+        m_aiToolStateProvider =
+                std::make_unique<KISURF_AI_PCB_TOOL_STATE_PROVIDER>( GetToolManager() );
+
+    if( !m_aiSessionApplyAdapter )
+        m_aiSessionApplyAdapter =
+                std::make_unique<KISURF_AI_PCB_SESSION_APPLY_ADAPTER>( *this );
+
+    if( !m_aiSessionShadowSeeder )
+        m_aiSessionShadowSeeder =
+                std::make_unique<KISURF_AI_PCB_SESSION_SHADOW_SEEDER>(
+                        [this]() { return GetBoard(); },
+                        KISURF_AI_PCB_SESSION_SHADOW_SEEDER::SEED_OPTIONS{
+                                false } );
+
+    if( !m_aiSessionValidationService )
+        m_aiSessionValidationService =
+                std::make_unique<KISURF_AI_PCB_SESSION_VALIDATION_SERVICE>(
+                        [this]() { return GetBoard(); } );
+
+    if( !m_aiSessionPreviewService )
+    {
+        m_aiSessionPreviewService =
+                std::make_unique<KISURF_AI_PCB_SESSION_PREVIEW_SERVICE>(
+                        [this]() { return GetBoard(); },
+                        [this]() -> KIGFX::VIEW*
+                        {
+                            return GetCanvas() ? GetCanvas()->GetView() : nullptr;
+                        },
+                        [this]() { return GetCanvas(); } );
+    }
+}
+
+
+void PCB_EDIT_FRAME::configureAiAgentPanelToolCalls()
+{
+    if( !m_agentPanel || !GetToolManager() )
+        return;
+
+    TOOL_MANAGER* toolManager = GetToolManager();
+
+    m_agentPanel->ConfigureActionToolCalls(
+            std::make_unique<AI_CALLBACK_ACTION_RUNNER>(
+                    [toolManager]( const wxString& aActionName, wxString& aError )
+                    {
+                        return runAiToolManagerAction( toolManager, aActionName, aError );
+                    } ),
+            { wxS( "common.Control.showAgentPanel" ) },
+            AI_ACTION_CATALOG::Build( toolManager->GetActionManager(),
+                                      AI_EDITOR_KIND::Pcb, 128 ),
+            m_aiSessionApplyAdapter.get(),
+            m_aiSessionPreviewService.get(),
+            m_aiSessionShadowSeeder.get(),
+            m_aiSessionValidationService.get() );
+}
+
+
 void PCB_EDIT_FRAME::SetBoard( BOARD* aBoard, bool aBuildConnectivity, PROGRESS_REPORTER* aReporter )
 {
     // PCB_BASE_FRAME::SetBoard() deletes m_pcb; detach tracker consumers first.
@@ -1152,6 +1216,9 @@ void PCB_EDIT_FRAME::SetBoard( BOARD* aBoard, bool aBuildConnectivity, PROGRESS_
     SetPageSettings( aBoard->GetPageSettings() );
 
     UpdateVariantSelectionCtrl();
+
+    refreshAiPcbSessionServices();
+    configureAiAgentPanelToolCalls();
 }
 
 

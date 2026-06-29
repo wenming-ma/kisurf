@@ -25,6 +25,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <wx/filename.h>
 
 namespace
@@ -256,7 +257,14 @@ bool replaySessionToPreviewBoard( const AI_EXECUTION_SESSION& aSession,
 
 KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::KISURF_AI_PCB_SESSION_VALIDATION_SERVICE(
         BOARD& aBoard ) :
-        m_Board( &aBoard )
+        m_BoardProvider( [&aBoard]() { return &aBoard; } )
+{
+}
+
+
+KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::KISURF_AI_PCB_SESSION_VALIDATION_SERVICE(
+        BOARD_PROVIDER aBoardProvider ) :
+        m_BoardProvider( std::move( aBoardProvider ) )
 {
 }
 
@@ -284,7 +292,9 @@ AI_SESSION_VALIDATION_RESULT KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::RunValida
 
     payload["validation"]["native_backend"] = "pcbnew.drc_engine";
 
-    if( !m_Board )
+    BOARD* board = m_BoardProvider ? m_BoardProvider() : nullptr;
+
+    if( !board )
     {
         payload["validation"]["status"] = "native_unavailable";
         addWarning( payload, "PCB board is not connected to native validation service." );
@@ -299,13 +309,13 @@ AI_SESSION_VALIDATION_RESULT KISURF_AI_PCB_SESSION_VALIDATION_SERVICE::RunValida
     const size_t sessionMutations = sessionMutationCount( aSession );
 
     std::unique_ptr<BOARD> previewBoard;
-    BOARD* validationBoard = m_Board;
+    BOARD* validationBoard = board;
 
     if( sessionMutations > 0 )
     {
         try
         {
-            previewBoard = cloneBoardThroughKiCadSexpr( *m_Board );
+            previewBoard = cloneBoardThroughKiCadSexpr( *board );
 
             if( !previewBoard )
             {

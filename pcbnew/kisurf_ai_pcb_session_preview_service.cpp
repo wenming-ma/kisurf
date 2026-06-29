@@ -1043,11 +1043,20 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
 
 KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
         BOARD& aBoard, KIGFX::VIEW& aView, EDA_DRAW_PANEL_GAL* aCanvas ) :
-        m_Board( aBoard ),
-        m_Resolver( aBoard ),
-        m_Adapter( m_Resolver, aView ),
-        m_PreviewManager( m_Adapter ),
-        m_Canvas( aCanvas )
+        KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
+                [&aBoard]() { return &aBoard; },
+                [&aView]() { return &aView; },
+                [aCanvas]() { return aCanvas; } )
+{
+}
+
+
+KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::KISURF_AI_PCB_SESSION_PREVIEW_SERVICE(
+        BOARD_PROVIDER aBoardProvider, VIEW_PROVIDER aViewProvider,
+        CANVAS_PROVIDER aCanvasProvider ) :
+        m_BoardProvider( std::move( aBoardProvider ) ),
+        m_ViewProvider( std::move( aViewProvider ) ),
+        m_CanvasProvider( std::move( aCanvasProvider ) )
 {
 }
 
@@ -1059,11 +1068,53 @@ void KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::SetPreviewFrameCaptureProvider(
 }
 
 
+const std::vector<BOARD_ITEM*>&
+KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::PreviewedItems() const
+{
+    static const std::vector<BOARD_ITEM*> emptyItems;
+    return m_Adapter ? m_Adapter->PreviewedItems() : emptyItems;
+}
+
+
+bool KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::ensureBackend(
+        AI_SESSION_PREVIEW_RESULT& aResult )
+{
+    BOARD* board = m_BoardProvider ? m_BoardProvider() : nullptr;
+    KIGFX::VIEW* view = m_ViewProvider ? m_ViewProvider() : nullptr;
+
+    if( !board || !view )
+    {
+        aResult.m_Ok = false;
+        aResult.m_ErrorCode = wxS( "preview_backend_unavailable" );
+        aResult.m_Message =
+                wxS( "PCB session preview service cannot access the active board view." );
+        return false;
+    }
+
+    if( m_PreviewManager && board == m_CurrentBoard && view == m_CurrentView )
+        return true;
+
+    if( m_PreviewManager )
+        m_PreviewManager->ClearPreview();
+
+    m_PreviewManager.reset();
+    m_Adapter.reset();
+    m_Resolver.reset();
+
+    m_CurrentBoard = board;
+    m_CurrentView = view;
+    m_Resolver = std::make_unique<KISURF_AI_PCB_OBJECT_RESOLVER>( *m_CurrentBoard );
+    m_Adapter = std::make_unique<KISURF_AI_PCB_PREVIEW_ADAPTER>(
+            *m_Resolver, *m_CurrentView );
+    m_PreviewManager = std::make_unique<AI_PREVIEW_MANAGER>( *m_Adapter );
+    m_ActiveSessionId = 0;
+    return true;
+}
+
+
 AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         const AI_EXECUTION_SESSION& aSession, const wxString& aArgumentsJson )
 {
-    wxUnusedVar( m_Board );
-
     AI_SESSION_PREVIEW_RESULT result;
 
     if( aSession.EditorKind() != AI_EDITOR_KIND::Pcb )
@@ -1074,6 +1125,9 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         return result;
     }
 
+    if( !ensureBackend( result ) )
+        return result;
+
     nlohmann::json provenance = {
         { "source", "ai_session" },
         { "session_id", aSession.SessionId() },
@@ -1083,7 +1137,7 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
     };
 
     m_ActiveSessionId = aSession.SessionId();
-    const uint64_t previewId = m_PreviewManager.BeginPreview( fromJson( provenance ) );
+    const uint64_t previewId = m_PreviewManager->BeginPreview( fromJson( provenance ) );
     size_t renderedItemCount = 0;
     size_t renderedOverlayCount = 0;
     std::vector<AI_VISUAL_ANCHOR_RECORD> previewAnchors;
@@ -1098,10 +1152,10 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         if( std::optional<AI_VISUAL_ANCHOR_RECORD> anchor = previewAnchorForShadowItem( item ) )
             previewAnchors.push_back( *anchor );
 
-        const size_t beforeCount = m_Adapter.PreviewedItems().size();
-        m_PreviewManager.ShowObject( *ref );
+        const size_t beforeCount = m_Adapter->PreviewedItems().size();
+        m_PreviewManager->ShowObject( *ref );
 
-        if( m_Adapter.PreviewedItems().size() > beforeCount )
+        if( m_Adapter->PreviewedItems().size() > beforeCount )
             ++renderedItemCount;
 
         wxString severity = metadataValue( item, wxS( "validation_status" ) );
@@ -1116,13 +1170,13 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
             if( message.IsEmpty() )
                 message = severity;
 
-            const size_t beforeOverlayCount = m_Adapter.PreviewedItems().size();
-            m_PreviewManager.ShowItemOverlay( shadowItemPreviewLabel( item ),
-                                              wxS( "validation" ), severity, message,
-                                              validationOverlayGeometry( item ),
-                                              validationOverlayLayer( item ) );
+            const size_t beforeOverlayCount = m_Adapter->PreviewedItems().size();
+            m_PreviewManager->ShowItemOverlay( shadowItemPreviewLabel( item ),
+                                               wxS( "validation" ), severity, message,
+                                               validationOverlayGeometry( item ),
+                                               validationOverlayLayer( item ) );
 
-            if( m_Adapter.PreviewedItems().size() > beforeOverlayCount )
+            if( m_Adapter->PreviewedItems().size() > beforeOverlayCount )
                 ++renderedOverlayCount;
         }
     }
@@ -1131,9 +1185,14 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
 
     if( m_PreviewFrameCaptureProvider )
         previewFrame = m_PreviewFrameCaptureProvider( previewId, aSession );
-    else if( m_Canvas )
-        previewFrame = capturePreviewFrameFromCanvas( *m_Canvas, previewId,
-                                                     aSession, previewAnchors );
+    else if( m_CanvasProvider )
+    {
+        if( EDA_DRAW_PANEL_GAL* canvas = m_CanvasProvider() )
+        {
+            previewFrame = capturePreviewFrameFromCanvas( *canvas, previewId,
+                                                          aSession, previewAnchors );
+        }
+    }
 
     result.m_Ok = true;
     result.m_PreviewId = previewId;
@@ -1158,6 +1217,8 @@ void KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::ClearPreview( uint64_t aSessionId )
     if( m_ActiveSessionId != aSessionId )
         return;
 
-    m_PreviewManager.ClearPreview();
+    if( m_PreviewManager )
+        m_PreviewManager->ClearPreview();
+
     m_ActiveSessionId = 0;
 }

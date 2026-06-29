@@ -825,6 +825,25 @@ if( WIN32 )
     add_custom_command( TARGET pcbnew POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_directory "${PROJECT_BINARY_DIR}/schemas" "${PROJECT_BINARY_DIR}/share/kicad/schemas"
         )
+
+    add_custom_target( pcbnew_runtime_dll_sync
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicommon>" "$<TARGET_FILE_DIR:pcbnew>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:gal>" "$<TARGET_FILE_DIR:pcbnew>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kicad_3dsg>" "$<TARGET_FILE_DIR:pcbnew>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:kiapi>" "$<TARGET_FILE_DIR:pcbnew>"
+        COMMAND ${CMAKE_COMMAND}
+            "-DKISURF_RUNTIME_DLL_DIRS=$<TARGET_FILE_DIR:kicommon>,$<TARGET_FILE_DIR:gal>,$<TARGET_FILE_DIR:kicad_3dsg>,$<TARGET_FILE_DIR:kiapi>,$<TARGET_FILE_DIR:pcbnew_kiface>"
+            "-DKISURF_RUNTIME_DEST=$<TARGET_FILE_DIR:pcbnew>"
+            -P "${CMAKE_SOURCE_DIR}/cmake/CopyRuntimeDirectoryDlls.cmake"
+        )
+    add_dependencies( pcbnew_runtime_dll_sync
+        kicommon
+        gal
+        kicad_3dsg
+        kiapi
+        pcbnew_kiface
+        )
+    add_dependencies( pcbnew pcbnew_runtime_dll_sync )
 endif()
 
 #these 2 binaries are a matched set, keep them together:

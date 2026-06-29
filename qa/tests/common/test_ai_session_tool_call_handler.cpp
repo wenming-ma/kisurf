@@ -665,6 +665,20 @@ public:
 };
 
 
+class RECORDING_SESSION_SHADOW_BOARD_SEEDER : public AI_SESSION_SHADOW_BOARD_SEEDER
+{
+public:
+    void Seed( AI_EXECUTION_SESSION& aSession ) override
+    {
+        ++m_SeedCount;
+        m_LastSessionId = aSession.SessionId();
+    }
+
+    int      m_SeedCount = 0;
+    uint64_t m_LastSessionId = 0;
+};
+
+
 class BLOCKING_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
@@ -688,6 +702,19 @@ public:
     }
 
     int m_RunCount = 0;
+};
+
+
+class FAILING_SHADOW_BOARD_SEEDER : public AI_SESSION_SHADOW_BOARD_SEEDER
+{
+public:
+    void Seed( AI_EXECUTION_SESSION& ) override
+    {
+        ++m_SeedCount;
+        throw std::runtime_error( "live board seeder should not be called" );
+    }
+
+    int m_SeedCount = 0;
 };
 } // namespace
 
@@ -757,6 +784,17 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
     BOOST_REQUIRE( catalogTool( "kisurf_run_atomic_operation" ) );
     BOOST_REQUIRE( catalogTool( "kisurf_run_atomic_operation" )
                            ->contains( "operation_contracts" ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_run_atomic_operation" )
+                           ->contains( "coordinate_contract" ) );
+    const nlohmann::json& coordinateContract =
+            ( *catalogTool( "kisurf_run_atomic_operation" ) )["coordinate_contract"];
+    BOOST_CHECK( coordinateContract.contains( "direct_point" ) );
+    BOOST_CHECK( coordinateContract.contains( "relative_point" ) );
+    BOOST_CHECK( coordinateContract.contains( "between_point" ) );
+    BOOST_CHECK( coordinateContract.contains( "parallel_track" ) );
+    BOOST_CHECK( coordinateContract.value( "journal_policy", std::string() )
+                         .find( "lowered to absolute" ) != std::string::npos );
+
     const nlohmann::json& operationContracts =
             ( *catalogTool( "kisurf_run_atomic_operation" ) )["operation_contracts"];
     BOOST_REQUIRE( operationContracts.contains( "pcb.create_via" ) );
@@ -767,6 +805,10 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                          "position" ) != std::string::npos );
     BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
                          .contains( "width" ) );
+    BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
+                         .contains( "parallel_to" ) );
+    BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
+                         .contains( "offset" ) );
     BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
             "target_positions" ) );
     BOOST_REQUIRE( operationContracts.contains( "pcb.create_zone" ) );
@@ -952,7 +994,10 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
            "surface_fill_row_op",
            "surface_fill_column_op",
            "surface_fill_range_op",
-           "surface_set_property_op" } )
+           "surface_set_property_op",
+           "point_relative_to",
+           "point_between",
+           "create_parallel_track_segment" } )
     {
         BOOST_CHECK( std::find( pythonHelpers.begin(), pythonHelpers.end(),
                                 helper ) != pythonHelpers.end() );
@@ -969,6 +1014,43 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
     BOOST_CHECK( !catalogText.Contains( wxS( "script_run_operation_bundle" ) ) );
     BOOST_CHECK( !catalogText.Contains( wxS( "pcb_fill_via_matrix" ) ) );
     BOOST_CHECK( !catalogText.Contains( wxS( "\"can_publish\":true" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( LiveBoardQuerySeedsFromRequestSnapshotBeforeLiveBoardSeeder )
+{
+    FAILING_SHADOW_BOARD_SEEDER seeder;
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, nullptr, nullptr, &seeder );
+    AI_PROVIDER_REQUEST request = requestWithContext();
+    request.m_ContextSnapshot.m_VisibleObjects.push_back(
+            AI_OBJECT_REF( KIID(), PCB_VIA_T, wxS( "via:GND" ),
+                           wxS( "{\"kind\":\"via\",\"position\":{\"x\":100,\"y\":200},"
+                                "\"diameter\":600000,\"net_name\":\"GND\","
+                                "\"layers\":[\"F.Cu\",\"B.Cu\"]}" ) ) );
+
+    AI_TOOL_CALL_RECORD openCall;
+    openCall.m_ToolCallId = wxS( "open_session" );
+    openCall.m_ToolName = wxS( "kisurf_open_session" );
+    openCall.m_ArgumentsJson = wxS( "{}" );
+    BOOST_REQUIRE( handler.HandleToolCall( request, openCall ).m_Allowed );
+
+    AI_TOOL_CALL_RECORD queryCall;
+    queryCall.m_ToolCallId = wxS( "query_live" );
+    queryCall.m_ToolName = wxS( "kisurf_query_items" );
+    queryCall.m_ArgumentsJson =
+            wxS( "{\"filter\":{\"live_board\":true,\"type\":\"via\"}}" );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            handler.HandleToolCall( request, queryCall );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_REQUIRE( result.m_Allowed );
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( payload.contains( "items" ) );
+    BOOST_REQUIRE_EQUAL( payload["items"].size(), 1 );
+    BOOST_CHECK_EQUAL( payload["items"][0]["type"].get<std::string>(), "via" );
+    BOOST_CHECK_EQUAL( payload["items"][0]["metadata"]["seed_source"].get<std::string>(),
+                       "context_snapshot" );
 }
 
 
@@ -1032,6 +1114,57 @@ BOOST_AUTO_TEST_CASE( HandlerReportsPendingSessionAfterAtomicMutation )
             requestWithContext(),
             toolCall( wxS( "kisurf_reject_session" ), wxS( "{}" ) ) ).m_Allowed );
     BOOST_CHECK( !handler.HasPendingSessionPreview() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionQueriesDoNotUseUnsafeLiveBoardSeeder )
+{
+    RECORDING_SESSION_SHADOW_BOARD_SEEDER seeder;
+    RECORDING_SESSION_VALIDATION_SERVICE validationService;
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, nullptr, nullptr, &seeder,
+                                          &validationService );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) ).m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_validation" ),
+                      wxS( "{\"scope\":\"session\",\"level\":\"drc_lite\"}" ) ) )
+                           .m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_board_summary" ), wxS( "{}" ) ) )
+                           .m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_items" ), wxS( "{}" ) ) ).m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_items" ),
+                      wxS( "{\"live_board\":true}" ) ) ).m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_items" ), wxS( "{}" ) ) ).m_Allowed );
+
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
 }
 
 
@@ -1196,6 +1329,134 @@ BOOST_AUTO_TEST_CASE( DirectAtomicOperationAppliesToShadowSessionOnly )
                  == AI_SESSION_OPERATION_KIND::CreateVia );
     BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 1 );
     BOOST_REQUIRE( handler.ActiveSession()->ResolveAlias( wxS( "direct-via" ) ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationResolvesRelativePointReference )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"anchor-via\",\"net\":\"GND\","
+                           "\"position\":{\"x\":100,\"y\":200}}}" ) ) )
+                           .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"relative-via\",\"net\":\"GND\","
+                           "\"position\":{\"relative_to\":\"anchor-via\","
+                           "\"anchor\":\"center\","
+                           "\"offset\":{\"x\":30,\"y\":-10}}}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    std::optional<AI_SESSION_HANDLE> handle =
+            handler.ActiveSession()->ResolveAlias( wxS( "relative-via" ) );
+    BOOST_REQUIRE( handle.has_value() );
+
+    const AI_SHADOW_ITEM* item =
+            handler.ActiveSession()->ShadowBoard().FindItem( *handle );
+    BOOST_REQUIRE( item != nullptr );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( item->m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["position"]["x"].get<int>(), 130 );
+    BOOST_CHECK_EQUAL( geometry["position"]["y"].get<int>(), 190 );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationResolvesPercentageBetweenReferences )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"left-anchor\",\"net\":\"GND\","
+                           "\"position\":{\"x\":0,\"y\":0}}}" ) ) )
+                           .m_Allowed );
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"right-anchor\",\"net\":\"GND\","
+                           "\"position\":{\"x\":100,\"y\":0}}}" ) ) )
+                           .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":"
+                           "{\"alias\":\"percent-via\",\"net\":\"GND\","
+                           "\"position\":{\"between\":[\"left-anchor\","
+                           "\"right-anchor\"],\"percent\":75,"
+                           "\"offset\":{\"x\":0,\"y\":5}}}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    std::optional<AI_SESSION_HANDLE> handle =
+            handler.ActiveSession()->ResolveAlias( wxS( "percent-via" ) );
+    BOOST_REQUIRE( handle.has_value() );
+
+    const AI_SHADOW_ITEM* item =
+            handler.ActiveSession()->ShadowBoard().FindItem( *handle );
+    BOOST_REQUIRE( item != nullptr );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( item->m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["position"]["x"].get<int>(), 75 );
+    BOOST_CHECK_EQUAL( geometry["position"]["y"].get<int>(), 5 );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationCreatesParallelTrackFromReference )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    BOOST_REQUIRE( handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_track_segment\",\"arguments\":"
+                           "{\"alias\":\"base-track\",\"net\":\"GND\","
+                           "\"layer\":\"F.Cu\",\"width\":100,"
+                           "\"start\":{\"x\":100,\"y\":200},"
+                           "\"end\":{\"x\":300,\"y\":200}}}" ) ) )
+                           .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_track_segment\",\"arguments\":"
+                           "{\"alias\":\"parallel-track\",\"net\":\"GND\","
+                           "\"layer\":\"F.Cu\",\"width\":100,"
+                           "\"parallel_to\":\"base-track\","
+                           "\"offset\":{\"x\":0,\"y\":50}}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    std::optional<AI_SESSION_HANDLE> handle =
+            handler.ActiveSession()->ResolveAlias( wxS( "parallel-track" ) );
+    BOOST_REQUIRE( handle.has_value() );
+
+    const AI_SHADOW_ITEM* item =
+            handler.ActiveSession()->ShadowBoard().FindItem( *handle );
+    BOOST_REQUIRE( item != nullptr );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( item->m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["start"]["x"].get<int>(), 100 );
+    BOOST_CHECK_EQUAL( geometry["start"]["y"].get<int>(), 250 );
+    BOOST_CHECK_EQUAL( geometry["end"]["x"].get<int>(), 300 );
+    BOOST_CHECK_EQUAL( geometry["end"]["y"].get<int>(), 250 );
 }
 
 

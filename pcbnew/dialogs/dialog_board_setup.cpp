@@ -34,6 +34,10 @@
 #include <pcb_io/pcb_io_mgr.h>
 #include <panel_embedded_files.h>
 #include <dialogs/panel_setup_severities.h>
+#include <kisurf/ai/ai_agent_panel_model.h>
+#include <kisurf/ai/ai_panel_state_wx_adapter.h>
+#include <kisurf/ai/ai_preview_manager.h>
+#include <kisurf/ai/ai_structured_surface_preview_adapter.h>
 #include <dialogs/panel_setup_rules.h>
 #include <dialogs/panel_setup_teardrops.h>
 #include <dialogs/panel_setup_zones.h>
@@ -55,8 +59,89 @@
 #include <dialog_board_setup.h>
 #include <footprint.h>
 
+#include <cctype>
+#include <memory>
+#include <vector>
+#include <wx/grid.h>
+
 
 #define RESOLVE_PAGE( T, pageIndex ) static_cast<T*>( m_treebook->ResolvePage( pageIndex ) )
+
+namespace
+{
+wxString aiPageSlug( const wxString& aText )
+{
+    wxString slug;
+    bool     previousWasSeparator = false;
+
+    for( wxUniChar ch : aText )
+    {
+        const char c = static_cast<char>( ch.GetValue() );
+
+        if( c >= 'A' && c <= 'Z' )
+        {
+            slug << static_cast<wxChar>( std::tolower( c ) );
+            previousWasSeparator = false;
+        }
+        else if( c >= 'a' && c <= 'z' )
+        {
+            slug << static_cast<wxChar>( c );
+            previousWasSeparator = false;
+        }
+        else if( c >= '0' && c <= '9' )
+        {
+            slug << static_cast<wxChar>( c );
+            previousWasSeparator = false;
+        }
+        else if( !previousWasSeparator && !slug.IsEmpty() )
+        {
+            slug << wxS( "_" );
+            previousWasSeparator = true;
+        }
+    }
+
+    while( slug.EndsWith( wxS( "_" ) ) )
+        slug.RemoveLast();
+
+    if( slug.IsEmpty() )
+        slug = wxS( "page" );
+
+    return slug;
+}
+
+
+void collectAiPreviewGrids( wxWindow& aRoot, std::vector<wxGrid*>& aGrids )
+{
+    if( wxGrid* grid = dynamic_cast<wxGrid*>( &aRoot ) )
+        aGrids.push_back( grid );
+
+    const wxWindowList& children = aRoot.GetChildren();
+
+    for( wxWindowList::compatibility_iterator node = children.GetFirst();
+         node; node = node->GetNext() )
+    {
+        if( wxWindow* child = node->GetData() )
+            collectAiPreviewGrids( *child, aGrids );
+    }
+}
+
+
+wxString aiBoardSetupGridTableId( const wxString& aPageSlug, size_t aGridCount,
+                                  size_t aGridIndex )
+{
+    wxString tableId = aPageSlug;
+
+    if( tableId.IsEmpty() )
+        tableId = wxS( "grid" );
+
+    tableId << wxS( ".grid" );
+
+    if( aGridCount > 1 )
+        tableId << aGridIndex;
+
+    return tableId;
+}
+} // namespace
 
 DIALOG_BOARD_SETUP::DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aParentWindow ) :
         PAGED_DIALOG( aParentWindow ? aParentWindow : aFrame, _( "Board Setup" ), false, false,
@@ -280,11 +365,125 @@ DIALOG_BOARD_SETUP::DIALOG_BOARD_SETUP( PCB_EDIT_FRAME* aFrame, wxWindow* aParen
 
 DIALOG_BOARD_SETUP::~DIALOG_BOARD_SETUP()
 {
+    ClearAiSuggestionPreview();
+}
+
+
+AI_PANEL_STATE_RECORD DIALOG_BOARD_SETUP::SemanticPanelStateRecord()
+{
+    if( !m_treebook )
+        return AI_PANEL_STATE_RECORD();
+
+    const int selection = m_treebook->GetSelection();
+
+    if( selection < 0 )
+        return AI_PANEL_STATE_RECORD();
+
+    wxWindow* page = m_treebook->ResolvePage( static_cast<size_t>( selection ) );
+
+    if( !page )
+        return AI_PANEL_STATE_RECORD();
+
+    const wxString pageTitle = m_treebook->GetPageText( static_cast<size_t>( selection ) );
+    const wxString pageSlug = aiPageSlug( pageTitle );
+
+    return AiPanelStateRecordFromWxWindowGrids(
+            *page, wxS( "board_setup." ) + pageSlug, _( "Board Setup" ),
+            pageSlug, pageTitle );
+}
+
+
+bool DIALOG_BOARD_SETUP::PreviewAiSuggestion(
+        AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
+        AI_PREVIEW_ADAPTER* aWorkspaceAdapter )
+{
+    ClearAiSuggestionPreview();
+
+    if( !m_treebook )
+        return false;
+
+    const int selection = m_treebook->GetSelection();
+
+    if( selection < 0 )
+        return false;
+
+    wxWindow* page = m_treebook->ResolvePage( static_cast<size_t>( selection ) );
+
+    if( !page )
+        return false;
+
+    std::vector<wxGrid*> grids;
+    collectAiPreviewGrids( *page, grids );
+
+    AI_COMPOSITE_PREVIEW_ADAPTER composite;
+
+    if( aWorkspaceAdapter )
+        composite.AddAdapter( *aWorkspaceAdapter );
+
+    const wxString pageSlug =
+            aiPageSlug( m_treebook->GetPageText( static_cast<size_t>( selection ) ) );
+    const wxString surfaceId = wxS( "board_setup." ) + pageSlug;
+
+    std::vector<std::unique_ptr<AI_STRUCTURED_SURFACE_PREVIEW_ADAPTER>>
+            structuredAdapters;
+
+    m_aiGridPreviewOverlayIos.reserve( grids.size() );
+    structuredAdapters.reserve( grids.size() );
+
+    for( size_t ii = 0; ii < grids.size(); ++ii )
+    {
+        auto overlayIo =
+                std::make_unique<AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO>(
+                        *grids[ii] );
+        AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO& overlayIoRef =
+                *overlayIo;
+        m_aiGridPreviewOverlayIos.push_back( std::move( overlayIo ) );
+
+        auto adapter = std::make_unique<AI_STRUCTURED_SURFACE_PREVIEW_ADAPTER>(
+                overlayIoRef, surfaceId,
+                aiBoardSetupGridTableId( pageSlug, grids.size(), ii ) );
+        composite.AddAdapter( *adapter );
+        structuredAdapters.push_back( std::move( adapter ) );
+    }
+
+    if( composite.AdapterCount() == 0 )
+        return false;
+
+    AI_PREVIEW_MANAGER preview( composite );
+    const bool previewed = aModel.PreviewSuggestion( aSuggestionId, preview );
+
+    if( previewed )
+    {
+        m_aiActivePreviewId = preview.CurrentPreviewId();
+        return true;
+    }
+
+    ClearAiSuggestionPreview();
+    return false;
+}
+
+
+void DIALOG_BOARD_SETUP::ClearAiSuggestionPreview()
+{
+    if( m_aiActivePreviewId != 0 )
+    {
+        for( const std::unique_ptr<AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO>& io :
+             m_aiGridPreviewOverlayIos )
+        {
+            if( io )
+                io->ClearPreview( m_aiActivePreviewId );
+        }
+    }
+
+    m_aiActivePreviewId = 0;
+    m_aiGridPreviewOverlayIos.clear();
 }
 
 
 void DIALOG_BOARD_SETUP::onPageChanged( wxBookCtrlEvent& aEvent )
 {
+    ClearAiSuggestionPreview();
+
     PAGED_DIALOG::onPageChanged( aEvent );
 
     size_t page = aEvent.GetSelection();

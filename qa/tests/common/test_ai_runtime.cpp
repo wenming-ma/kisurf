@@ -1,11 +1,17 @@
 #include <boost/test/unit_test.hpp>
 #include <json_common.h>
 #include <kisurf/ai/ai_artifact_store.h>
+#include <kisurf/ai/ai_marshaled_tool_call_handler.h>
 #include <kisurf/ai/ai_prompt_trace_store.h>
 #include <kisurf/ai/ai_provider.h>
 #include <kisurf/ai/ai_runtime.h>
 
+#include <condition_variable>
+#include <algorithm>
 #include <memory>
+#include <mutex>
+#include <optional>
+#include <thread>
 #include <vector>
 
 #include <wx/filefn.h>
@@ -113,6 +119,62 @@ public:
 };
 
 
+class STREAMING_TEXT_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest,
+                                   AI_PROVIDER_STREAM_EVENT_SINK aStreamSink ) override
+    {
+        AI_PROVIDER_STREAM_EVENT first;
+        first.m_RequestId = aRequest.m_RequestId;
+        first.m_TextDelta = wxS( "Hel" );
+        aStreamSink( first );
+
+        AI_PROVIDER_STREAM_EVENT second;
+        second.m_RequestId = aRequest.m_RequestId;
+        second.m_TextDelta = wxS( "lo" );
+        aStreamSink( second );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Streaming Provider" );
+        response.m_Body = wxS( "Hello" );
+        return response;
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        return Generate( aRequest, AI_PROVIDER_STREAM_EVENT_SINK() );
+    }
+};
+
+
+class STREAM_SINK_TRACKING_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest,
+                                   AI_PROVIDER_STREAM_EVENT_SINK aStreamSink ) override
+    {
+        m_StreamSinkProvided = static_cast<bool>( aStreamSink );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Sink Tracking Provider" );
+        response.m_Body = wxS( "Tracked" );
+        return response;
+    }
+
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        return Generate( aRequest, AI_PROVIDER_STREAM_EVENT_SINK() );
+    }
+
+    bool m_StreamSinkProvided = false;
+};
+
+
 class SCRIPT_CONTINUATION_TOOL_CALL_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -142,6 +204,106 @@ public:
                 wxS( "{\"cell_id\":\"cell-large\",\"cell_text\":\"print('x')\"}" );
         response.m_ToolCalls.push_back( call );
 
+        return response;
+    }
+
+    int                 m_CallCount = 0;
+    AI_PROVIDER_REQUEST m_LastRequest;
+};
+
+
+class TEXTUAL_TOOL_CALL_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_LastRequest = aRequest;
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Textual Tool Call Provider" );
+
+        if( !aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Tool result received after textual call." );
+            return response;
+        }
+
+        response.m_Body =
+                wxS( "call kisurf_run_atomic_operation(arguments)="
+                     "{\"kind\":\"pcb.create_via\","
+                     "\"arguments\":{\"position\":{\"x\":10000000,"
+                     "\"y\":10000000},\"diameter\":600000,"
+                     "\"drill\":300000}}" );
+        return response;
+    }
+
+    int                 m_CallCount = 0;
+    AI_PROVIDER_REQUEST m_LastRequest;
+};
+
+
+class COLON_TEXTUAL_TOOL_CALL_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_LastRequest = aRequest;
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Colon Textual Tool Call Provider" );
+
+        if( !aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Tool result received after colon textual call." );
+            return response;
+        }
+
+        response.m_Body =
+                wxS( "call:kisurf_run_atomic_operation{arguments:{kind:pcb.create_via,"
+                     "position:{x:10000000,y:10000000},diameter:600000,drill:300000}}" );
+        return response;
+    }
+
+    int                 m_CallCount = 0;
+    AI_PROVIDER_REQUEST m_LastRequest;
+};
+
+
+class NESTED_ATOMIC_TOOL_CALL_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_LastRequest = aRequest;
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Nested Atomic Tool Call Provider" );
+
+        if( !aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Tool result received after nested atomic call." );
+            return response;
+        }
+
+        AI_TOOL_CALL_RECORD call;
+        call.m_RequestId = aRequest.m_RequestId;
+        call.m_ToolCallId = wxS( "nested_atomic_call" );
+        call.m_ToolName = wxS( "kisurf_run_atomic_operation" );
+        call.m_ArgumentsJson =
+                wxS( "{\"kind\":\"pcb.create_via\","
+                     "\"arguments\":{\"arguments\":{\"position\":{\"x\":10000000,"
+                     "\"y\":10000000},\"diameter\":600000,\"drill\":300000}}}" );
+        response.m_ToolCalls.push_back( call );
+        response.m_Body = wxS( "Nested atomic tool call requested." );
         return response;
     }
 
@@ -190,6 +352,42 @@ public:
 };
 
 
+class TOOL_BUDGET_FINALIZATION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Kind = AI_SUGGESTION_KIND::Chat;
+        response.m_Title = wxS( "Budget Finalization Provider" );
+
+        if( aRequest.m_DisableDefaultTools )
+        {
+            response.m_Body = wxS( "Final answer from available tool results." );
+            return response;
+        }
+
+        response.m_Body = wxS( "Tool call requested." );
+
+        AI_TOOL_CALL_RECORD call;
+        call.m_RequestId = aRequest.m_RequestId;
+        call.m_ToolCallId = wxString::Format( wxS( "call_budget_%d" ), m_CallCount );
+        call.m_ToolName = wxS( "kisurf_run_action" );
+        call.m_ArgumentsJson =
+                wxS( "{\"action\":\"pcbnew.InteractiveSelectionTool.selectionClear\"}" );
+        response.m_ToolCalls.push_back( call );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class FAKE_TOOL_CALL_HANDLER : public AI_TOOL_CALL_HANDLER
 {
 public:
@@ -199,6 +397,8 @@ public:
         ++m_CallCount;
         m_LastRequestId = aRequest.m_RequestId;
         m_LastToolCallId = aToolCall.m_ToolCallId;
+        m_LastToolName = aToolCall.m_ToolName;
+        m_LastArgumentsJson = aToolCall.m_ArgumentsJson;
 
         AI_TOOL_INVOCATION_RESULT result;
         result.m_RequestId = aRequest.m_RequestId;
@@ -214,6 +414,8 @@ public:
     int      m_CallCount = 0;
     uint64_t m_LastRequestId = 0;
     wxString m_LastToolCallId;
+    wxString m_LastToolName;
+    wxString m_LastArgumentsJson;
 };
 
 
@@ -425,6 +627,215 @@ public:
 BOOST_AUTO_TEST_SUITE( AiNativeRuntime )
 
 
+BOOST_AUTO_TEST_CASE( MarshalledToolCallHandlerRunsDirectlyOnTargetThread )
+{
+    FAKE_TOOL_CALL_HANDLER target;
+    bool                   dispatchCalled = false;
+
+    AI_MARSHALLED_TOOL_CALL_HANDLER handler(
+            target,
+            [&]( std::function<void()> )
+            {
+                dispatchCalled = true;
+            },
+            []()
+            {
+                return true;
+            } );
+
+    AI_TOOL_CALL_RECORD call;
+    call.m_ToolCallId = wxS( "call_direct" );
+    call.m_ToolName = wxS( "kisurf_run_action" );
+    call.m_ArgumentsJson = wxS( "{}" );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            handler.HandleToolCall( AI_PROVIDER_REQUEST(), call );
+
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( !dispatchCalled );
+    BOOST_CHECK_EQUAL( target.m_CallCount, 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( MarshalledToolCallHandlerQueuesAndWaitsOffTargetThread )
+{
+    FAKE_TOOL_CALL_HANDLER target;
+    std::mutex             mutex;
+    std::condition_variable queued;
+    std::vector<std::function<void()>> tasks;
+
+    AI_MARSHALLED_TOOL_CALL_HANDLER handler(
+            target,
+            [&]( std::function<void()> aTask )
+            {
+                {
+                    std::lock_guard<std::mutex> lock( mutex );
+                    tasks.push_back( std::move( aTask ) );
+                }
+
+                queued.notify_one();
+            },
+            []()
+            {
+                return false;
+            } );
+
+    AI_TOOL_CALL_RECORD call;
+    call.m_ToolCallId = wxS( "call_queued" );
+    call.m_ToolName = wxS( "kisurf_run_action" );
+    call.m_ArgumentsJson = wxS( "{}" );
+
+    std::optional<AI_TOOL_INVOCATION_RESULT> result;
+    std::thread worker(
+            [&]()
+            {
+                result = handler.HandleToolCall( AI_PROVIDER_REQUEST(), call );
+            } );
+
+    std::function<void()> task;
+
+    {
+        std::unique_lock<std::mutex> lock( mutex );
+        BOOST_REQUIRE( queued.wait_for(
+                lock, std::chrono::seconds( 5 ),
+                [&]() { return !tasks.empty(); } ) );
+        task = std::move( tasks.front() );
+        tasks.clear();
+    }
+
+    BOOST_CHECK_EQUAL( target.m_CallCount, 0 );
+
+    task();
+    worker.join();
+
+    BOOST_REQUIRE( result.has_value() );
+    BOOST_CHECK( result->m_Executed );
+    BOOST_CHECK_EQUAL( target.m_CallCount, 1 );
+    BOOST_CHECK_EQUAL( target.m_LastToolCallId, wxString( wxS( "call_queued" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeStreamEventSinkReportsRequestToolAndFinalEvents )
+{
+    auto* provider = new CONTINUATION_TOOL_CALL_PROVIDER();
+    AI_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    std::vector<AI_RUNTIME_STREAM_EVENT> events;
+    runtime.SetStreamEventSink(
+            [&]( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                events.push_back( aEvent );
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_UserText = wxS( "clear selection" );
+    request.m_MaxToolRounds = 2;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Tool result received." ) ) );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+    BOOST_REQUIRE_GE( events.size(), 5 );
+
+    BOOST_CHECK_EQUAL( static_cast<int>( events.at( 0 ).m_Kind ),
+                       static_cast<int>( AI_RUNTIME_STREAM_EVENT_KIND::RequestStarted ) );
+    BOOST_CHECK_EQUAL( events.at( 0 ).m_Message, wxString( wxS( "Request started." ) ) );
+
+    const auto toolStarted = std::find_if(
+            events.begin(), events.end(),
+            []( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                return aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ToolCallStarted;
+            } );
+
+    BOOST_REQUIRE( toolStarted != events.end() );
+    BOOST_CHECK_EQUAL( toolStarted->m_ToolCall.m_ToolName,
+                       wxString( wxS( "kisurf_run_action" ) ) );
+    BOOST_CHECK( toolStarted->m_Message.Contains( wxS( "kisurf_run_action" ) ) );
+
+    const auto toolFinished = std::find_if(
+            events.begin(), events.end(),
+            []( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                return aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ToolCallFinished;
+            } );
+
+    BOOST_REQUIRE( toolFinished != events.end() );
+    BOOST_CHECK( toolFinished->m_ToolResult.m_Executed );
+    BOOST_CHECK_EQUAL( toolFinished->m_ToolResult.m_Message,
+                       wxString( wxS( "fake executed" ) ) );
+
+    BOOST_CHECK_EQUAL( static_cast<int>( events.back().m_Kind ),
+                       static_cast<int>( AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse ) );
+    BOOST_CHECK_EQUAL( events.back().m_TextDelta,
+                       wxString( wxS( "Tool result received." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeEmitsProviderTextDeltaStreamEvents )
+{
+    wxUnsetEnv( wxS( "KISURF_AI_ENABLE_PROVIDER_STREAMING" ) );
+
+    AI_RUNTIME runtime( std::make_unique<STREAMING_TEXT_PROVIDER>() );
+
+    std::vector<AI_RUNTIME_STREAM_EVENT> events;
+    runtime.SetStreamEventSink(
+            [&]( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                events.push_back( aEvent );
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_UserText = wxS( "say hello" );
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Hello" ) ) );
+
+    std::vector<wxString> deltas;
+
+    for( const AI_RUNTIME_STREAM_EVENT& event : events )
+    {
+        if( event.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::TextDelta )
+            deltas.push_back( event.m_TextDelta );
+    }
+
+    BOOST_REQUIRE_EQUAL( deltas.size(), 2 );
+    BOOST_CHECK_EQUAL( deltas.at( 0 ), wxString( wxS( "Hel" ) ) );
+    BOOST_CHECK_EQUAL( deltas.at( 1 ), wxString( wxS( "lo" ) ) );
+    BOOST_CHECK_EQUAL( static_cast<int>( events.back().m_Kind ),
+                       static_cast<int>( AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeKeepsProviderStreamingWhenToolsAreAvailable )
+{
+    auto* provider = new STREAM_SINK_TRACKING_PROVIDER();
+    AI_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+
+    std::vector<AI_RUNTIME_STREAM_EVENT> events;
+    runtime.SetStreamEventSink(
+            [&]( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                events.push_back( aEvent );
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_UserText = wxS( "use a tool" );
+    request.m_ToolCatalogJson = wxS( "[]" );
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Tracked" ) ) );
+    BOOST_CHECK( provider->m_StreamSinkProvided );
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeAssignsRequestIdsAndStoresTrace )
 {
     AI_RUNTIME runtime( std::make_unique<AI_STUB_PROVIDER>() );
@@ -629,6 +1040,127 @@ BOOST_AUTO_TEST_CASE( RuntimeContinuesAfterHandledToolResults )
     BOOST_CHECK_EQUAL( runtime.TraceRecords().front().m_Response.m_Body,
                        wxString( wxS( "Tool result received." ) ) );
     BOOST_REQUIRE_EQUAL( runtime.TraceRecords().front().m_Response.m_ToolCalls.size(), 1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesStrictTextualToolCallFallback )
+{
+    auto provider = std::make_unique<TEXTUAL_TOOL_CALL_PROVIDER>();
+    TEXTUAL_TOOL_CALL_PROVIDER* providerPtr = provider.get();
+    AI_RUNTIME runtime( std::move( provider ) );
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_UserText = wxS( "create a via preview" );
+    request.m_MaxToolRounds = 2;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+    BOOST_CHECK_EQUAL( handler.m_LastToolCallId,
+                       wxString( wxS( "textual_tool_call_1" ) ) );
+    BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( providerPtr->m_LastRequest.m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( providerPtr->m_LastRequest.m_ToolResults.front().m_ToolName,
+                       wxString( wxS( "kisurf_run_atomic_operation" ) ) );
+    BOOST_CHECK( providerPtr->m_LastRequest.m_ToolResults.front()
+                         .m_ArgumentsJson.Contains( wxS( "pcb.create_via" ) ) );
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool result received after textual call." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeExecutesColonTextualToolCallFallbackWithoutNestedArguments )
+{
+    auto provider = std::make_unique<COLON_TEXTUAL_TOOL_CALL_PROVIDER>();
+    COLON_TEXTUAL_TOOL_CALL_PROVIDER* providerPtr = provider.get();
+    AI_RUNTIME runtime( std::move( provider ) );
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_UserText = wxS( "create a via preview" );
+    request.m_MaxToolRounds = 2;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+    BOOST_CHECK_EQUAL( handler.m_LastToolName,
+                       wxString( wxS( "kisurf_run_atomic_operation" ) ) );
+
+    const nlohmann::json arguments =
+            nlohmann::json::parse( handler.m_LastArgumentsJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( arguments["kind"].get<std::string>(), "pcb.create_via" );
+    BOOST_REQUIRE( arguments.contains( "arguments" ) );
+    BOOST_REQUIRE( arguments["arguments"].is_object() );
+    BOOST_CHECK( arguments["arguments"].contains( "position" ) );
+    BOOST_CHECK( !arguments["arguments"].contains( "arguments" ) );
+    BOOST_CHECK_EQUAL( arguments["arguments"]["position"]["x"].get<int>(), 10000000 );
+    BOOST_CHECK_EQUAL( arguments["arguments"]["diameter"].get<int>(), 600000 );
+    BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool result received after colon textual call." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeNormalizesNestedAtomicToolCallArguments )
+{
+    auto provider = std::make_unique<NESTED_ATOMIC_TOOL_CALL_PROVIDER>();
+    NESTED_ATOMIC_TOOL_CALL_PROVIDER* providerPtr = provider.get();
+    AI_RUNTIME runtime( std::move( provider ) );
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_UserText = wxS( "create a via preview" );
+    request.m_MaxToolRounds = 2;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+
+    const nlohmann::json arguments =
+            nlohmann::json::parse( handler.m_LastArgumentsJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( arguments["kind"].get<std::string>(), "pcb.create_via" );
+    BOOST_REQUIRE( arguments["arguments"].is_object() );
+    BOOST_CHECK( arguments["arguments"].contains( "position" ) );
+    BOOST_CHECK( !arguments["arguments"].contains( "arguments" ) );
+    BOOST_CHECK_EQUAL( arguments["arguments"]["position"]["x"].get<int>(), 10000000 );
+    BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 2 );
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool result received after nested atomic call." ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeForcesFinalAnswerWhenToolBudgetIsExhausted )
+{
+    auto* provider = new TOOL_BUDGET_FINALIZATION_PROVIDER();
+    AI_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_TOOL_CALL_HANDLER handler;
+    runtime.SetToolCallHandler( &handler );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_UserText = wxS( "keep using tools until finalization is required" );
+    request.m_MaxToolRounds = 1;
+
+    AI_PROVIDER_RESPONSE response = runtime.Submit( request );
+
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 3 );
+    BOOST_CHECK_EQUAL( handler.m_CallCount, 1 );
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Final answer from available tool results." ) ) );
+    BOOST_REQUIRE_EQUAL( response.m_ToolCalls.size(), 1 );
+    BOOST_CHECK( response.m_ToolCalls.front().m_Executed );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
+    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_DisableDefaultTools );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_DisableDefaultTools );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_ToolCatalogJson.IsEmpty() );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+    BOOST_CHECK( provider->m_Requests.at( 2 ).m_CompiledUserMessageText.Contains(
+            wxS( "Tool round budget was exhausted" ) ) );
 }
 
 

@@ -14,6 +14,7 @@
 
 #include <map>
 #include <string>
+#include <utility>
 
 namespace
 {
@@ -170,6 +171,7 @@ nlohmann::json footprintGeometry( const FOOTPRINT& aFootprint )
         { "value", toUtf8String( aFootprint.GetValue() ) },
         { "fp_id", toUtf8String( aFootprint.GetFPIDAsString() ) },
         { "orientation_degrees", aFootprint.GetOrientationDegrees() },
+        { "is_placed", aFootprint.IsPlaced() },
         { "pad_count", aFootprint.Pads().size() }
     };
 }
@@ -219,15 +221,29 @@ nlohmann::json zoneOutlineGeometry( const ZONE& aZone )
 
 
 KISURF_AI_PCB_SESSION_SHADOW_SEEDER::KISURF_AI_PCB_SESSION_SHADOW_SEEDER(
-        BOARD& aBoard ) :
-        m_Board( aBoard )
+        BOARD& aBoard, SEED_OPTIONS aOptions ) :
+        m_BoardProvider( [&aBoard]() { return &aBoard; } ),
+        m_Options( aOptions )
+{
+}
+
+
+KISURF_AI_PCB_SESSION_SHADOW_SEEDER::KISURF_AI_PCB_SESSION_SHADOW_SEEDER(
+        BOARD_PROVIDER aBoardProvider, SEED_OPTIONS aOptions ) :
+        m_BoardProvider( std::move( aBoardProvider ) ),
+        m_Options( aOptions )
 {
 }
 
 
 void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
 {
-    for( PCB_TRACK* track : m_Board.Tracks() )
+    BOARD* board = m_BoardProvider ? m_BoardProvider() : nullptr;
+
+    if( !board )
+        return;
+
+    for( PCB_TRACK* track : board->Tracks() )
     {
         if( PCB_VIA* via = dynamic_cast<PCB_VIA*>( track ) )
         {
@@ -258,7 +274,7 @@ void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
                         { LSET::Name( track->GetLayer() ) } );
     }
 
-    for( ZONE* zone : m_Board.Zones() )
+    for( ZONE* zone : board->Zones() )
     {
         std::vector<wxString> layers = layerNames( zone->GetLayerSet() );
         wxString layer = firstLayerName( layers );
@@ -266,48 +282,54 @@ void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
                         layer, layers );
     }
 
-    for( FOOTPRINT* footprint : m_Board.Footprints() )
+    if( m_Options.m_IncludeFootprints )
     {
-        std::vector<wxString> footprintLayers = { LSET::Name( footprint->GetLayer() ) };
-        std::map<wxString, wxString> footprintMetadata = {
-            { wxS( "footprint_reference" ), footprint->GetReference() },
-            { wxS( "footprint_value" ), footprint->GetValue() },
-            { wxS( "fp_id" ), footprint->GetFPIDAsString() },
-            { wxS( "pad_count" ),
-              wxString::Format( wxS( "%zu" ), footprint->Pads().size() ) }
-        };
-
-        upsertLiveItem( aSession, *footprint, wxS( "footprint" ),
-                        footprintGeometry( *footprint ), LSET::Name( footprint->GetLayer() ),
-                        footprintLayers, footprintMetadata );
-
-        for( PAD* pad : footprint->Pads() )
+        for( FOOTPRINT* footprint : board->Footprints() )
         {
-            const PCB_LAYER_ID primaryLayer = primaryPadLayer( *pad );
-            std::vector<wxString> padLayers = layerNames( pad->GetLayerSet() );
-            std::map<wxString, wxString> padMetadata = {
+            std::vector<wxString> footprintLayers = { LSET::Name( footprint->GetLayer() ) };
+            std::map<wxString, wxString> footprintMetadata = {
                 { wxS( "footprint_reference" ), footprint->GetReference() },
                 { wxS( "footprint_value" ), footprint->GetValue() },
-                { wxS( "footprint_uuid" ), footprint->m_Uuid.AsString() },
-                { wxS( "pad_number" ), pad->GetNumber() }
+                { wxS( "fp_id" ), footprint->GetFPIDAsString() },
+                { wxS( "is_placed" ),
+                  footprint->IsPlaced() ? wxS( "true" ) : wxS( "false" ) },
+                { wxS( "pad_count" ),
+                  wxString::Format( wxS( "%zu" ), footprint->Pads().size() ) }
             };
 
-            if( footprint->IsSelected() )
-            {
-                padMetadata[wxS( "selected" )] = wxS( "true" );
-                padMetadata[wxS( "selection_inherited_from" )] =
-                        footprint->m_Uuid.AsString();
-                padMetadata[wxS( "selection_inherited_from_type" )] =
-                        wxS( "footprint" );
-            }
+            upsertLiveItem( aSession, *footprint, wxS( "footprint" ),
+                            footprintGeometry( *footprint ),
+                            LSET::Name( footprint->GetLayer() ),
+                            footprintLayers, footprintMetadata );
 
-            upsertLiveItem( aSession, *pad, wxS( "pad" ),
-                            padGeometry( *pad, primaryLayer ),
-                            LSET::Name( primaryLayer ), padLayers, padMetadata );
+            for( PAD* pad : footprint->Pads() )
+            {
+                const PCB_LAYER_ID primaryLayer = primaryPadLayer( *pad );
+                std::vector<wxString> padLayers = layerNames( pad->GetLayerSet() );
+                std::map<wxString, wxString> padMetadata = {
+                    { wxS( "footprint_reference" ), footprint->GetReference() },
+                    { wxS( "footprint_value" ), footprint->GetValue() },
+                    { wxS( "footprint_uuid" ), footprint->m_Uuid.AsString() },
+                    { wxS( "pad_number" ), pad->GetNumber() }
+                };
+
+                if( footprint->IsSelected() )
+                {
+                    padMetadata[wxS( "selected" )] = wxS( "true" );
+                    padMetadata[wxS( "selection_inherited_from" )] =
+                            footprint->m_Uuid.AsString();
+                    padMetadata[wxS( "selection_inherited_from_type" )] =
+                            wxS( "footprint" );
+                }
+
+                upsertLiveItem( aSession, *pad, wxS( "pad" ),
+                                padGeometry( *pad, primaryLayer ),
+                                LSET::Name( primaryLayer ), padLayers, padMetadata );
+            }
         }
     }
 
-    for( BOARD_ITEM* drawing : m_Board.Drawings() )
+    for( BOARD_ITEM* drawing : board->Drawings() )
     {
         PCB_SHAPE* shape = dynamic_cast<PCB_SHAPE*>( drawing );
 

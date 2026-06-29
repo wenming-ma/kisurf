@@ -549,6 +549,38 @@ BOOST_AUTO_TEST_CASE( QueryItemsCanFilterByHandle )
 }
 
 
+BOOST_AUTO_TEST_CASE( QueryItemsCanFilterByMetadata )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+
+    AI_SESSION_HANDLE placedHandle = session.CreateHandle( wxS( "U1" ) );
+    AI_SHADOW_ITEM placed;
+    placed.m_Handle = placedHandle;
+    placed.m_Type = wxS( "footprint" );
+    placed.m_Alias = wxS( "U1" );
+    placed.m_Metadata[wxS( "footprint_reference" )] = wxS( "U1" );
+    placed.m_Metadata[wxS( "is_placed" )] = wxS( "true" );
+    session.ShadowBoard().UpsertItem( std::move( placed ) );
+
+    AI_SESSION_HANDLE unplacedHandle = session.CreateHandle( wxS( "U2" ) );
+    AI_SHADOW_ITEM unplaced;
+    unplaced.m_Handle = unplacedHandle;
+    unplaced.m_Type = wxS( "footprint" );
+    unplaced.m_Alias = wxS( "U2" );
+    unplaced.m_Metadata[wxS( "footprint_reference" )] = wxS( "U2" );
+    unplaced.m_Metadata[wxS( "is_placed" )] = wxS( "false" );
+    session.ShadowBoard().UpsertItem( std::move( unplaced ) );
+
+    std::vector<AI_SHADOW_ITEM> unplacedFootprints =
+            session.ShadowBoard().QueryItems(
+                    wxS( "{\"type\":\"footprint\","
+                         "\"metadata\":{\"is_placed\":\"false\"}}" ) );
+
+    BOOST_REQUIRE_EQUAL( unplacedFootprints.size(), 1 );
+    BOOST_CHECK_EQUAL( unplacedFootprints.front().m_Alias, wxString( wxS( "U2" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( RefillZonesResolvesAffectedAreaZoneHandlesInJournal )
 {
     AI_EXECUTION_SESSION session = makeSession();

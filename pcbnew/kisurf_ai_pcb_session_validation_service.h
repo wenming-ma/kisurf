@@ -12,12 +12,17 @@
 
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 
+#include <functional>
+
 class BOARD;
 
 class KISURF_AI_PCB_SESSION_VALIDATION_SERVICE : public AI_SESSION_VALIDATION_SERVICE
 {
 public:
+    using BOARD_PROVIDER = std::function<BOARD*()>;
+
     explicit KISURF_AI_PCB_SESSION_VALIDATION_SERVICE( BOARD& aBoard );
+    explicit KISURF_AI_PCB_SESSION_VALIDATION_SERVICE( BOARD_PROVIDER aBoardProvider );
 
     AI_SESSION_VALIDATION_RESULT RunValidation(
             const AI_EXECUTION_SESSION& aSession,
@@ -25,5 +30,5 @@ public:
             const wxString& aCurrentResultJson ) override;
 
 private:
-    BOARD* m_Board = nullptr;
+    BOARD_PROVIDER m_BoardProvider;
 };

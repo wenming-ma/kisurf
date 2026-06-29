@@ -483,6 +483,57 @@ wxString largeBoundedScriptPlanArguments()
 }
 
 
+wxString replacementPathScriptPlanArguments( const std::string& aHandleJson,
+                                            bool aRequiresValidationBeforePublish )
+{
+    nlohmann::json handle = nlohmann::json::parse( aHandleJson, nullptr, false );
+
+    if( handle.is_discarded() || !handle.is_object() )
+        handle = nlohmann::json::object( { { "handle", "track-old-1" } } );
+
+    nlohmann::json polylineMetadata = {
+        { "source_tool", "script.replacement_path_plan" }
+    };
+
+    if( aRequiresValidationBeforePublish )
+    {
+        polylineMetadata["validation_hint"] =
+                "run_validate_hidden_attempt_before_publish";
+        polylineMetadata["source_tool"] =
+                "script.constraint_aware_reroute_plan";
+    }
+
+    nlohmann::json operations = nlohmann::json::array(
+            { { { "kind", "pcb.delete_items" },
+                { "arguments",
+                  { { "handles", nlohmann::json::array( { handle } ) },
+                    { "metadata",
+                      { { "source_tool", "script.replacement_path_plan" } } } } } },
+              { { "kind", "pcb.create_track_polyline" },
+                { "arguments",
+                  { { "points",
+                      nlohmann::json::array(
+                              { { { "x", 1000000 }, { "y", 1000000 } },
+                                { { "x", 1400000 }, { "y", 1250000 } },
+                                { { "x", 1800000 }, { "y", 1000000 } } } ) },
+                    { "layer", "F.Cu" },
+                    { "net", "GND" },
+                    { "width", 150000 },
+                    { "alias", "replace_path_polyline" },
+                    { "metadata", std::move( polylineMetadata ) } } } } } );
+
+    nlohmann::json args = {
+        { "plan", { { "operations", std::move( operations ) } } },
+        { "max_steps", 4 },
+        { "plan_id", aRequiresValidationBeforePublish
+                             ? "constraint-aware-reroute-script-plan"
+                             : "replacement-path-script-plan" }
+    };
+
+    return wxString::FromUTF8( args.dump().c_str() );
+}
+
+
 class LARGE_SCRIPT_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -581,83 +632,6 @@ public:
     std::vector<AI_PROVIDER_REQUEST> m_Requests;
     wxString                         m_ToolName;
     wxString                         m_ArgumentsJson;
-};
-
-
-class CANDIDATE_TOOL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
-{
-public:
-    CANDIDATE_TOOL_NEXT_ACTION_PROVIDER( wxString aToolName,
-                                         wxString aOpportunityType,
-                                         int aSelectedCandidateIndex = -1,
-                                         wxString aToolArgumentsJson = wxS( "{}" ) ) :
-            m_ToolName( std::move( aToolName ) ),
-            m_OpportunityType( std::move( aOpportunityType ) ),
-            m_SelectedCandidateIndex( aSelectedCandidateIndex ),
-            m_ToolArgumentsJson( std::move( aToolArgumentsJson ) )
-    {
-    }
-
-    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
-    {
-        ++m_CallCount;
-        m_Requests.push_back( aRequest );
-
-        AI_PROVIDER_RESPONSE response;
-        response.m_RequestId = aRequest.m_RequestId;
-        response.m_Title = wxS( "candidate tool next action" );
-
-        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
-        {
-            if( aRequest.m_ToolResults.empty() )
-            {
-                response.m_Body = wxS( "Need generated candidates." );
-
-                AI_TOOL_CALL_RECORD call;
-                call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_candidates" );
-                call.m_ToolName = m_ToolName;
-                call.m_ArgumentsJson = m_ToolArgumentsJson;
-                response.m_ToolCalls.push_back( call );
-                return response;
-            }
-
-            if( m_SelectedCandidateIndex >= 0 )
-            {
-                response.m_Body = wxString::Format(
-                        wxS( "{\"decision_kind\":\"attempt\","
-                             "\"opportunity_type\":\"%s\","
-                             "\"selected_candidate_index\":%d,"
-                             "\"reason_code\":\"candidate_tool_result_supported\"}" ),
-                        m_OpportunityType, m_SelectedCandidateIndex );
-            }
-            else
-            {
-                response.m_Body = wxString::Format(
-                        wxS( "{\"decision_kind\":\"attempt\","
-                             "\"opportunity_type\":\"%s\","
-                             "\"reason_code\":\"candidate_tool_result_supported\"}" ),
-                        m_OpportunityType );
-            }
-            return response;
-        }
-
-        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
-        {
-            response.m_Body = publishReview();
-            return response;
-        }
-
-        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
-        return response;
-    }
-
-    wxString                         m_ToolName;
-    wxString                         m_OpportunityType;
-    int                              m_SelectedCandidateIndex = -1;
-    wxString                         m_ToolArgumentsJson;
-    int                              m_CallCount = 0;
-    std::vector<AI_PROVIDER_REQUEST> m_Requests;
 };
 
 
@@ -2529,7 +2503,7 @@ public:
 
             if( aRequest.m_ToolResults.size() == 1 )
             {
-                response.m_Body = wxS( "Generate a replacement path candidate for the created route." );
+                response.m_Body = wxS( "Run the replacement path bounded script plan." );
 
                 nlohmann::json subjectResult = nlohmann::json::parse(
                         aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
@@ -2537,71 +2511,18 @@ public:
                 nlohmann::json handle =
                         subjectResult["session_journal"]["operations"].back()
                                      ["created_handles"].front();
-                const std::string handleJson = handle.dump();
-
-                AI_TOOL_CALL_RECORD call;
-                call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_generate_replace_path_candidate" );
-
-                if( m_UseConstraintAwareCandidate )
-                {
-                    call.m_ToolName =
-                            wxS( "routing_generate_constraint_aware_reroute_candidates" );
-                    call.m_ArgumentsJson = wxString::Format(
-                            wxS( "{\"replace_handles\":[%s],"
-                                 "\"replacement_points\":["
-                                 "{\"x\":1000000,\"y\":1000000},"
-                                 "{\"x\":1400000,\"y\":1250000},"
-                                 "{\"x\":1800000,\"y\":1000000}],"
-                                 "\"net\":\"GND\","
-                                 "\"layer\":\"F.Cu\","
-                                 "\"width\":150000,"
-                                 "\"constraints\":{\"min_clearance\":200000,"
-                                 "\"max_vias\":0}}" ),
-                            wxString::FromUTF8( handleJson.c_str() ) );
-                }
-                else
-                {
-                    call.m_ToolName = wxS( "routing_generate_replace_path_candidates" );
-                    call.m_ArgumentsJson = wxString::Format(
-                            wxS( "{\"replace_handles\":[%s],"
-                                 "\"replacement_points\":["
-                                 "{\"x\":1000000,\"y\":1000000},"
-                                 "{\"x\":1400000,\"y\":1250000},"
-                                 "{\"x\":1800000,\"y\":1000000}],"
-                                 "\"net\":\"GND\","
-                                 "\"layer\":\"F.Cu\","
-                                 "\"width\":150000}" ),
-                            wxString::FromUTF8( handleJson.c_str() ) );
-                }
-
-                response.m_ToolCalls.push_back( call );
-                return response;
-            }
-
-            if( aRequest.m_ToolResults.size() == 2 )
-            {
-                response.m_Body = wxS( "Run the candidate bounded plan exactly as returned." );
-
-                nlohmann::json candidateResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.back().m_ResultJson.ToStdString(),
-                        nullptr, false );
-                nlohmann::json plan =
-                        candidateResult["candidates"].front()["plan"];
-                const std::string planJson = plan.dump();
 
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
                 call.m_ToolName = wxS( "script_run_bounded_plan" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"plan\":%s,\"max_steps\":4}" ),
-                        wxString::FromUTF8( planJson.c_str() ) );
+                call.m_ArgumentsJson = replacementPathScriptPlanArguments(
+                        handle.dump(), m_UseConstraintAwareCandidate );
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 3 )
+            if( aRequest.m_ToolResults.size() == 2 )
             {
                 response.m_Body = wxS( "Render the replacement path result." );
 
@@ -2614,7 +2535,7 @@ public:
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 4 && m_ValidateBeforePublish )
+            if( aRequest.m_ToolResults.size() == 3 && m_ValidateBeforePublish )
             {
                 response.m_Body = wxS( "Validate the hinted constraint-aware replacement path." );
 
@@ -2693,39 +2614,6 @@ public:
 
             if( aRequest.m_ToolResults.size() == 1 )
             {
-                response.m_Body = wxS( "Generate a constraint-aware replacement path." );
-
-                nlohmann::json subjectResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
-                        nullptr, false );
-                nlohmann::json handle =
-                        subjectResult["session_journal"]["operations"].back()
-                                     ["created_handles"].front();
-                const std::string handleJson = handle.dump();
-
-                AI_TOOL_CALL_RECORD call;
-                call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_generate_constraint_candidate" );
-                call.m_ToolName =
-                        wxS( "routing_generate_constraint_aware_reroute_candidates" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"replace_handles\":[%s],"
-                             "\"replacement_points\":["
-                             "{\"x\":1000000,\"y\":1000000},"
-                             "{\"x\":1400000,\"y\":1250000},"
-                             "{\"x\":1800000,\"y\":1000000}],"
-                             "\"net\":\"GND\","
-                             "\"layer\":\"F.Cu\","
-                             "\"width\":150000,"
-                             "\"constraints\":{\"min_clearance\":200000,"
-                             "\"max_vias\":0}}" ),
-                        wxString::FromUTF8( handleJson.c_str() ) );
-                response.m_ToolCalls.push_back( call );
-                return response;
-            }
-
-            if( aRequest.m_ToolResults.size() == 2 )
-            {
                 response.m_Body = wxS( "Validate too early, before executing the candidate plan." );
 
                 AI_TOOL_CALL_RECORD call;
@@ -2738,30 +2626,29 @@ public:
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 3 )
+            if( aRequest.m_ToolResults.size() == 2 )
             {
                 response.m_Body =
                         wxS( "Execute the candidate plan after the validation." );
 
-                nlohmann::json candidateResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.at( 1 ).m_ResultJson.ToStdString(),
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
                         nullptr, false );
-                nlohmann::json plan =
-                        candidateResult["candidates"].front()["plan"];
-                const std::string planJson = plan.dump();
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
 
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
                 call.m_ToolName = wxS( "script_run_bounded_plan" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"plan\":%s,\"max_steps\":4}" ),
-                        wxString::FromUTF8( planJson.c_str() ) );
+                call.m_ArgumentsJson = replacementPathScriptPlanArguments(
+                        handle.dump(), true );
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 4 )
+            if( aRequest.m_ToolResults.size() == 3 )
             {
                 response.m_Body = wxS( "Render the post-validation mutation." );
 
@@ -2836,33 +2723,17 @@ public:
 
             if( aRequest.m_ToolResults.size() == 1 )
             {
-                response.m_Body = wxS( "Generate but do not execute a constraint candidate." );
-
-                nlohmann::json subjectResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
-                        nullptr, false );
-                nlohmann::json handle =
-                        subjectResult["session_journal"]["operations"].back()
-                                     ["created_handles"].front();
-                const std::string handleJson = handle.dump();
+                response.m_Body = wxS( "Observe a non-mutating constraint hint." );
 
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_generate_constraint_candidate" );
-                call.m_ToolName =
-                        wxS( "routing_generate_constraint_aware_reroute_candidates" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"replace_handles\":[%s],"
-                             "\"replacement_points\":["
-                             "{\"x\":1000000,\"y\":1000000},"
-                             "{\"x\":1400000,\"y\":1250000},"
-                             "{\"x\":1800000,\"y\":1000000}],"
-                             "\"net\":\"GND\","
-                             "\"layer\":\"F.Cu\","
-                             "\"width\":150000,"
-                             "\"constraints\":{\"min_clearance\":200000,"
-                             "\"max_vias\":0}}" ),
-                        wxString::FromUTF8( handleJson.c_str() ) );
+                call.m_ToolCallId = wxS( "call_observe_constraint_hint" );
+                call.m_ToolName = wxS( "observation_resolve_visual_reference" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"reference\":{\"kind\":\"routing_anchor\","
+                             "\"anchor_id\":\"candidate-only-anchor\","
+                             "\"validation_hint\":\"run_validate_hidden_attempt_before_publish\"},"
+                             "\"sidecar\":{\"anchors\":[]}}" );
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
@@ -2942,7 +2813,7 @@ public:
 
             if( aRequest.m_ToolResults.size() == 1 )
             {
-                response.m_Body = wxS( "Generate a constraint-aware candidate to execute." );
+                response.m_Body = wxS( "Execute the hinted candidate plan." );
 
                 nlohmann::json subjectResult = nlohmann::json::parse(
                         aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
@@ -2950,57 +2821,23 @@ public:
                 nlohmann::json handle =
                         subjectResult["session_journal"]["operations"].back()
                                      ["created_handles"].front();
-                const std::string handleJson = handle.dump();
 
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_generate_constraint_candidate" );
-                call.m_ToolName =
-                        wxS( "routing_generate_constraint_aware_reroute_candidates" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"replace_handles\":[%s],"
-                             "\"replacement_points\":["
-                             "{\"x\":1000000,\"y\":1000000},"
-                             "{\"x\":1400000,\"y\":1250000},"
-                             "{\"x\":1800000,\"y\":1000000}],"
-                             "\"net\":\"GND\","
-                             "\"layer\":\"F.Cu\","
-                             "\"width\":150000,"
-                             "\"constraints\":{\"min_clearance\":200000,"
-                             "\"max_vias\":0}}" ),
-                        wxString::FromUTF8( handleJson.c_str() ) );
+                call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson = replacementPathScriptPlanArguments(
+                        handle.dump(), true );
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
 
             if( aRequest.m_ToolResults.size() == 2 )
             {
-                response.m_Body = wxS( "Execute the hinted candidate plan." );
-
-                nlohmann::json candidateResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.at( 1 ).m_ResultJson.ToStdString(),
-                        nullptr, false );
-                nlohmann::json plan =
-                        candidateResult["candidates"].front()["plan"];
-                const std::string planJson = plan.dump();
-
-                AI_TOOL_CALL_RECORD call;
-                call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
-                call.m_ToolName = wxS( "script_run_bounded_plan" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"plan\":%s,\"max_steps\":4}" ),
-                        wxString::FromUTF8( planJson.c_str() ) );
-                response.m_ToolCalls.push_back( call );
-                return response;
-            }
-
-            if( aRequest.m_ToolResults.size() == 3 )
-            {
                 response.m_Body = wxS( "Rollback the hinted candidate plan." );
 
                 nlohmann::json scriptResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.at( 2 ).m_ResultJson.ToStdString(),
+                        aRequest.m_ToolResults.at( 1 ).m_ResultJson.ToStdString(),
                         nullptr, false );
                 const uint64_t checkpointId =
                         scriptResult.value( "checkpoint_id", 0ULL );
@@ -3017,7 +2854,7 @@ public:
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 4 )
+            if( aRequest.m_ToolResults.size() == 3 )
             {
                 response.m_Body = wxS( "Render after rolling back the hinted plan." );
 
@@ -3093,39 +2930,6 @@ public:
 
             if( aRequest.m_ToolResults.size() == 1 )
             {
-                response.m_Body = wxS( "Generate a constraint-aware candidate." );
-
-                nlohmann::json subjectResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
-                        nullptr, false );
-                nlohmann::json handle =
-                        subjectResult["session_journal"]["operations"].back()
-                                     ["created_handles"].front();
-                const std::string handleJson = handle.dump();
-
-                AI_TOOL_CALL_RECORD call;
-                call.m_RequestId = aRequest.m_RequestId;
-                call.m_ToolCallId = wxS( "call_generate_constraint_candidate" );
-                call.m_ToolName =
-                        wxS( "routing_generate_constraint_aware_reroute_candidates" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"replace_handles\":[%s],"
-                             "\"replacement_points\":["
-                             "{\"x\":1000000,\"y\":1000000},"
-                             "{\"x\":1400000,\"y\":1250000},"
-                             "{\"x\":1800000,\"y\":1000000}],"
-                             "\"net\":\"GND\","
-                             "\"layer\":\"F.Cu\","
-                             "\"width\":150000,"
-                             "\"constraints\":{\"min_clearance\":200000,"
-                             "\"max_vias\":0}}" ),
-                        wxString::FromUTF8( handleJson.c_str() ) );
-                response.m_ToolCalls.push_back( call );
-                return response;
-            }
-
-            if( aRequest.m_ToolResults.size() == 2 )
-            {
                 response.m_Body = wxS( "Render too early, before executing the candidate plan." );
 
                 AI_TOOL_CALL_RECORD call;
@@ -3137,30 +2941,29 @@ public:
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 3 )
+            if( aRequest.m_ToolResults.size() == 2 )
             {
                 response.m_Body =
                         wxS( "Execute the candidate plan after the render." );
 
-                nlohmann::json candidateResult = nlohmann::json::parse(
-                        aRequest.m_ToolResults.at( 1 ).m_ResultJson.ToStdString(),
+                nlohmann::json subjectResult = nlohmann::json::parse(
+                        aRequest.m_ToolResults.front().m_ResultJson.ToStdString(),
                         nullptr, false );
-                nlohmann::json plan =
-                        candidateResult["candidates"].front()["plan"];
-                const std::string planJson = plan.dump();
+                nlohmann::json handle =
+                        subjectResult["session_journal"]["operations"].back()
+                                     ["created_handles"].front();
 
                 AI_TOOL_CALL_RECORD call;
                 call.m_RequestId = aRequest.m_RequestId;
                 call.m_ToolCallId = wxS( "call_execute_candidate_plan" );
                 call.m_ToolName = wxS( "script_run_bounded_plan" );
-                call.m_ArgumentsJson = wxString::Format(
-                        wxS( "{\"plan\":%s,\"max_steps\":4}" ),
-                        wxString::FromUTF8( planJson.c_str() ) );
+                call.m_ArgumentsJson = replacementPathScriptPlanArguments(
+                        handle.dump(), true );
                 response.m_ToolCalls.push_back( call );
                 return response;
             }
 
-            if( aRequest.m_ToolResults.size() == 4 )
+            if( aRequest.m_ToolResults.size() == 3 )
             {
                 response.m_Body = wxS( "Validate the post-render mutation." );
 
@@ -4559,6 +4362,18 @@ AI_SUGGESTION_TRIGGER makeViaTrigger()
 }
 
 
+AI_SUGGESTION_TRIGGER makeActiveViaPlacementTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
+    trigger.m_ContextSnapshot.m_VisibleObjects.clear();
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"placing_via\",\"net\":\"\","
+                 "\"diameter\":700000,\"drill\":330000,"
+                 "\"cursor\":{\"x\":710,\"y\":820}}" );
+    return trigger;
+}
+
+
 AI_SUGGESTION_TRIGGER makeMouseMoveTrigger()
 {
     AI_SUGGESTION_TRIGGER trigger = makeViaTrigger();
@@ -4594,6 +4409,42 @@ AI_SUGGESTION_TRIGGER makeRoutingTrigger()
     trigger.m_Activity.m_ActionName = wxS( "pcbnew.InteractiveRouter.route" );
     trigger.m_Reason = wxS( "routing active" );
     trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeDrawingZoneTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 24;
+    trigger.m_ContextVersion.m_ViewRevision = 9;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::DrawingZone;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"drawing_zone\",\"layer\":\"Dwgs.User\","
+                 "\"cursor\":{\"x\":1000,\"y\":2000}}" );
+    trigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    trigger.m_ContextSnapshot.m_ToolState.m_CursorBoardPosition =
+            VECTOR2I( 1000, 2000 );
+    trigger.m_Activity.m_Sequence = 53;
+    trigger.m_Activity.m_ActionName = wxS( "pcbnew.InteractiveDrawing.zone" );
+    trigger.m_Reason = wxS( "drawing zone active" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
+AI_SUGGESTION_TRIGGER makeCopperZoneDrawingTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger = makeDrawingZoneTrigger();
+    trigger.m_ContextSnapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"drawing_zone\",\"layer\":\"F.Cu\","
+                 "\"net\":\"GND\","
+                 "\"cursor\":{\"x\":1000,\"y\":2000}}" );
     return trigger;
 }
 
@@ -4949,25 +4800,12 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawAtomicRunCreateViaKind = false;
     bool sawAtomicRunOperationContracts = false;
     bool sawRepairTool = false;
-    bool sawPlacementFootprintTransformTool = false;
-    bool sawPlacementFootprintTransformRequiredPoints = false;
-    bool sawPlacementFootprintTransformPointSchema = false;
-    bool sawPlacementFootprintOrientationTool = false;
-    bool sawPlacementFootprintOrientationRequiredFacts = false;
     bool sawPlacementRepairTool = false;
     bool sawPlacementMoveRepairTool = false;
     bool sawPlacementOrientationRepairTool = false;
     bool sawRoutingRepairTool = false;
     bool sawRoutingPolylineRepairTool = false;
     bool sawRoutingBusRepairTool = false;
-    bool sawRoutingParallelCandidateTool = false;
-    bool sawRoutingParallelRequiredReference = false;
-    bool sawRoutingBusCandidateTool = false;
-    bool sawRoutingBusRequiredReference = false;
-    bool sawRoutingReplacePathCandidateTool = false;
-    bool sawRoutingReplacePathRequiredPlan = false;
-    bool sawRoutingConstraintRerouteCandidateTool = false;
-    bool sawRoutingConstraintRerouteRequiredFacts = false;
     bool sawSurfaceRepairTool = false;
     bool sawScriptSurfacePatchKind = false;
     bool sawScriptShapePolygonContract = false;
@@ -4999,15 +4837,8 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingRepairSegmentPointSchema = false;
     bool sawRoutingPolylinePointSchema = false;
     bool sawRoutingBusSegmentPointSchema = false;
-    bool sawRoutingParallelPointSchema = false;
-    bool sawRoutingBusOffsetPointSchema = false;
-    bool sawRoutingReplacePathPointSchema = false;
-    bool sawRoutingConstraintReroutePointSchema = false;
-    bool sawPlacementFootprintOrientationHandleSchema = false;
     bool sawPlacementMoveHandleSchema = false;
     bool sawPlacementOrientationRepairHandleSchema = false;
-    bool sawRoutingReplacePathHandleSchema = false;
-    bool sawRoutingConstraintRerouteHandleSchema = false;
     bool sawRoutingNamespaceDescription = false;
     bool sawScriptNamespaceDescription = false;
     bool sawSurfaceNamespaceDescription = false;
@@ -5649,78 +5480,6 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
         if( functionName == "repair_apply_bounded_plan" )
             sawRepairTool = true;
 
-        if( functionName == "placement_generate_footprint_transform_candidates" )
-        {
-            sawPlacementFootprintTransformTool = true;
-            const nlohmann::json& required =
-                    function["parameters"].contains( "required" )
-                            ? function["parameters"]["required"]
-                            : nlohmann::json::array();
-            bool hasCurrentPosition = false;
-            bool hasTargetPosition = false;
-
-            if( required.is_array() )
-            {
-                for( const nlohmann::json& value : required )
-                {
-                    if( value.is_string()
-                        && value.get<std::string>() == "current_position" )
-                    {
-                        hasCurrentPosition = true;
-                    }
-
-                    if( value.is_string()
-                        && value.get<std::string>() == "target_position" )
-                    {
-                        hasTargetPosition = true;
-                    }
-                }
-            }
-
-            sawPlacementFootprintTransformRequiredPoints =
-                    hasCurrentPosition && hasTargetPosition;
-
-            const nlohmann::json& properties =
-                    function["parameters"]["properties"];
-            sawPlacementFootprintTransformPointSchema =
-                    pointSchemaRequiresXY( properties["current_position"] )
-                    && pointSchemaRequiresXY( properties["target_position"] );
-        }
-
-        if( functionName == "placement_generate_footprint_orientation_candidates" )
-        {
-            sawPlacementFootprintOrientationTool = true;
-            const nlohmann::json& parameters = function["parameters"];
-            BOOST_REQUIRE( parameters.contains( "required" ) );
-            bool hasHandles = false;
-            bool hasCurrentOrientation = false;
-            bool hasTargetOrientation = false;
-
-            for( const nlohmann::json& value : parameters["required"] )
-            {
-                if( !value.is_string() )
-                    continue;
-
-                if( value.get<std::string>() == "handles" )
-                    hasHandles = true;
-
-                if( value.get<std::string>() == "current_orientation_degrees" )
-                    hasCurrentOrientation = true;
-
-                if( value.get<std::string>() == "target_orientation_degrees" )
-                    hasTargetOrientation = true;
-            }
-
-            sawPlacementFootprintOrientationRequiredFacts =
-                    hasHandles && hasCurrentOrientation && hasTargetOrientation;
-            sawPlacementFootprintOrientationHandleSchema =
-                    function["parameters"]["properties"]["handles"]
-                               .contains( "items" )
-                    && handleSchemaRequiresHandleId(
-                            function["parameters"]["properties"]["handles"]
-                                    ["items"] );
-        }
-
         if( functionName == "placement_repair_via" )
         {
             sawPlacementRepairTool = true;
@@ -5953,174 +5712,6 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
                             segmentSchema["properties"]["end"] );
         }
 
-        if( functionName == "routing_generate_parallel_segment_candidates" )
-        {
-            sawRoutingParallelCandidateTool = true;
-            const nlohmann::json& parameters = function["parameters"];
-            BOOST_REQUIRE( parameters.contains( "required" ) );
-            bool hasReferenceStart = false;
-            bool hasReferenceEnd = false;
-            bool hasOffset = false;
-
-            for( const nlohmann::json& value : parameters["required"] )
-            {
-                if( !value.is_string() )
-                    continue;
-
-                if( value.get<std::string>() == "reference_start" )
-                    hasReferenceStart = true;
-
-                if( value.get<std::string>() == "reference_end" )
-                    hasReferenceEnd = true;
-
-                if( value.get<std::string>() == "offset" )
-                    hasOffset = true;
-            }
-
-            sawRoutingParallelRequiredReference =
-                    hasReferenceStart && hasReferenceEnd && hasOffset;
-            const nlohmann::json& properties =
-                    function["parameters"]["properties"];
-            sawRoutingParallelPointSchema =
-                    pointSchemaRequiresXY( properties["reference_start"] )
-                    && pointSchemaRequiresXY( properties["reference_end"] )
-                    && pointSchemaRequiresXY( properties["offset"] );
-        }
-
-        if( functionName == "routing_generate_bus_segment_candidates" )
-        {
-            sawRoutingBusCandidateTool = true;
-            const nlohmann::json& parameters = function["parameters"];
-            BOOST_REQUIRE( parameters.contains( "required" ) );
-            bool hasReferenceStart = false;
-            bool hasReferenceEnd = false;
-            bool hasLaneOffsets = false;
-
-            for( const nlohmann::json& value : parameters["required"] )
-            {
-                if( !value.is_string() )
-                    continue;
-
-                if( value.get<std::string>() == "reference_start" )
-                    hasReferenceStart = true;
-
-                if( value.get<std::string>() == "reference_end" )
-                    hasReferenceEnd = true;
-
-                if( value.get<std::string>() == "lane_offsets" )
-                    hasLaneOffsets = true;
-            }
-
-            sawRoutingBusRequiredReference =
-                    hasReferenceStart && hasReferenceEnd && hasLaneOffsets;
-            const nlohmann::json& properties =
-                    function["parameters"]["properties"];
-            sawRoutingBusOffsetPointSchema =
-                    pointSchemaRequiresXY( properties["reference_start"] )
-                    && pointSchemaRequiresXY( properties["reference_end"] )
-                    && properties["lane_offsets"].contains( "items" )
-                    && pointSchemaRequiresXY(
-                            properties["lane_offsets"]["items"] );
-        }
-
-        if( functionName == "routing_generate_replace_path_candidates" )
-        {
-            sawRoutingReplacePathCandidateTool = true;
-            const nlohmann::json& parameters = function["parameters"];
-            BOOST_REQUIRE( parameters.contains( "required" ) );
-            bool hasReplaceHandles = false;
-            bool hasReplacementPoints = false;
-            bool hasNet = false;
-            bool hasLayer = false;
-            bool hasWidth = false;
-
-            for( const nlohmann::json& value : parameters["required"] )
-            {
-                if( !value.is_string() )
-                    continue;
-
-                if( value.get<std::string>() == "replace_handles" )
-                    hasReplaceHandles = true;
-
-                if( value.get<std::string>() == "replacement_points" )
-                    hasReplacementPoints = true;
-
-                if( value.get<std::string>() == "net" )
-                    hasNet = true;
-
-                if( value.get<std::string>() == "layer" )
-                    hasLayer = true;
-
-                if( value.get<std::string>() == "width" )
-                    hasWidth = true;
-            }
-
-            sawRoutingReplacePathRequiredPlan =
-                    hasReplaceHandles && hasReplacementPoints && hasNet && hasLayer
-                    && hasWidth;
-            const nlohmann::json& replaceHandles =
-                    function["parameters"]["properties"]["replace_handles"];
-            sawRoutingReplacePathHandleSchema =
-                    replaceHandles.contains( "items" )
-                    && handleSchemaRequiresHandleId( replaceHandles["items"] );
-            const nlohmann::json& replacementPoints =
-                    function["parameters"]["properties"]["replacement_points"];
-            sawRoutingReplacePathPointSchema =
-                    replacementPoints.contains( "items" )
-                    && pointSchemaRequiresXY( replacementPoints["items"] );
-        }
-
-        if( functionName == "routing_generate_constraint_aware_reroute_candidates" )
-        {
-            sawRoutingConstraintRerouteCandidateTool = true;
-            const nlohmann::json& parameters = function["parameters"];
-            BOOST_REQUIRE( parameters.contains( "required" ) );
-            bool hasReplaceHandles = false;
-            bool hasReplacementPoints = false;
-            bool hasConstraints = false;
-            bool hasNet = false;
-            bool hasLayer = false;
-            bool hasWidth = false;
-
-            for( const nlohmann::json& value : parameters["required"] )
-            {
-                if( !value.is_string() )
-                    continue;
-
-                if( value.get<std::string>() == "replace_handles" )
-                    hasReplaceHandles = true;
-
-                if( value.get<std::string>() == "replacement_points" )
-                    hasReplacementPoints = true;
-
-                if( value.get<std::string>() == "constraints" )
-                    hasConstraints = true;
-
-                if( value.get<std::string>() == "net" )
-                    hasNet = true;
-
-                if( value.get<std::string>() == "layer" )
-                    hasLayer = true;
-
-                if( value.get<std::string>() == "width" )
-                    hasWidth = true;
-            }
-
-            sawRoutingConstraintRerouteRequiredFacts =
-                    hasReplaceHandles && hasReplacementPoints && hasConstraints
-                    && hasNet && hasLayer && hasWidth;
-            const nlohmann::json& replaceHandles =
-                    function["parameters"]["properties"]["replace_handles"];
-            sawRoutingConstraintRerouteHandleSchema =
-                    replaceHandles.contains( "items" )
-                    && handleSchemaRequiresHandleId( replaceHandles["items"] );
-            const nlohmann::json& replacementPoints =
-                    function["parameters"]["properties"]["replacement_points"];
-            sawRoutingConstraintReroutePointSchema =
-                    replacementPoints.contains( "items" )
-                    && pointSchemaRequiresXY( replacementPoints["items"] );
-        }
-
         if( functionName == "surface_repair_patch" )
         {
             sawSurfaceRepairTool = true;
@@ -6249,6 +5840,47 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 }
 
 
+BOOST_AUTO_TEST_CASE( RuntimeRejectsLegacyCandidateGenerationToolsAtCallBoundary )
+{
+    AI_NEXT_ACTION_TOOL_REGISTRY registry;
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 530;
+    AI_OBSERVATION_PACKET observation;
+
+    const std::vector<wxString> legacyToolNames = {
+        wxS( "placement_generate_via_pattern_candidates" ),
+        wxS( "placement_generate_footprint_transform_candidates" ),
+        wxS( "placement_generate_footprint_orientation_candidates" ),
+        wxS( "routing_generate_segment_candidates" ),
+        wxS( "routing_generate_parallel_segment_candidates" ),
+        wxS( "routing_generate_bus_segment_candidates" ),
+        wxS( "routing_generate_replace_path_candidates" ),
+        wxS( "routing_generate_constraint_aware_reroute_candidates" ),
+        wxS( "surface_generate_fill_candidates" )
+    };
+
+    for( const wxString& toolName : legacyToolNames )
+    {
+        AI_TOOL_CALL_RECORD call;
+        call.m_ToolCallId = wxS( "call_legacy_candidate" );
+        call.m_ToolName = toolName;
+        call.m_ArgumentsJson = wxS( "{}" );
+
+        AI_TOOL_INVOCATION_RESULT result =
+                registry.HandleToolCall( request, call, observation );
+
+        BOOST_CHECK_MESSAGE( !result.m_Allowed,
+                             "legacy tool should be rejected: "
+                                     << toolName.ToStdString() );
+        BOOST_CHECK_MESSAGE( !result.m_Executed,
+                             "legacy tool should not execute: "
+                                     << toolName.ToStdString() );
+        BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                           wxString( wxS( "unknown_tool" ) ) );
+    }
+}
+
+
 BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStateAttemptPolicy )
 {
     auto* layoutProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
@@ -6276,6 +5908,29 @@ BOOST_AUTO_TEST_CASE( RuntimeDecisionObservationIncludesWorkStateAttemptPolicy )
             wxS( "\"work_state\":\"routing\"" ) ) );
     BOOST_CHECK( routingProvider->m_Requests.front().m_UserText.Contains(
             wxS( "\"max_attempts\":5" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeAttemptsWorkStateCandidateAfterUnstructuredDecisionText )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "I should try the next placement candidate." ),
+              publishReview() } );
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( suggestion->m_Status == AI_SUGGESTION_STATUS::Pending );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_LlmDecisionJson.Contains(
+            wxS( "unstructured_decision_fallback" ) ) );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
 }
 
 
@@ -10154,90 +9809,6 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonValidationToolArgumentsBeforeServ
 }
 
 
-BOOST_AUTO_TEST_CASE( RuntimeExecutesIntegratedCandidateToolCalls )
-{
-    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "placement_generate_via_pattern_candidates" ),
-            wxS( "placement" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES services;
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
-                                    &services.m_Validation,
-                                    &services.m_Preview };
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion =
-            runtime.Update( makeViaTrigger() );
-
-    BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    const AI_TOOL_CALL_RECORD& result =
-            provider->m_Requests.at( 1 ).m_ToolResults.front();
-    BOOST_CHECK_EQUAL( result.m_ToolCallId, wxString( wxS( "call_candidates" ) ) );
-    BOOST_CHECK_EQUAL( result.m_ToolName,
-                       wxString( wxS( "placement_generate_via_pattern_candidates" ) ) );
-    BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( result.m_Executed );
-    BOOST_CHECK( result.m_ResultJson.Contains(
-            wxS( "\"tool\":\"placement.generate_via_pattern_candidates\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"status\":\"candidates_generated\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"candidate_count\":1" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"candidates\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"source_tool\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"arguments\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"operation\"" ) ) );
-    BOOST_CHECK( result.m_ResultJson.Contains( wxS( "\"publish_allowed\":false" ) ) );
-
-    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(
-            wxS( "placement_generate_via_pattern_candidates" ) ) );
-    BOOST_CHECK( !provider->m_Requests.at( 1 ).m_ToolCatalogJson.Contains(
-            wxS( "placement.generate_via_pattern_candidates" ) ) );
-    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
-            wxS( "placement.generate_via_pattern_candidates" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( RuntimeAttemptsDecisionToolGeneratedCandidate )
-{
-    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_parallel_segment_candidates" ),
-            wxS( "routing" ),
-            0,
-            wxS( "{\"reference_start\":{\"x\":10,\"y\":10},"
-                 "\"reference_end\":{\"x\":110,\"y\":10},"
-                 "\"offset\":{\"x\":0,\"y\":40},"
-                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES services;
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
-                                    &services.m_Validation,
-                                    &services.m_Preview };
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion =
-            runtime.Update( makeRoutingTrigger() );
-
-    BOOST_REQUIRE( suggestion.has_value() );
-    nlohmann::json arguments = nlohmann::json::parse(
-            suggestion->m_ArgumentsJson.ToStdString() );
-
-    BOOST_CHECK_EQUAL( arguments["source_tool"].get<std::string>(),
-                       "routing.generate_parallel_segment_candidates" );
-    BOOST_CHECK_EQUAL( arguments["start"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( arguments["end"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( arguments["parallel_facts"]["offset"]["y"].get<int>(),
-                       40 );
-
-    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
-    BOOST_CHECK( runtime.Attempts().front().m_Candidate.m_ArgumentsJson.Contains(
-            wxS( "parallel_reference_offset" ) ) );
-    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
-            wxS( "pcb.create_track_segment" ) ) );
-    BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
-            wxS( "\"selected_tool\":\"routing.generate_parallel_segment_candidates\"" ) ) );
-}
-
-
 BOOST_AUTO_TEST_CASE( RuntimeAttemptsDecisionToolGeneratedPlanCandidate )
 {
     auto* provider = new PLAN_CANDIDATE_RESULT_NEXT_ACTION_PROVIDER();
@@ -10296,423 +9867,6 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksFailedDecisionToolGeneratedPlanCandidate )
     BOOST_CHECK( runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "journal_gate_failed" ) ) );
     BOOST_CHECK( runtime.Suggestions().empty() );
-}
-
-
-BOOST_AUTO_TEST_CASE( RuntimeCandidateToolResultsExposeLandingFacts )
-{
-    auto* placementProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "placement_generate_via_pattern_candidates" ),
-            wxS( "placement" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES placementServices;
-    AI_NEXT_ACTION_RUNTIME placementRuntime{
-            std::unique_ptr<AI_PROVIDER>( placementProvider ),
-            &placementServices.m_Validation,
-            &placementServices.m_Preview };
-
-    BOOST_REQUIRE( placementRuntime.Update( makeViaTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( placementProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL( placementProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    nlohmann::json placementResult = nlohmann::json::parse(
-            placementProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_REQUIRE_EQUAL( placementResult["candidates"].size(), 1 );
-    const nlohmann::json& placementLanding =
-            placementResult["candidates"].at( 0 )["landing_facts"];
-    BOOST_CHECK_EQUAL( placementLanding["kind"].get<std::string>(),
-                       "placement_landing" );
-    BOOST_CHECK_EQUAL( placementLanding["position"]["x"].get<int>(), 400 );
-    BOOST_CHECK_EQUAL( placementLanding["net"].get<std::string>(), "GND" );
-    BOOST_CHECK( !placementLanding["source"].get<std::string>().empty() );
-
-    auto* footprintTransformProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "placement_generate_footprint_transform_candidates" ),
-            wxS( "placement" ),
-            -1,
-            wxS( "{\"footprint_ref\":\"U1\","
-                 "\"current_position\":{\"x\":100,\"y\":200},"
-                 "\"target_position\":{\"x\":160,\"y\":230}}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES footprintTransformServices;
-    AI_NEXT_ACTION_RUNTIME footprintTransformRuntime{
-            std::unique_ptr<AI_PROVIDER>( footprintTransformProvider ),
-            &footprintTransformServices.m_Validation,
-            &footprintTransformServices.m_Preview };
-
-    BOOST_REQUIRE( footprintTransformRuntime.Update( makeViaTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( footprintTransformProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL(
-            footprintTransformProvider->m_Requests.at( 1 ).m_ToolResults.size(),
-            1 );
-
-    nlohmann::json footprintTransformResult = nlohmann::json::parse(
-            footprintTransformProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( footprintTransformResult["tool"].get<std::string>(),
-                       "placement.generate_footprint_transform_candidates" );
-    BOOST_CHECK_EQUAL( footprintTransformResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( footprintTransformResult["candidate_count"].get<int>(), 1 );
-    BOOST_CHECK( !footprintTransformResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( footprintTransformResult["candidates"].size(), 1 );
-
-    const nlohmann::json& footprintCandidate =
-            footprintTransformResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( footprintCandidate["source_tool"].get<std::string>(),
-                       "placement.generate_footprint_transform_candidates" );
-    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["operation"].get<std::string>(),
-                       "move_selected" );
-    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["dx"].get<int>(), 60 );
-    BOOST_CHECK_EQUAL( footprintCandidate["arguments"]["dy"].get<int>(), 30 );
-    BOOST_CHECK_EQUAL(
-            footprintCandidate["landing_facts"]["source"].get<std::string>(),
-            "footprint_transform.target_position" );
-    BOOST_CHECK_EQUAL(
-            footprintCandidate["landing_facts"]["position"]["x"].get<int>(),
-            160 );
-    BOOST_CHECK_EQUAL(
-            footprintCandidate["footprint_transform_facts"]["footprint_ref"]
-                    .get<std::string>(),
-            "U1" );
-    BOOST_CHECK_EQUAL(
-            footprintCandidate["footprint_transform_facts"]["delta"]["y"].get<int>(),
-            30 );
-
-    auto* footprintOrientationProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "placement_generate_footprint_orientation_candidates" ),
-            wxS( "placement" ),
-            -1,
-            wxS( "{\"handles\":[{\"handle\":\"footprint-U1\"}],"
-                 "\"footprint_ref\":\"U1\","
-                 "\"current_orientation_degrees\":0,"
-                 "\"target_orientation_degrees\":90,"
-                 "\"target_side\":\"B.Cu\"}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES footprintOrientationServices;
-    AI_NEXT_ACTION_RUNTIME footprintOrientationRuntime{
-            std::unique_ptr<AI_PROVIDER>( footprintOrientationProvider ),
-            &footprintOrientationServices.m_Validation,
-            &footprintOrientationServices.m_Preview };
-
-    BOOST_REQUIRE( footprintOrientationRuntime.Update( makeViaTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( footprintOrientationProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL(
-            footprintOrientationProvider->m_Requests.at( 1 ).m_ToolResults.size(),
-            1 );
-
-    nlohmann::json footprintOrientationResult = nlohmann::json::parse(
-            footprintOrientationProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( footprintOrientationResult["tool"].get<std::string>(),
-                       "placement.generate_footprint_orientation_candidates" );
-    BOOST_CHECK_EQUAL( footprintOrientationResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( footprintOrientationResult["candidate_count"].get<int>(), 1 );
-    BOOST_CHECK( !footprintOrientationResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( footprintOrientationResult["candidates"].size(), 1 );
-
-    const nlohmann::json& orientationCandidate =
-            footprintOrientationResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( orientationCandidate["source_tool"].get<std::string>(),
-                       "placement.generate_footprint_orientation_candidates" );
-    BOOST_CHECK_EQUAL( orientationCandidate["arguments"]["operation"].get<std::string>(),
-                       "orient_selected_footprint" );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["footprint_orientation_facts"]["footprint_ref"]
-                    .get<std::string>(),
-            "U1" );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["footprint_orientation_facts"]
-                    ["orientation_delta_degrees"].get<int>(),
-            90 );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["footprint_orientation_facts"]["target_side"]
-                    .get<std::string>(),
-            "B.Cu" );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["landing_facts"]["source"].get<std::string>(),
-            "footprint_orientation.target_orientation" );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["plan"]["operations"].at( 0 )["kind"]
-                    .get<std::string>(),
-            "pcb.set_item_properties" );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["plan"]["operations"].at( 0 )["arguments"]
-                    ["typed_props"]["orientation_degrees"].get<int>(),
-            90 );
-    BOOST_CHECK_EQUAL(
-            orientationCandidate["plan"]["operations"].at( 0 )["arguments"]
-                    ["typed_props"]["side"].get<std::string>(),
-            "B.Cu" );
-
-    auto* routingProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_segment_candidates" ),
-            wxS( "routing" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES routingServices;
-    AI_NEXT_ACTION_RUNTIME routingRuntime{
-            std::unique_ptr<AI_PROVIDER>( routingProvider ),
-            &routingServices.m_Validation,
-            &routingServices.m_Preview };
-
-    BOOST_REQUIRE( routingRuntime.Update( makeRoutingTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( routingProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL( routingProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    nlohmann::json routingResult = nlohmann::json::parse(
-            routingProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_REQUIRE_EQUAL( routingResult["candidates"].size(), 1 );
-    const nlohmann::json& routingLanding =
-            routingResult["candidates"].at( 0 )["landing_facts"];
-    BOOST_CHECK_EQUAL( routingLanding["kind"].get<std::string>(),
-                       "routing_landing" );
-    BOOST_CHECK_EQUAL( routingLanding["point"]["x"].get<int>(), 260 );
-    BOOST_CHECK_EQUAL( routingLanding["net"].get<std::string>(), "GND" );
-    BOOST_CHECK_EQUAL( routingLanding["layer"].get<std::string>(), "F.Cu" );
-
-    auto* replacePathProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_replace_path_candidates" ),
-            wxS( "routing" ),
-            -1,
-            wxS( "{\"replace_handles\":[{\"handle\":\"track-old-1\"}],"
-                 "\"replacement_points\":[{\"x\":10,\"y\":10},"
-                 "{\"x\":60,\"y\":40},{\"x\":110,\"y\":40}],"
-                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES replacePathServices;
-    AI_NEXT_ACTION_RUNTIME replacePathRuntime{
-            std::unique_ptr<AI_PROVIDER>( replacePathProvider ),
-            &replacePathServices.m_Validation,
-            &replacePathServices.m_Preview };
-
-    BOOST_REQUIRE( replacePathRuntime.Update( makeRoutingTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( replacePathProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL(
-            replacePathProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    nlohmann::json replacePathResult = nlohmann::json::parse(
-            replacePathProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( replacePathResult["tool"].get<std::string>(),
-                       "routing.generate_replace_path_candidates" );
-    BOOST_CHECK_EQUAL( replacePathResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( replacePathResult["candidate_count"].get<int>(), 1 );
-    BOOST_CHECK( !replacePathResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( replacePathResult["candidates"].size(), 1 );
-
-    const nlohmann::json& replacePathCandidate =
-            replacePathResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( replacePathCandidate["source_tool"].get<std::string>(),
-                       "routing.generate_replace_path_candidates" );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["replace_path_facts"]["point_count"].get<int>(),
-            3 );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["landing_facts"]["source"].get<std::string>(),
-            "replace_path.replacement_points.end" );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["landing_facts"]["point"]["x"].get<int>(),
-            110 );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["plan"]["operations"].at( 0 )["kind"]
-                    .get<std::string>(),
-            "pcb.delete_items" );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["plan"]["operations"].at( 1 )["kind"]
-                    .get<std::string>(),
-            "pcb.create_track_polyline" );
-    BOOST_CHECK_EQUAL(
-            replacePathCandidate["plan"]["operations"].at( 1 )["arguments"]
-                    ["points"].size(),
-            3 );
-
-    auto* constraintRerouteProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_constraint_aware_reroute_candidates" ),
-            wxS( "routing" ),
-            -1,
-            wxS( "{\"replace_handles\":[{\"handle\":\"track-old-1\"}],"
-                 "\"replacement_points\":[{\"x\":10,\"y\":10},"
-                 "{\"x\":70,\"y\":50},{\"x\":120,\"y\":50}],"
-                 "\"constraints\":{\"min_clearance\":200000,"
-                 "\"avoid_keepouts\":true,\"source\":\"drc_lite\"},"
-                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES constraintRerouteServices;
-    AI_NEXT_ACTION_RUNTIME constraintRerouteRuntime{
-            std::unique_ptr<AI_PROVIDER>( constraintRerouteProvider ),
-            &constraintRerouteServices.m_Validation,
-            &constraintRerouteServices.m_Preview };
-
-    BOOST_REQUIRE( constraintRerouteRuntime.Update( makeRoutingTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( constraintRerouteProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL(
-            constraintRerouteProvider->m_Requests.at( 1 ).m_ToolResults.size(),
-            1 );
-
-    nlohmann::json constraintRerouteResult = nlohmann::json::parse(
-            constraintRerouteProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( constraintRerouteResult["tool"].get<std::string>(),
-                       "routing.generate_constraint_aware_reroute_candidates" );
-    BOOST_CHECK_EQUAL( constraintRerouteResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( constraintRerouteResult["candidate_count"].get<int>(), 1 );
-    BOOST_CHECK( !constraintRerouteResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( constraintRerouteResult["candidates"].size(), 1 );
-
-    const nlohmann::json& constraintCandidate =
-            constraintRerouteResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( constraintCandidate["source_tool"].get<std::string>(),
-                       "routing.generate_constraint_aware_reroute_candidates" );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["constraint_aware_reroute_facts"]
-                    ["constraints"]["min_clearance"].get<int>(),
-            200000 );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["constraint_aware_reroute_facts"]
-                    ["validation_hint"].get<std::string>(),
-            "run_validate_hidden_attempt_before_publish" );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["landing_facts"]["source"].get<std::string>(),
-            "constraint_reroute.replacement_points.end" );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["plan"]["operations"].at( 0 )["kind"]
-                    .get<std::string>(),
-            "pcb.delete_items" );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["plan"]["operations"].at( 1 )["kind"]
-                    .get<std::string>(),
-            "pcb.create_track_polyline" );
-    BOOST_CHECK_EQUAL(
-            constraintCandidate["plan"]["operations"].at( 1 )["arguments"]
-                    ["points"].size(),
-            3 );
-
-    auto* parallelProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_parallel_segment_candidates" ),
-            wxS( "routing" ),
-            -1,
-            wxS( "{\"reference_start\":{\"x\":10,\"y\":10},"
-                 "\"reference_end\":{\"x\":110,\"y\":10},"
-                 "\"offset\":{\"x\":0,\"y\":40},"
-                 "\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES parallelServices;
-    AI_NEXT_ACTION_RUNTIME parallelRuntime{
-            std::unique_ptr<AI_PROVIDER>( parallelProvider ),
-            &parallelServices.m_Validation,
-            &parallelServices.m_Preview };
-
-    BOOST_REQUIRE( parallelRuntime.Update( makeRoutingTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( parallelProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL( parallelProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    nlohmann::json parallelResult = nlohmann::json::parse(
-            parallelProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( parallelResult["tool"].get<std::string>(),
-                       "routing.generate_parallel_segment_candidates" );
-    BOOST_CHECK_EQUAL( parallelResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( parallelResult["candidate_count"].get<int>(), 1 );
-    BOOST_CHECK( !parallelResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( parallelResult["candidates"].size(), 1 );
-
-    const nlohmann::json& parallelCandidate = parallelResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( parallelCandidate["source_tool"].get<std::string>(),
-                       "routing.generate_parallel_segment_candidates" );
-    BOOST_CHECK_EQUAL( parallelCandidate["arguments"]["operation"].get<std::string>(),
-                       "route_segment_preview" );
-    BOOST_CHECK_EQUAL( parallelCandidate["arguments"]["start"]["x"].get<int>(), 10 );
-    BOOST_CHECK_EQUAL( parallelCandidate["arguments"]["start"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( parallelCandidate["arguments"]["end"]["x"].get<int>(), 110 );
-    BOOST_CHECK_EQUAL( parallelCandidate["arguments"]["end"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( parallelCandidate["landing_facts"]["source"].get<std::string>(),
-                       "parallel_reference.offset" );
-    BOOST_CHECK_EQUAL( parallelCandidate["landing_facts"]["point"]["x"].get<int>(), 110 );
-    BOOST_CHECK_EQUAL( parallelCandidate["landing_facts"]["point"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( parallelCandidate["parallel_facts"]["offset"]["y"].get<int>(), 40 );
-
-    auto* busProvider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "routing_generate_bus_segment_candidates" ),
-            wxS( "routing" ),
-            -1,
-            wxS( "{\"reference_start\":{\"x\":10,\"y\":10},"
-                 "\"reference_end\":{\"x\":110,\"y\":10},"
-                 "\"lane_offsets\":[{\"x\":0,\"y\":20},{\"x\":0,\"y\":40}],"
-                 "\"nets\":[\"D0\",\"D1\"],\"layer\":\"F.Cu\",\"width\":120000}" ) );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES busServices;
-    AI_NEXT_ACTION_RUNTIME busRuntime{
-            std::unique_ptr<AI_PROVIDER>( busProvider ),
-            &busServices.m_Validation,
-            &busServices.m_Preview };
-
-    BOOST_REQUIRE( busRuntime.Update( makeRoutingTrigger() ).has_value() );
-    BOOST_REQUIRE_GE( busProvider->m_Requests.size(), 2 );
-    BOOST_REQUIRE_EQUAL( busProvider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
-
-    nlohmann::json busResult = nlohmann::json::parse(
-            busProvider->m_Requests.at( 1 ).m_ToolResults.front()
-                    .m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( busResult["tool"].get<std::string>(),
-                       "routing.generate_bus_segment_candidates" );
-    BOOST_CHECK_EQUAL( busResult["status"].get<std::string>(),
-                       "candidates_generated" );
-    BOOST_CHECK_EQUAL( busResult["candidate_count"].get<int>(), 2 );
-    BOOST_CHECK( !busResult["publish_allowed"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( busResult["candidates"].size(), 2 );
-
-    const nlohmann::json& firstBusCandidate = busResult["candidates"].at( 0 );
-    BOOST_CHECK_EQUAL( firstBusCandidate["source_tool"].get<std::string>(),
-                       "routing.generate_bus_segment_candidates" );
-    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["operation"].get<std::string>(),
-                       "route_segment_preview" );
-    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["net"].get<std::string>(),
-                       "D0" );
-    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["start"]["y"].get<int>(), 30 );
-    BOOST_CHECK_EQUAL( firstBusCandidate["arguments"]["end"]["y"].get<int>(), 30 );
-    BOOST_CHECK_EQUAL( firstBusCandidate["landing_facts"]["source"].get<std::string>(),
-                       "bus_reference.offset" );
-    BOOST_CHECK_EQUAL( firstBusCandidate["bus_facts"]["lane_index"].get<int>(), 0 );
-    BOOST_CHECK_EQUAL( firstBusCandidate["bus_facts"]["lane_count"].get<int>(), 2 );
-
-    const nlohmann::json& secondBusCandidate = busResult["candidates"].at( 1 );
-    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["net"].get<std::string>(),
-                       "D1" );
-    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["start"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( secondBusCandidate["arguments"]["end"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( secondBusCandidate["landing_facts"]["point"]["y"].get<int>(), 50 );
-    BOOST_CHECK_EQUAL( secondBusCandidate["bus_facts"]["offset"]["y"].get<int>(), 40 );
-}
-
-
-BOOST_AUTO_TEST_CASE( RuntimeRejectsOutOfRangeSelectedCandidateIndex )
-{
-    auto* provider = new CANDIDATE_TOOL_NEXT_ACTION_PROVIDER(
-            wxS( "placement_generate_via_pattern_candidates" ),
-            wxS( "placement" ),
-            7 );
-
-    PUBLISH_READY_NEXT_ACTION_SERVICES services;
-    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
-                                    &services.m_Validation,
-                                    &services.m_Preview };
-
-    std::optional<AI_SUGGESTION_RECORD> suggestion =
-            runtime.Update( makeViaTrigger() );
-
-    BOOST_CHECK( !suggestion.has_value() );
-    BOOST_CHECK( runtime.Attempts().empty() );
-    BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
-    BOOST_CHECK( runtime.Steps().front().m_Status
-                 == AI_NEXT_ACTION_STEP_STATUS::Abandoned );
-    BOOST_CHECK( runtime.Steps().front().m_LlmDecisionJson.Contains(
-            wxS( "\"selected_candidate_index\":7" ) ) );
 }
 
 
@@ -12178,32 +11332,17 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesRoutingCandidateBoundedPlanThroughScriptToo
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     BOOST_CHECK( publishRequest.m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
     const std::vector<AI_TOOL_CALL_RECORD> toolResults =
             toolResultsWithoutPreviewGateFeedback( publishRequest );
-    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
-
-    const AI_TOOL_CALL_RECORD& candidateResult =
-            toolResults.at( 1 );
-    BOOST_CHECK_EQUAL( candidateResult.m_ToolCallId,
-                       wxString( wxS( "call_generate_replace_path_candidate" ) ) );
-    BOOST_CHECK_EQUAL( candidateResult.m_ToolName,
-                       wxString( wxS( "routing_generate_replace_path_candidates" ) ) );
-    BOOST_CHECK( candidateResult.m_Allowed );
-    BOOST_CHECK( candidateResult.m_Executed );
-    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
-            wxS( "\"plan\"" ) ) );
-    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
-            wxS( "\"kind\":\"pcb.delete_items\"" ) ) );
-    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
-            wxS( "\"kind\":\"pcb.create_track_polyline\"" ) ) );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 3 );
 
     const AI_TOOL_CALL_RECORD& scriptResult =
-            toolResults.at( 2 );
+            toolResults.at( 1 );
     BOOST_CHECK_EQUAL( scriptResult.m_ToolCallId,
                        wxString( wxS( "call_execute_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL( scriptResult.m_ToolName,
@@ -12222,7 +11361,7 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesRoutingCandidateBoundedPlanThroughScriptToo
             wxS( "\"replace_path_polyline:segment:1\"" ) ) );
 
     const AI_TOOL_CALL_RECORD& renderResult =
-            toolResults.at( 3 );
+            toolResults.at( 2 );
     BOOST_CHECK_EQUAL( renderResult.m_ToolCallId,
                        wxString( wxS( "call_render_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL( renderResult.m_ToolName,
@@ -12256,29 +11395,23 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksConstraintReroutePublishWithoutHintedValidati
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 5 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     BOOST_CHECK( publishRequest.m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
     const std::vector<AI_TOOL_CALL_RECORD> toolResults =
             toolResultsWithoutPreviewGateFeedback( publishRequest );
-    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
-
-    const AI_TOOL_CALL_RECORD& candidateResult =
-            toolResults.at( 1 );
-    BOOST_CHECK_EQUAL(
-            candidateResult.m_ToolName,
-            wxString( wxS( "routing_generate_constraint_aware_reroute_candidates" ) ) );
-    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
-            wxS( "run_validate_hidden_attempt_before_publish" ) ) );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 3 );
 
     const AI_TOOL_CALL_RECORD& scriptResult =
-            toolResults.at( 2 );
+            toolResults.at( 1 );
     BOOST_CHECK_EQUAL( scriptResult.m_ToolName,
                        wxString( wxS( "script_run_bounded_plan" ) ) );
     BOOST_CHECK( scriptResult.m_ResultJson.Contains(
             wxS( "\"status\":\"script_plan_executed\"" ) ) );
+    BOOST_CHECK( scriptResult.m_ResultJson.Contains(
+            wxS( "run_validate_hidden_attempt_before_publish" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
     BOOST_CHECK( runtime.Steps().front().m_Status
@@ -12303,13 +11436,13 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesConstraintRerouteAfterHintedValidation )
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_REQUIRE( suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
-    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 5 );
+    BOOST_REQUIRE_EQUAL( publishRequest.m_ToolResults.size(), 4 );
 
     const AI_TOOL_CALL_RECORD& validationResult =
-            publishRequest.m_ToolResults.at( 4 );
+            publishRequest.m_ToolResults.at( 3 );
     BOOST_CHECK_EQUAL( validationResult.m_ToolCallId,
                        wxString( wxS( "call_validate_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL( validationResult.m_ToolName,
@@ -12345,20 +11478,20 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksConstraintRerouteWhenHintedValidationPrecedes
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     const std::vector<AI_TOOL_CALL_RECORD> toolResults =
             toolResultsWithoutPreviewGateFeedback( publishRequest );
-    BOOST_REQUIRE_EQUAL( toolResults.size(), 5 );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
 
     BOOST_CHECK_EQUAL(
-            toolResults.at( 2 ).m_ToolCallId,
+            toolResults.at( 1 ).m_ToolCallId,
             wxString( wxS( "call_validate_before_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL(
-            toolResults.at( 3 ).m_ToolCallId,
+            toolResults.at( 2 ).m_ToolCallId,
             wxString( wxS( "call_execute_candidate_plan" ) ) );
-    BOOST_CHECK( toolResults.at( 3 ).m_ResultJson.Contains(
+    BOOST_CHECK( toolResults.at( 2 ).m_ResultJson.Contains(
             wxS( "\"status\":\"script_plan_executed\"" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
@@ -12390,19 +11523,19 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsUnusedConstraintCandidateWithoutHintedValidat
             toolResultsWithoutPreviewGateFeedback( publishRequest );
     BOOST_REQUIRE_EQUAL( toolResults.size(), 3 );
 
-    const AI_TOOL_CALL_RECORD& candidateResult =
+    const AI_TOOL_CALL_RECORD& observationResult =
             toolResults.at( 1 );
     BOOST_CHECK_EQUAL(
-            candidateResult.m_ToolName,
-            wxString( wxS( "routing_generate_constraint_aware_reroute_candidates" ) ) );
-    BOOST_CHECK( candidateResult.m_ResultJson.Contains(
+            observationResult.m_ToolName,
+            wxString( wxS( "observation_resolve_visual_reference" ) ) );
+    BOOST_CHECK( observationResult.m_ResultJson.Contains(
             wxS( "run_validate_hidden_attempt_before_publish" ) ) );
 
     BOOST_CHECK( !runtime.Steps().front().m_ReviewDecisionJson.Contains(
             wxS( "validation_hint_not_satisfied" ) ) );
     BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
     BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
-            wxS( "\"call_generate_constraint_candidate\"" ) ) );
+            wxS( "\"call_observe_constraint_hint\"" ) ) );
 }
 
 
@@ -12420,20 +11553,20 @@ BOOST_AUTO_TEST_CASE( RuntimeAllowsRolledBackConstraintMutationWithoutHintedVali
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     const std::vector<AI_TOOL_CALL_RECORD> toolResults =
             toolResultsWithoutPreviewGateFeedback( publishRequest );
-    BOOST_REQUIRE_EQUAL( toolResults.size(), 5 );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
 
     BOOST_CHECK_EQUAL(
-            toolResults.at( 2 ).m_ToolCallId,
+            toolResults.at( 1 ).m_ToolCallId,
             wxString( wxS( "call_execute_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL(
-            toolResults.at( 3 ).m_ToolCallId,
+            toolResults.at( 2 ).m_ToolCallId,
             wxString( wxS( "call_rollback_candidate_plan" ) ) );
-    BOOST_CHECK( toolResults.at( 3 ).m_ResultJson.Contains(
+    BOOST_CHECK( toolResults.at( 2 ).m_ResultJson.Contains(
             wxS( "\"rolled_back_tool_call_id\":\"call_execute_candidate_plan\"" ) ) );
 
     BOOST_CHECK( !runtime.Steps().front().m_ReviewDecisionJson.Contains(
@@ -12458,21 +11591,21 @@ BOOST_AUTO_TEST_CASE( RuntimeBlocksConstraintRerouteWhenHintedRenderPrecedesMuta
             runtime.Update( makeRoutingTrigger() );
 
     BOOST_CHECK( !suggestion.has_value() );
-    BOOST_REQUIRE_GE( provider->m_Requests.size(), 7 );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 6 );
 
     const AI_PROVIDER_REQUEST& publishRequest = provider->m_Requests.back();
     const std::vector<AI_TOOL_CALL_RECORD> toolResults =
             toolResultsWithoutPreviewGateFeedback( publishRequest );
-    BOOST_REQUIRE_EQUAL( toolResults.size(), 5 );
+    BOOST_REQUIRE_EQUAL( toolResults.size(), 4 );
 
     BOOST_CHECK_EQUAL(
-            toolResults.at( 2 ).m_ToolCallId,
+            toolResults.at( 1 ).m_ToolCallId,
             wxString( wxS( "call_render_before_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL(
-            toolResults.at( 3 ).m_ToolCallId,
+            toolResults.at( 2 ).m_ToolCallId,
             wxString( wxS( "call_execute_candidate_plan" ) ) );
     BOOST_CHECK_EQUAL(
-            toolResults.at( 4 ).m_ToolCallId,
+            toolResults.at( 3 ).m_ToolCallId,
             wxString( wxS( "call_validate_after_stale_render" ) ) );
 
     BOOST_REQUIRE_EQUAL( runtime.Steps().size(), 1 );
@@ -12720,6 +11853,135 @@ BOOST_AUTO_TEST_CASE( RuntimeCandidateGenerationRecordsWorkStateSelectedTool )
     BOOST_REQUIRE( routing.has_value() );
     BOOST_CHECK( routing->m_RuntimeProvenanceJson.Contains(
             wxS( "\"selected_tool\":\"routing.generate_segment_candidates\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeUsesWorkStateCandidateWhenDecisionStructurallyAbandons )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"abandon\","
+                   "\"reason_code\":\"model_waited_for_user\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeRoutingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Steps().front().m_LlmDecisionJson.Contains(
+            wxS( "work_state_candidate_fallback" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"routing.generate_segment_candidates\"" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePublishesActiveViaPlacementWithoutNet )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeActiveViaPlacementTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"placement.generate_via_pattern_candidates\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"net\":\"\"" ) ) );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsPlaceViaPreview() );
+    BOOST_CHECK( operation->m_NetName.IsEmpty() );
+    BOOST_CHECK_EQUAL( operation->m_Position.x, 710 );
+    BOOST_CHECK_EQUAL( operation->m_Position.y, 820 );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "pcb.create_via" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePublishesDrawingZoneShapeCandidate )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeDrawingZoneTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"placement.generate_shape_candidates\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "pcb.create_shape" ) ) );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsCreateShapePreview() );
+    BOOST_CHECK_EQUAL( operation->m_LayerName, wxString( wxS( "Dwgs.User" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "pcb.create_shape" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimePublishesDrawingZoneCopperZoneCandidate )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeCopperZoneDrawingTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "\"selected_tool\":\"placement.generate_shape_candidates\"" ) ) );
+    BOOST_CHECK( suggestion->m_RuntimeProvenanceJson.Contains(
+            wxS( "pcb.create_zone" ) ) );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsCreateCopperZonePreview() );
+    BOOST_CHECK_EQUAL( operation->m_NetName, wxString( wxS( "GND" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_LayerName, wxString( wxS( "F.Cu" ) ) );
+    BOOST_REQUIRE_EQUAL( runtime.Attempts().size(), 1 );
+    BOOST_CHECK( runtime.Attempts().front().m_JournalJson.Contains(
+            wxS( "pcb.create_zone" ) ) );
 }
 
 
@@ -13558,7 +12820,7 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonShadowApplyCandidateBeforeMutatio
 }
 
 
-BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonCandidateToolArgumentsAtParseLayer )
+BOOST_AUTO_TEST_CASE( RuntimeRejectsLegacyCandidateToolBeforeArgumentParsing )
 {
     auto* provider = new INVALID_REVIEW_TOOL_ARGUMENT_NEXT_ACTION_PROVIDER(
             wxS( "routing_generate_parallel_segment_candidates" ), wxS( "{" ) );
@@ -13582,10 +12844,10 @@ BOOST_AUTO_TEST_CASE( RuntimeRejectsInvalidJsonCandidateToolArgumentsAtParseLaye
     BOOST_CHECK( !result.m_Allowed );
     BOOST_CHECK( !result.m_Executed );
     BOOST_CHECK_EQUAL( result.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-    BOOST_CHECK( result.m_Message.Contains( wxS( "valid JSON" ) ) );
+                       wxString( wxS( "unknown_tool" ) ) );
+    BOOST_CHECK( result.m_Message.Contains( wxS( "Unknown Next Action runtime tool" ) ) );
     BOOST_CHECK( result.m_ResultJson.Contains(
-            wxS( "\"status\":\"malformed_arguments\"" ) ) );
+            wxS( "\"status\":\"unknown_tool\"" ) ) );
 }
 
 

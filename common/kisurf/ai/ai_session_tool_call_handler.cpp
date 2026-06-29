@@ -13,6 +13,7 @@
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_shadow_board.h>
 
+#include <core/typeinfo.h>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -133,6 +134,41 @@ nlohmann::json catalogPointSchema( const char* aDescription )
                { { "x", { { "type", "integer" } } },
                  { "y", { { "type", "integer" } } } } },
              { "required", nlohmann::json::array( { "x", "y" } ) } };
+}
+
+
+nlohmann::json catalogCoordinateContractJson()
+{
+    return {
+        { "direct_point",
+          { { "description", "Absolute internal board coordinate." },
+            { "shape", { { "x", "integer" }, { "y", "integer" } } } } },
+        { "relative_point",
+          { { "description",
+              "Point resolved from a live session handle before journaling." },
+            { "shape",
+              { { "relative_to", "handle alias, handle id, or handle object" },
+                { "anchor", "center|position|start|end|midpoint|bbox_min|bbox_max" },
+                { "offset", { { "x", "integer" }, { "y", "integer" } } } } } } },
+        { "between_point",
+          { { "description",
+              "Interpolated point between two direct or referenced points." },
+            { "shape",
+              { { "between", "array of two point expressions" },
+                { "t", "0.0-1.0 fraction" },
+                { "percent", "0-100 percentage alternative to t" },
+                { "offset", { { "x", "integer" }, { "y", "integer" } } } } } } },
+        { "parallel_track",
+          { { "description",
+              "pcb.create_track_segment can use parallel_to plus offset; executor "
+              "lowers it to absolute start/end before journal replay." },
+            { "shape",
+              { { "parallel_to", "track segment handle alias, id, or handle object" },
+                { "offset", { { "x", "integer" }, { "y", "integer" } } } } } } },
+        { "journal_policy",
+          "Relative and parallel expressions are lowered to absolute x/y points before "
+          "they enter the session journal." }
+    };
 }
 
 
@@ -337,13 +373,17 @@ nlohmann::json catalogQueryItemsFilterSchema()
              { "properties",
                { { "type", { { "type", "string" } } },
                  { "net", { { "type", "string" } } },
-                 { "layer", { { "type", "string" } } },
-                 { "alias", { { "type", "string" } } },
-                 { "selection", { { "type", "boolean" } } },
-                 { "bbox",
-                   catalogBoxSchema(
-                           "Bounding box intersection filter in internal coordinates." ) },
-                 { "handle", catalogQueryHandleFilterSchema() } } } };
+                  { "layer", { { "type", "string" } } },
+                  { "alias", { { "type", "string" } } },
+                  { "selection", { { "type", "boolean" } } },
+                  { "live_board",
+                    { { "type", "boolean" },
+                      { "description",
+                        "Opt in to seeding live-board items into the session shadow board." } } },
+                  { "bbox",
+                    catalogBoxSchema(
+                            "Bounding box intersection filter in internal coordinates." ) },
+                  { "handle", catalogQueryHandleFilterSchema() } } } };
 }
 
 
@@ -513,6 +553,17 @@ nlohmann::json sessionAtomicOperationContractsJson()
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
                 { "width", { { "type", "integer" }, { "minimum", 1 } } },
+                { "parallel_to",
+                  { { "description",
+                      "Optional reference track segment. When start/end are omitted, "
+                      "the executor copies the reference start/end and applies offset." },
+                    { "anyOf",
+                      nlohmann::json::array(
+                              { { { "type", "string" } },
+                                { { "type", "integer" }, { "minimum", 1 } },
+                                { { "type", "object" },
+                                  { "additionalProperties", true } } } ) } } },
+                { "offset", catalogPointSchema( "Relative or parallel point offset." ) },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
                   { { "type", "object" }, { "additionalProperties", true } } } } },
@@ -778,6 +829,7 @@ nlohmann::json sessionToolCatalogJson()
             tool["requires_journal"] = true;
             tool["supported_kinds"] = sessionAtomicOperationSetJson();
             tool["operation_contracts"] = sessionAtomicOperationContractsJson();
+            tool["coordinate_contract"] = catalogCoordinateContractJson();
             tool["cannot_publish"] = true;
         }
         else if( name == "kisurf_run_cell" )
@@ -795,7 +847,10 @@ nlohmann::json sessionToolCatalogJson()
                       "surface_fill_row_op",
                       "surface_fill_column_op",
                       "surface_fill_range_op",
-                      "surface_set_property_op" } );
+                      "surface_set_property_op",
+                      "point_relative_to",
+                      "point_between",
+                      "create_parallel_track_segment" } );
         }
         else if( name == "kisurf_query_items" )
         {
@@ -1728,6 +1783,261 @@ bool selectionFilterRequested( const nlohmann::json& aFilter )
     return aFilter.is_object() && aFilter.contains( "selection" )
            && aFilter["selection"].is_boolean()
            && aFilter["selection"].get<bool>();
+}
+
+
+bool boolFieldRequested( const nlohmann::json& aObject, const char* aName )
+{
+    return aObject.is_object() && aObject.contains( aName )
+           && aObject[aName].is_boolean() && aObject[aName].get<bool>();
+}
+
+
+bool liveBoardSeedRequested( const nlohmann::json& aArguments )
+{
+    if( boolFieldRequested( aArguments, "live_board" )
+        || boolFieldRequested( aArguments, "live_board_seed" ) )
+    {
+        return true;
+    }
+
+    if( aArguments.is_object() && aArguments.contains( "filter" )
+        && aArguments["filter"].is_object() )
+    {
+        return boolFieldRequested( aArguments["filter"], "live_board" )
+               || boolFieldRequested( aArguments["filter"], "live_board_seed" );
+    }
+
+    return false;
+}
+
+
+bool sessionOperationNeedsShadowSeed( AI_SESSION_OPERATION_KIND aKind,
+                                      const nlohmann::json* aArguments = nullptr )
+{
+    switch( aKind )
+    {
+    case AI_SESSION_OPERATION_KIND::QueryItems:
+    case AI_SESSION_OPERATION_KIND::QueryItem:
+    case AI_SESSION_OPERATION_KIND::QuerySelection:
+    case AI_SESSION_OPERATION_KIND::QueryNets:
+    case AI_SESSION_OPERATION_KIND::QueryLayers:
+        return aArguments && liveBoardSeedRequested( *aArguments );
+
+    case AI_SESSION_OPERATION_KIND::MoveItems:
+    case AI_SESSION_OPERATION_KIND::DeleteItems:
+    case AI_SESSION_OPERATION_KIND::UpdateItemGeometry:
+    case AI_SESSION_OPERATION_KIND::SetItemNet:
+    case AI_SESSION_OPERATION_KIND::SetItemLayer:
+    case AI_SESSION_OPERATION_KIND::SetItemProperties:
+    case AI_SESSION_OPERATION_KIND::SetMetadata:
+        return true;
+
+    default:
+        return false;
+    }
+}
+
+
+wxString stringField( const nlohmann::json& aObject, const char* aName )
+{
+    if( aObject.is_object() && aObject.contains( aName )
+        && aObject[aName].is_string() )
+    {
+        return wxString::FromUTF8(
+                aObject[aName].get_ref<const std::string&>().c_str() );
+    }
+
+    return wxEmptyString;
+}
+
+
+std::vector<wxString> stringArrayField( const nlohmann::json& aObject,
+                                        const char* aName )
+{
+    std::vector<wxString> values;
+
+    if( !aObject.is_object() || !aObject.contains( aName )
+        || !aObject[aName].is_array() )
+    {
+        return values;
+    }
+
+    for( const nlohmann::json& value : aObject[aName] )
+    {
+        if( value.is_string() )
+        {
+            values.push_back( wxString::FromUTF8(
+                    value.get_ref<const std::string&>().c_str() ) );
+        }
+    }
+
+    return values;
+}
+
+
+wxString snapshotShadowType( const AI_OBJECT_REF& aObject,
+                             const nlohmann::json& aDetails )
+{
+    const wxString kind = stringField( aDetails, "kind" );
+
+    if( kind == wxS( "via" ) )
+        return wxS( "via" );
+
+    if( kind == wxS( "track" ) || kind == wxS( "arc" ) )
+        return wxS( "track_segment" );
+
+    if( kind == wxS( "zone" ) )
+        return wxS( "zone" );
+
+    if( kind == wxS( "shape" ) )
+        return wxS( "shape" );
+
+    if( kind == wxS( "footprint" ) )
+        return wxS( "footprint" );
+
+    if( kind == wxS( "pad" ) )
+        return wxS( "pad" );
+
+    switch( BaseType( aObject.m_Type ) )
+    {
+    case PCB_VIA_T:       return wxS( "via" );
+    case PCB_TRACE_T:     return wxS( "track_segment" );
+    case PCB_ZONE_T:      return wxS( "zone" );
+    case PCB_SHAPE_T:     return wxS( "shape" );
+    case PCB_FOOTPRINT_T: return wxS( "footprint" );
+    case PCB_PAD_T:       return wxS( "pad" );
+    default:              return wxS( "item" );
+    }
+}
+
+
+wxString snapshotShadowLayer( const nlohmann::json& aDetails,
+                              const std::vector<wxString>& aLayers )
+{
+    wxString layer = stringField( aDetails, "layer" );
+
+    if( layer.IsEmpty() )
+        layer = stringField( aDetails, "first_layer" );
+
+    if( layer.IsEmpty() && !aLayers.empty() )
+        layer = aLayers.front();
+
+    return layer;
+}
+
+
+std::vector<wxString> snapshotShadowLayers( const nlohmann::json& aDetails )
+{
+    std::vector<wxString> layers = stringArrayField( aDetails, "layers" );
+    wxString layer = snapshotShadowLayer( aDetails, layers );
+
+    if( layers.empty() && !layer.IsEmpty() )
+        layers.push_back( layer );
+
+    return layers;
+}
+
+
+bool snapshotObjectIsSelected( const AI_OBJECT_REF& aObject,
+                               const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    for( const AI_OBJECT_REF& selected : aSnapshot.m_SelectedObjects )
+    {
+        if( selected.m_Uuid == aObject.m_Uuid )
+            return true;
+
+        if( !selected.m_Label.IsEmpty() && selected.m_Label == aObject.m_Label )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool seedShadowBoardFromContextSnapshot(
+        AI_EXECUTION_SESSION& aSession,
+        const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    if( aSnapshot.m_VisibleObjects.empty() && aSnapshot.m_SelectedObjects.empty() )
+        return false;
+
+    size_t seededCount = 0;
+    std::vector<AI_OBJECT_REF> objects = aSnapshot.m_VisibleObjects;
+
+    for( const AI_OBJECT_REF& selected : aSnapshot.m_SelectedObjects )
+    {
+        const bool alreadyIncluded =
+                std::find_if( objects.begin(), objects.end(),
+                              [&]( const AI_OBJECT_REF& object )
+                              {
+                                  return object.m_Uuid == selected.m_Uuid
+                                         || ( !object.m_Label.IsEmpty()
+                                              && object.m_Label == selected.m_Label );
+                              } )
+                != objects.end();
+
+        if( !alreadyIncluded )
+            objects.push_back( selected );
+    }
+
+    for( const AI_OBJECT_REF& object : objects )
+    {
+        nlohmann::json details = nlohmann::json::parse(
+                toUtf8String( object.m_DetailsJson ), nullptr, false );
+
+        if( details.is_discarded() || !details.is_object() )
+            details = nlohmann::json::object();
+
+        const wxString uuid = object.m_Uuid.AsString();
+        wxString alias = uuid.IsEmpty() ? object.m_Label : wxS( "live:" ) + uuid;
+
+        if( alias.IsEmpty() )
+            alias = wxString::Format( wxS( "snapshot:%llu" ),
+                                      static_cast<unsigned long long>(
+                                              seededCount + 1 ) );
+
+        AI_SESSION_HANDLE handle = aSession.CreateHandle( alias );
+        const std::vector<wxString> layers = snapshotShadowLayers( details );
+
+        AI_SHADOW_ITEM item;
+        item.m_Handle = handle;
+        item.m_Type = snapshotShadowType( object, details );
+        item.m_Alias = handle.m_Alias;
+        item.m_Net = stringField( details, "net_name" );
+
+        if( item.m_Net.IsEmpty() )
+            item.m_Net = stringField( details, "net" );
+
+        item.m_Layers = layers;
+        item.m_Layer = snapshotShadowLayer( details, layers );
+        item.m_GeometryJson = fromJson( details );
+        item.m_CreatedEpoch = aSession.Epoch();
+        item.m_UpdatedEpoch = aSession.Epoch();
+        item.m_Metadata[wxS( "seed_source" )] = wxS( "context_snapshot" );
+        item.m_Metadata[wxS( "source_label" )] = object.m_Label;
+        item.m_Metadata[wxS( "live_uuid" )] = uuid;
+        item.m_Metadata[wxS( "live_kicad_type" )] =
+                wxString::Format( wxS( "%d" ), static_cast<int>( object.m_Type ) );
+
+        if( snapshotObjectIsSelected( object, aSnapshot ) )
+            item.m_Metadata[wxS( "selected" )] = wxS( "true" );
+
+        for( const char* key : { "reference", "value", "footprint_reference",
+                                 "footprint_value", "number", "pad_number",
+                                 "footprint_id" } )
+        {
+            wxString value = stringField( details, key );
+
+            if( !value.IsEmpty() )
+                item.m_Metadata[wxString::FromUTF8( key )] = value;
+        }
+
+        aSession.ShadowBoard().UpsertItem( std::move( item ) );
+        ++seededCount;
+    }
+
+    return seededCount > 0;
 }
 
 
@@ -2971,7 +3281,9 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         }
 
         if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
+        {
             openSessionFromRequest( aRequest, wxEmptyString, contextBaseHash( aRequest ) );
+        }
 
         if( m_Session->SelectionRevisionConflicts( effectiveContextVersion( aRequest ) ) )
         {
@@ -3102,6 +3414,16 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
                 if( operation.m_Kind == AI_SESSION_OPERATION_KIND::RenderPreview )
                     hasExplicitPreview = true;
+
+                if( sessionOperationNeedsShadowSeed( operation.m_Kind,
+                                                     &operationArguments ) )
+                {
+                    if( !ensureShadowBoardSeeded( operationErrorCode,
+                                                  operationMessage ) )
+                    {
+                        break;
+                    }
+                }
 
                 if( operation.m_Kind == AI_SESSION_OPERATION_KIND::Checkpoint )
                 {
@@ -3487,6 +3809,19 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                       "the session before running another atomic operation." ) );
         }
 
+        if( sessionOperationNeedsShadowSeed( operationKind,
+                                             arguments.contains( "arguments" )
+                                                     && arguments["arguments"].is_object()
+                                                     ? &arguments["arguments"]
+                                                     : nullptr ) )
+        {
+            wxString seedErrorCode;
+            wxString seedMessage;
+
+            if( !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
+                return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+        }
+
         const bool hadOpenStep = m_Session->HasOpenStep();
         uint64_t   stepId = 0;
 
@@ -3637,6 +3972,15 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
     if( aToolCall.m_ToolName == wxS( "kisurf_query_items" ) )
     {
+        wxString seedErrorCode;
+        wxString seedMessage;
+
+        if( liveBoardSeedRequested( arguments )
+            && !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
+        {
+            return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+        }
+
         wxString filterJson = wxS( "{}" );
 
         if( arguments.contains( "filter" ) && arguments["filter"].is_object() )
@@ -3670,6 +4014,15 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
     if( queryKind != AI_SESSION_OPERATION_KIND::Unknown )
     {
+        if( sessionOperationNeedsShadowSeed( queryKind, &arguments ) )
+        {
+            wxString seedErrorCode;
+            wxString seedMessage;
+
+            if( !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
+                return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+        }
+
         AI_PYTHON_OPERATION_REQUEST operation;
         operation.m_Kind = queryKind;
         operation.m_ArgumentsJson = fromJson( arguments );
@@ -3995,6 +4348,48 @@ wxString AI_SESSION_TOOL_CALL_HANDLER::ToolCatalogJson() const
 }
 
 
+bool AI_SESSION_TOOL_CALL_HANDLER::ensureShadowBoardSeeded( wxString& aErrorCode,
+                                                            wxString& aMessage )
+{
+    if( !m_Session )
+    {
+        aErrorCode = wxS( "no_active_session" );
+        aMessage = wxS( "Open a KiSurf AI execution session first." );
+        return false;
+    }
+
+    if( m_ShadowBoardSeeded )
+        return true;
+
+    try
+    {
+        if( seedShadowBoardFromContextSnapshot( *m_Session,
+                                                m_SessionOpenContextSnapshot ) )
+        {
+            m_ShadowBoardSeeded = true;
+            return true;
+        }
+
+        // Agent tool calls are driven from the provider request snapshot.  Walking
+        // live BOARD containers here can race editor state and crash the UI path.
+        m_ShadowBoardSeeded = true;
+        return true;
+    }
+    catch( const std::exception& e )
+    {
+        aErrorCode = wxS( "shadow_seed_failed" );
+        aMessage = wxString::FromUTF8( e.what() );
+        return false;
+    }
+    catch( ... )
+    {
+        aErrorCode = wxS( "shadow_seed_failed" );
+        aMessage = wxS( "Live board shadow seeding failed." );
+        return false;
+    }
+}
+
+
 AI_EXECUTION_SESSION& AI_SESSION_TOOL_CALL_HANDLER::openSessionFromRequest(
         const AI_PROVIDER_REQUEST& aRequest, const wxString& aBoardId,
         const wxString& aBaseHash )
@@ -4006,10 +4401,9 @@ AI_EXECUTION_SESSION& AI_SESSION_TOOL_CALL_HANDLER::openSessionFromRequest(
     options.m_BoardId = aBoardId.IsEmpty() ? defaultBoardId( options.m_EditorKind ) : aBoardId;
     options.m_BaseHash = aBaseHash.IsEmpty() ? contextBaseHash( aRequest ) : aBaseHash;
     clearPreviewState();
+    m_ShadowBoardSeeded = false;
+    m_SessionOpenContextSnapshot = aRequest.m_ContextSnapshot;
     m_Session.emplace( std::move( options ) );
-
-    if( m_ShadowBoardSeeder )
-        m_ShadowBoardSeeder->Seed( *m_Session );
 
     return *m_Session;
 }

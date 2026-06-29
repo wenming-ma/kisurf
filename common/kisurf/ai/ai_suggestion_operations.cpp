@@ -222,7 +222,7 @@ std::optional<AI_SUGGESTION_OPERATION> parsePlaceViaPreview( const nlohmann::jso
     int      drill = 0;
     VECTOR2I position;
 
-    if( netName.IsEmpty() || !jsonPositiveIntegerToInt( aArgs["diameter"], diameter )
+    if( !jsonPositiveIntegerToInt( aArgs["diameter"], diameter )
         || !jsonPositiveIntegerToInt( aArgs["drill"], drill )
         || !jsonPointToVector2I( aArgs["position"], position ) )
     {

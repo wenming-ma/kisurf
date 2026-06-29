@@ -840,6 +840,9 @@ private:
     std::unique_ptr<KISURF_AI_PCB_TOOL_STATE_PROVIDER> m_aiToolStateProvider;
     uint64_t               m_aiActivityObserverId = 0;
 
+    void refreshAiPcbSessionServices();
+    void configureAiAgentPanelToolCalls();
+
     /// Secondary infobar that stacks above the main one; reserved for load-time
     /// notices (currently the WRL -> STEP migration prompt) that must not be
     /// stomped by later infobar messages such as read-only warnings or DRC

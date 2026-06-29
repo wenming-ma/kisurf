@@ -487,6 +487,7 @@ public:
 
     wxString ToolCatalogJson() const;
     wxString CallableToolCatalogJson() const;
+    bool HasHiddenAttemptServices() const;
     std::vector<AI_SUGGESTION_RECORD> GenerateCandidates(
             const AI_OBSERVATION_PACKET& aObservation ) const;
     wxString BuildHiddenMutationResult( const AI_SUGGESTION_RECORD& aCandidate ) const;

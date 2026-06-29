@@ -7,13 +7,212 @@
 #include <wx/utils.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <cstdlib>
 #include <memory>
+#include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 #include <wx/filename.h>
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
+
 namespace
 {
+#ifdef _WIN32
+class LOOPBACK_SSE_SERVER
+{
+public:
+    LOOPBACK_SSE_SERVER()
+    {
+        m_WsaStarted = WSAStartup( MAKEWORD( 2, 2 ), &m_WsaData ) == 0;
+    }
+
+    ~LOOPBACK_SSE_SERVER()
+    {
+        Join();
+
+        if( m_Server != INVALID_SOCKET )
+            closesocket( m_Server );
+
+        if( m_WsaStarted )
+            WSACleanup();
+    }
+
+    bool Start( const std::string& aSseBody )
+    {
+        if( !m_WsaStarted )
+            return false;
+
+        m_Response = "HTTP/1.1 200 OK\r\n"
+                     "Content-Type: text/event-stream\r\n"
+                     "Connection: close\r\n"
+                     "Content-Length: "
+                     + std::to_string( aSseBody.size() )
+                     + "\r\n\r\n"
+                     + aSseBody;
+
+        m_Server = socket( AF_INET, SOCK_STREAM, IPPROTO_TCP );
+
+        if( m_Server == INVALID_SOCKET )
+            return false;
+
+        sockaddr_in address = {};
+        address.sin_family = AF_INET;
+        address.sin_addr.s_addr = htonl( INADDR_LOOPBACK );
+        address.sin_port = 0;
+
+        if( bind( m_Server, reinterpret_cast<sockaddr*>( &address ), sizeof( address ) )
+            == SOCKET_ERROR )
+        {
+            return false;
+        }
+
+        int addressLength = sizeof( address );
+
+        if( getsockname( m_Server, reinterpret_cast<sockaddr*>( &address ),
+                         &addressLength ) == SOCKET_ERROR )
+        {
+            return false;
+        }
+
+        m_Port = ntohs( address.sin_port );
+
+        if( listen( m_Server, 1 ) == SOCKET_ERROR )
+            return false;
+
+        m_Thread = std::thread(
+                [this]()
+                {
+                    run();
+                } );
+        return true;
+    }
+
+    uint16_t Port() const
+    {
+        return m_Port;
+    }
+
+    void Join()
+    {
+        if( m_Thread.joinable() )
+            m_Thread.join();
+    }
+
+    const std::string& RequestText() const
+    {
+        return m_RequestText;
+    }
+
+private:
+    static size_t contentLengthFromHeaders( const std::string& aRequest )
+    {
+        std::string lower = aRequest;
+        std::transform( lower.begin(), lower.end(), lower.begin(),
+                        []( unsigned char aChar )
+                        {
+                            return static_cast<char>( std::tolower( aChar ) );
+                        } );
+
+        constexpr char key[] = "content-length:";
+        size_t keyPos = lower.find( key );
+
+        if( keyPos == std::string::npos )
+            return 0;
+
+        keyPos += sizeof( key ) - 1;
+        size_t endPos = lower.find( "\r\n", keyPos );
+        std::string value = lower.substr( keyPos, endPos - keyPos );
+        char* end = nullptr;
+        unsigned long long parsed = std::strtoull( value.c_str(), &end, 10 );
+        return static_cast<size_t>( parsed );
+    }
+
+    void run()
+    {
+        fd_set readSet;
+        FD_ZERO( &readSet );
+        FD_SET( m_Server, &readSet );
+
+        timeval acceptTimeout = {};
+        acceptTimeout.tv_sec = 5;
+
+        if( select( 0, &readSet, nullptr, nullptr, &acceptTimeout ) <= 0 )
+            return;
+
+        SOCKET client = accept( m_Server, nullptr, nullptr );
+
+        if( client == INVALID_SOCKET )
+            return;
+
+        const DWORD receiveTimeoutMs = 5000;
+        setsockopt( client, SOL_SOCKET, SO_RCVTIMEO,
+                    reinterpret_cast<const char*>( &receiveTimeoutMs ),
+                    sizeof( receiveTimeoutMs ) );
+
+        std::string request;
+        char        buffer[2048];
+
+        while( true )
+        {
+            int bytes = recv( client, buffer, sizeof( buffer ), 0 );
+
+            if( bytes <= 0 )
+                break;
+
+            request.append( buffer, static_cast<size_t>( bytes ) );
+
+            size_t headerEnd = request.find( "\r\n\r\n" );
+
+            if( headerEnd == std::string::npos )
+                continue;
+
+            size_t bodyStart = headerEnd + 4;
+            size_t bodyBytes = request.size() - bodyStart;
+
+            if( bodyBytes >= contentLengthFromHeaders( request ) )
+                break;
+        }
+
+        m_RequestText = std::move( request );
+
+        const char* remaining = m_Response.data();
+        size_t      remainingSize = m_Response.size();
+
+        while( remainingSize > 0 )
+        {
+            int sent = send( client, remaining,
+                             static_cast<int>( std::min<size_t>(
+                                     remainingSize, 2048 ) ),
+                             0 );
+
+            if( sent <= 0 )
+                break;
+
+            remaining += sent;
+            remainingSize -= static_cast<size_t>( sent );
+        }
+
+        shutdown( client, SD_SEND );
+        closesocket( client );
+    }
+
+    WSADATA     m_WsaData = {};
+    bool        m_WsaStarted = false;
+    SOCKET      m_Server = INVALID_SOCKET;
+    uint16_t    m_Port = 0;
+    std::thread m_Thread;
+    std::string m_Response;
+    std::string m_RequestText;
+};
+#endif
+
 class ENV_GUARD
 {
 public:
@@ -138,6 +337,8 @@ bool queryFilterSchemaSupportsShadowFilters( const nlohmann::json& aSchema )
            && properties["alias"].value( "type", std::string() ) == "string"
            && properties.contains( "selection" )
            && properties["selection"].value( "type", std::string() ) == "boolean"
+           && properties.contains( "live_board" )
+           && properties["live_board"].value( "type", std::string() ) == "boolean"
            && properties.contains( "bbox" )
            && boxSchemaSupportsCanonicalForms( properties["bbox"] )
            && properties.contains( "handle" )
@@ -240,6 +441,24 @@ bool validationSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema
            && properties.contains( "gate" )
            && stringEnumContainsAll( properties["gate"],
                                      { "preview", "accept" } );
+}
+
+
+size_t countSubstring( const std::string& aText, const std::string& aNeedle )
+{
+    if( aNeedle.empty() )
+        return 0;
+
+    size_t count = 0;
+    size_t pos = 0;
+
+    while( ( pos = aText.find( aNeedle, pos ) ) != std::string::npos )
+    {
+        ++count;
+        pos += aNeedle.length();
+    }
+
+    return count;
 }
 } // namespace
 
@@ -427,6 +646,42 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderBuildsChatCompletionRequest )
 }
 
 
+BOOST_AUTO_TEST_CASE( OpenAiProviderSystemPromptRequiresValidationIssueAccuracy )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse,
+                wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "issue_count" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "warning" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "use the supplied tools" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "undoable" ) ) );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 16;
+    request.m_UserText = wxS( "check drc" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 16 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ok" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( OpenAiProviderDoesNotCallNetworkWithoutKey )
 {
     AI_PROVIDER_SETTINGS settings;
@@ -482,6 +737,157 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderIncludesHttpErrorBodyExcerpt )
 }
 
 
+BOOST_AUTO_TEST_CASE( OpenAiProviderStreamsChatCompletionTextDeltas )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    bool streamHandlerInstalled = false;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&]( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse,
+                 wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+                BOOST_REQUIRE( body.contains( "stream" ) );
+                BOOST_CHECK( body["stream"].get<bool>() );
+                BOOST_REQUIRE( static_cast<bool>( aRequest.m_StreamHandler ) );
+                streamHandlerInstalled = true;
+
+                aRequest.m_StreamHandler(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" );
+                aRequest.m_StreamHandler(
+                        "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" );
+                aRequest.m_StreamHandler( "data: [DONE]\n\n" );
+
+                aResponse.m_StatusCode = 200;
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 81;
+    request.m_UserText = wxS( "say hello" );
+
+    std::vector<wxString> deltas;
+    AI_PROVIDER_RESPONSE response = provider.Generate(
+            request,
+            [&]( const AI_PROVIDER_STREAM_EVENT& aEvent )
+            {
+                if( !aEvent.m_TextDelta.IsEmpty() )
+                    deltas.push_back( aEvent.m_TextDelta );
+            } );
+
+    BOOST_CHECK( streamHandlerInstalled );
+    BOOST_REQUIRE_EQUAL( deltas.size(), 2 );
+    BOOST_CHECK_EQUAL( deltas.at( 0 ), wxString( wxS( "Hel" ) ) );
+    BOOST_CHECK_EQUAL( deltas.at( 1 ), wxString( wxS( "lo" ) ) );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Hello" ) ) );
+}
+
+
+#ifdef _WIN32
+BOOST_AUTO_TEST_CASE( OpenAiProviderDefaultHttpHandlerStreamsFromLoopbackSse )
+{
+    LOOPBACK_SSE_SERVER server;
+    BOOST_REQUIRE( server.Start(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Lo\"}}]}\n\n"
+            "data: {\"choices\":[{\"delta\":{\"content\":\"op\"}}]}\n\n"
+            "data: [DONE]\n\n" ) );
+
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxString::Format( wxS( "http://127.0.0.1:%u/v1" ),
+                                           server.Port() );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider( settings );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 83;
+    request.m_UserText = wxS( "stream from the real default HTTP handler" );
+
+    std::vector<wxString> deltas;
+    AI_PROVIDER_RESPONSE response = provider.Generate(
+            request,
+            [&]( const AI_PROVIDER_STREAM_EVENT& aEvent )
+            {
+                if( !aEvent.m_TextDelta.IsEmpty() )
+                    deltas.push_back( aEvent.m_TextDelta );
+            } );
+
+    server.Join();
+
+    BOOST_REQUIRE_EQUAL( deltas.size(), 2 );
+    BOOST_CHECK_EQUAL( deltas.at( 0 ), wxString( wxS( "Lo" ) ) );
+    BOOST_CHECK_EQUAL( deltas.at( 1 ), wxString( wxS( "op" ) ) );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Loop" ) ) );
+
+    const std::string& rawRequest = server.RequestText();
+    BOOST_CHECK( rawRequest.find( "POST /v1/chat/completions" )
+                 != std::string::npos );
+    BOOST_CHECK( rawRequest.find( "\"stream\":true" ) != std::string::npos );
+}
+#endif
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderStreamsToolCallDeltas )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse,
+                wxString& aError )
+            {
+                wxUnusedVar( aError );
+                BOOST_REQUIRE( static_cast<bool>( aRequest.m_StreamHandler ) );
+
+                aRequest.m_StreamHandler(
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{"
+                        "\"index\":0,\"id\":\"call_1\",\"type\":\"function\","
+                        "\"function\":{\"name\":\"kisurf_run_action\","
+                        "\"arguments\":\"{\\\"action\\\":\\\"\"}}]}}]}\n\n" );
+                aRequest.m_StreamHandler(
+                        "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{"
+                        "\"index\":0,\"function\":{\"arguments\":"
+                        "\"pcbnew.InteractiveSelectionTool.selectionClear\\\"}\"}}]}}]}\n\n" );
+                aRequest.m_StreamHandler( "data: [DONE]\n\n" );
+
+                aResponse.m_StatusCode = 200;
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 82;
+    request.m_UserText = wxS( "clear selection" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate(
+            request,
+            []( const AI_PROVIDER_STREAM_EVENT& )
+            {
+            } );
+
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool call requested." ) ) );
+    BOOST_REQUIRE_EQUAL( response.m_ToolCalls.size(), 1 );
+    BOOST_CHECK_EQUAL( response.m_ToolCalls.front().m_ToolCallId,
+                       wxString( wxS( "call_1" ) ) );
+    BOOST_CHECK_EQUAL( response.m_ToolCalls.front().m_ToolName,
+                       wxString( wxS( "kisurf_run_action" ) ) );
+    BOOST_CHECK_EQUAL(
+            response.m_ToolCalls.front().m_ArgumentsJson,
+            wxString( wxS( "{\"action\":\"pcbnew.InteractiveSelectionTool.selectionClear\"}" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesContextLimitWithShrunkContext )
 {
     AI_PROVIDER_SETTINGS settings;
@@ -491,6 +897,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesContextLimitWithShrunkContext )
 
     std::vector<size_t> requestSizes;
     std::vector<bool>   requestHasImage;
+    std::vector<std::string> requestBodies;
     int                 callCount = 0;
 
     AI_OPENAI_COMPAT_PROVIDER provider(
@@ -502,6 +909,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesContextLimitWithShrunkContext )
 
                 nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
                 requestSizes.push_back( aRequest.m_Body.length() );
+                requestBodies.push_back( aRequest.m_Body.ToStdString() );
                 requestHasImage.push_back(
                         body["messages"].at( 1 )["content"].is_array() );
 
@@ -553,7 +961,12 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderRetriesContextLimitWithShrunkContext )
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "shrunk ok" ) ) );
     BOOST_REQUIRE_EQUAL( callCount, 2 );
     BOOST_REQUIRE_EQUAL( requestSizes.size(), 2 );
+    BOOST_REQUIRE_EQUAL( requestBodies.size(), 2 );
     BOOST_CHECK_LT( requestSizes.at( 1 ), requestSizes.at( 0 ) );
+    BOOST_CHECK_EQUAL( countSubstring( requestBodies.at( 1 ), "User request:" ), 1 );
+    BOOST_CHECK_EQUAL( countSubstring( requestBodies.at( 1 ),
+                                       "summarize after long tool result" ),
+                       1 );
     BOOST_REQUIRE_EQUAL( requestHasImage.size(), 2 );
     BOOST_CHECK( requestHasImage.at( 0 ) );
     BOOST_CHECK( !requestHasImage.at( 1 ) );
@@ -967,6 +1380,48 @@ BOOST_AUTO_TEST_CASE( ProviderMessageCompilerIncludesResponseContractAndToolCata
 }
 
 
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerKeepsFixedContextBeforeLongChatHistory )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 891;
+    request.m_UserText = wxS( "continue the PCB task" );
+    request.m_MaxProviderInputChars = 1500;
+    request.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_ContextSnapshot.m_Summary =
+            wxS( "FIXED_CONTEXT_NEEDLE active PCB board summary" );
+    request.m_ToolCatalogJson =
+            wxS( "[{\"type\":\"function\",\"function\":{\"name\":\"FIXED_TOOL_NEEDLE\","
+                 "\"description\":\"fixed callable tool\",\"parameters\":{\"type\":\"object\"}}}]" );
+
+    AI_PROVIDER_INPUT_BLOCK chatHistory;
+    chatHistory.m_Id = wxS( "chat.recent_turns" );
+    chatHistory.m_Kind = wxS( "chat_recent_turns" );
+    chatHistory.m_Source = wxS( "chat_session" );
+    chatHistory.m_Text = wxS( "Previous chat turns:\nassistant: " );
+
+    for( int i = 0; i < 4000; ++i )
+        chatHistory.m_Text << wxS( "x" );
+
+    chatHistory.m_Text << wxS( " OLD_CHAT_TAIL_SHOULD_BE_TRUNCATED" );
+    request.m_ProviderInputBlocks.push_back( chatHistory );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "FIXED_CONTEXT_NEEDLE" ) ) );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "FIXED_TOOL_NEEDLE" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "chat.recent_turns" ) ) );
+    BOOST_CHECK( compiled.m_PromptTraceJson.Contains(
+            wxS( "truncated_budget" ) )
+                 || compiled.m_PromptTraceJson.Contains(
+                            wxS( "omitted_budget" ) ) );
+    BOOST_CHECK( !compiled.m_CompiledUserMessageText.Contains(
+            wxS( "OLD_CHAT_TAIL_SHOULD_BE_TRUNCATED" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ProviderMessageCompilerSummarizesLargeToolCatalogBlock )
 {
     nlohmann::json tools = nlohmann::json::array();
@@ -1140,6 +1595,74 @@ BOOST_AUTO_TEST_CASE( ProviderInputCompilerCompressesLargeToolResults )
     BOOST_CHECK( !compiled.m_ToolResults.front().m_ResultJson.Contains(
             wxS( "RAW_PAYLOAD_NEEDLE" ) ) );
     BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "tool_result" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerPreservesValidationSummaryInLargeToolResults )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 83;
+    request.m_UserText = wxS( "summarize validation" );
+    request.m_MaxToolResultChars = 320;
+
+    nlohmann::json issues = nlohmann::json::array();
+
+    for( int i = 0; i < 16; ++i )
+    {
+        issues.push_back( {
+                { "severity", i == 0 ? "error" : "warning" },
+                { "title", i == 0 ? "Clearance violation"
+                                   : "Footprint not found in libraries" },
+                { "message", "Synthetic validation issue with verbose details" },
+                { "source", "pcbnew.drc_engine" } } );
+    }
+
+    nlohmann::json payload = {
+        { "status", "validation_completed" },
+        { "tool", "kisurf_run_validation" },
+        { "validation",
+          { { "issue_count", issues.size() },
+            { "level", "full_drc" },
+            { "status", "native_checked" },
+            { "issues", issues } } } };
+
+    wxString padding;
+
+    for( int i = 0; i < 5000; ++i )
+        padding << wxS( "x" );
+
+    payload["padding"] = padding.ToStdString();
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 83;
+    result.m_ToolCallId = wxS( "call_validation" );
+    result.m_ToolName = wxS( "kisurf_run_validation" );
+    result.m_ArgumentsJson = wxS( "{\"level\":\"full_drc\"}" );
+    result.m_ResultJson = wxString::FromUTF8( payload.dump().c_str() );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_REQUIRE_EQUAL( compiled.m_ToolResults.size(), 1 );
+
+    nlohmann::json compressed = nlohmann::json::parse(
+            compiled.m_ToolResults.front().m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( compressed["status"].get<std::string>(),
+                       "compressed_tool_result" );
+    BOOST_REQUIRE( compressed.contains( "validation_summary" ) );
+    BOOST_CHECK_EQUAL( compressed["validation_summary"]["issue_count"].get<int>(),
+                       16 );
+    BOOST_CHECK_EQUAL(
+            compressed["validation_summary"]["severity_counts"]["error"].get<int>(),
+            1 );
+    BOOST_CHECK_EQUAL(
+            compressed["validation_summary"]["severity_counts"]["warning"].get<int>(),
+            15 );
+    BOOST_CHECK_EQUAL(
+            compressed["validation_summary"]["sample_issues"].at( 0 )["title"]
+                    .get<std::string>(),
+            "Clearance violation" );
 }
 
 
@@ -1495,6 +2018,11 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 const nlohmann::json& queryItemsParameters =
                         toolByName["kisurf_query_items"]["function"]["parameters"];
                 BOOST_REQUIRE( queryItemsParameters["properties"].contains( "filter" ) );
+                BOOST_REQUIRE( queryItemsParameters["properties"].contains( "live_board" ) );
+                BOOST_CHECK_EQUAL(
+                        queryItemsParameters["properties"]["live_board"]
+                                .value( "type", std::string() ),
+                        "boolean" );
                 BOOST_CHECK( queryFilterSchemaSupportsShadowFilters(
                         queryItemsParameters["properties"]["filter"] ) );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
@@ -1877,6 +2405,43 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderUsesRequestSpecificToolCatalog )
     AI_PROVIDER_RESPONSE response = provider.Generate( request );
 
     BOOST_CHECK_EQUAL( response.m_RequestId, 24 );
+    BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderRequestsAutomaticToolChoiceWhenToolsAreAvailable )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            []( const AI_HTTP_REQUEST& aRequest, AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+
+                nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+
+                BOOST_REQUIRE( body.contains( "tools" ) );
+                BOOST_REQUIRE( body["tools"].is_array() );
+                BOOST_CHECK( !body["tools"].empty() );
+                BOOST_REQUIRE( body.contains( "tool_choice" ) );
+                BOOST_CHECK_EQUAL( body["tool_choice"].get<std::string>(), "auto" );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"ready\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 2401;
+    request.m_UserText = wxS( "create a via preview" );
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK_EQUAL( response.m_RequestId, 2401 );
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ready" ) ) );
 }
 

@@ -1,6 +1,7 @@
 #include <kisurf/ai/ai_agent_panel.h>
 #include <kisurf/ai/ai_action_tool_call_handler.h>
 #include <kisurf/ai/ai_agent_panel_semantic.h>
+#include <kisurf/ai/ai_marshaled_tool_call_handler.h>
 #include <kisurf/ai/ai_model_config.h>
 #include <kisurf/ai/ai_model_settings_dialog_base.h>
 #include <kisurf/ai/ai_provider.h>
@@ -24,6 +25,7 @@
 #include <wx/msgdlg.h>
 #include <wx/notebook.h>
 #include <wx/textctrl.h>
+#include <wx/thread.h>
 
 namespace
 {
@@ -673,6 +675,100 @@ AI_AGENT_WORKSPACE_CONTEXT_KIND AiAgentWorkspaceContextForToolState( AI_TOOL_STA
 }
 
 
+wxString runtimeStreamEventPendingText( const AI_RUNTIME_STREAM_EVENT& aEvent )
+{
+    switch( aEvent.m_Kind )
+    {
+    case AI_RUNTIME_STREAM_EVENT_KIND::RequestStarted:
+        return wxS( "Agent thinking..." );
+
+    case AI_RUNTIME_STREAM_EVENT_KIND::ProviderResponse:
+        if( !aEvent.m_Response.m_ToolCalls.empty() )
+        {
+            return wxString::Format(
+                    wxS( "Planning %llu tool call(s)..." ),
+                    static_cast<unsigned long long>(
+                            aEvent.m_Response.m_ToolCalls.size() ) );
+        }
+
+        return wxS( "Reading model response..." );
+
+    case AI_RUNTIME_STREAM_EVENT_KIND::TextDelta:
+        return aEvent.m_TextDelta;
+
+    case AI_RUNTIME_STREAM_EVENT_KIND::ToolCallStarted:
+        if( !aEvent.m_ToolCall.m_ToolName.IsEmpty() )
+        {
+            return wxString::Format( wxS( "Executing tool: %s" ),
+                                     aEvent.m_ToolCall.m_ToolName );
+        }
+
+        return wxS( "Executing tool..." );
+
+    case AI_RUNTIME_STREAM_EVENT_KIND::ToolCallFinished:
+        if( !aEvent.m_ToolCall.m_ToolName.IsEmpty() )
+        {
+            wxString text = wxString::Format(
+                    wxS( "Finished tool: %s" ), aEvent.m_ToolCall.m_ToolName );
+
+            if( !aEvent.m_ToolResult.m_Message.IsEmpty() )
+                text << wxS( " - " ) << aEvent.m_ToolResult.m_Message;
+
+            return text;
+        }
+
+        return wxS( "Finished tool." );
+
+    case AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse:
+        if( !aEvent.m_TextDelta.IsEmpty() )
+            return aEvent.m_TextDelta;
+
+        return wxS( "Finalizing response..." );
+    }
+
+    return wxS( "Agent working..." );
+}
+
+
+wxString AiAgentStreamingAssistantTextAfterEvent(
+        const wxString& aCurrentText,
+        const AI_RUNTIME_STREAM_EVENT& aEvent )
+{
+    if( aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::TextDelta )
+        return aCurrentText + aEvent.m_TextDelta;
+
+    wxString eventText = runtimeStreamEventPendingText( aEvent );
+
+    if( aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse
+        && aEvent.m_TextDelta.IsEmpty() && !aCurrentText.IsEmpty() )
+    {
+        return aCurrentText;
+    }
+
+    if( aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::FinalResponse )
+        return eventText;
+
+    const bool appendProgress =
+            aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ToolCallStarted
+            || aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ToolCallFinished
+            || ( aEvent.m_Kind == AI_RUNTIME_STREAM_EVENT_KIND::ProviderResponse
+                 && !aEvent.m_Response.m_ToolCalls.empty() );
+
+    if( aCurrentText.IsEmpty() )
+        return eventText;
+
+    if( !appendProgress || eventText.IsEmpty() )
+        return aCurrentText;
+
+    if( aCurrentText.Contains( eventText ) )
+        return aCurrentText;
+
+    wxString combined = aCurrentText;
+    combined << wxS( "\n\n" ) << eventText;
+    return combined;
+}
+
+
 wxString AiAgentTranscriptHtml( const std::vector<AI_AGENT_MESSAGE>& aMessages )
 {
     wxString html;
@@ -754,6 +850,9 @@ wxString AiAgentObservabilityEntryText( const AI_AGENT_OBSERVABILITY_ENTRY& aEnt
 
 wxString AiAgentComposerStatusText( const AI_AGENT_COMPOSER_STATUS_VIEW& aView )
 {
+    if( aView.m_ChatAgentBusy )
+        return wxS( "Agent thinking" );
+
     if( aView.m_LatestRequestId != 0 && aView.m_LastRequestCancelled )
     {
         return wxString::Format( wxS( "Stopped request #%llu" ),
@@ -824,7 +923,23 @@ bool AiAgentSuggestionTargetsWorkspacePreview( const AI_SUGGESTION_RECORD& aSugg
     std::optional<AI_SUGGESTION_OPERATION> operation =
             ParseAiSuggestionOperation( aSuggestion.m_ArgumentsJson );
 
-    return operation && operation->IsAnchorFocusPreview();
+    return operation && ( operation->IsAnchorFocusPreview()
+                          || operation->IsRouteSegmentPreview()
+                          || operation->IsPlaceViaPreview()
+                          || operation->IsCreateShapePreview()
+                          || operation->IsCreateCopperZonePreview() );
+}
+
+
+bool AiAgentSuggestionTargetsAutomaticPreview( const AI_SUGGESTION_RECORD& aSuggestion )
+{
+    if( AiAgentSuggestionTargetsWorkspacePreview( aSuggestion ) )
+        return true;
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( aSuggestion.m_ArgumentsJson );
+
+    return operation && operation->IsPanelFillColumnPreview();
 }
 
 
@@ -832,8 +947,7 @@ bool AiAgentShouldAutoPreviewBackgroundSuggestion(
         const AI_AGENT_BACKGROUND_PREVIEW_VIEW& aView )
 {
     return aView.m_BackgroundAgentEnabled && aView.m_HasNewSuggestion
-           && aView.m_HasPreviewHandler && aView.m_CanPreviewSuggestion
-           && aView.m_TargetsWorkspacePreview;
+           && aView.m_HasPreviewHandler && aView.m_CanPreviewSuggestion;
 }
 
 
@@ -858,13 +972,123 @@ bool AiAgentReviewCommandTargetsChatSession(
 }
 
 
+bool activeToolStateNeedsBackgroundTick( AI_TOOL_STATE_KIND aKind )
+{
+    return aKind == AI_TOOL_STATE_KIND::RoutingTrack
+           || aKind == AI_TOOL_STATE_KIND::PlacingVia
+           || aKind == AI_TOOL_STATE_KIND::PlacingFootprint
+           || aKind == AI_TOOL_STATE_KIND::DrawingZone;
+}
+
+
+bool panelStateHasFocusSignal( const AI_PANEL_STATE_RECORD& aPanel )
+{
+    return !aPanel.m_FocusedControlId.IsEmpty()
+           || !aPanel.m_FocusedControlLabel.IsEmpty()
+           || !aPanel.m_SelectedText.IsEmpty();
+}
+
+
+bool snapshotHasFocusedPanel( const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    for( const AI_PANEL_STATE_RECORD& panel : aSnapshot.m_PanelStates )
+    {
+        if( panelStateHasFocusSignal( panel ) )
+            return true;
+    }
+
+    return false;
+}
+
+
+wxString semanticPanelFingerprintJson( const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    nlohmann::json panels = nlohmann::json::array();
+
+    for( const AI_PANEL_STATE_RECORD& panel : aSnapshot.m_PanelStates )
+    {
+        if( !panelStateHasFocusSignal( panel ) )
+            continue;
+
+        panels.push_back( {
+                { "id", toUtf8String( panel.m_Id ) },
+                { "title", toUtf8String( panel.m_Title ) },
+                { "focused_control_id", toUtf8String( panel.m_FocusedControlId ) },
+                { "focused_control_label", toUtf8String( panel.m_FocusedControlLabel ) },
+                { "selected_text", toUtf8String( panel.m_SelectedText ) },
+                { "summary", toUtf8String( panel.m_Summary ) },
+                { "state", toUtf8String( panel.m_StateJson ) }
+        } );
+    }
+
+    return fromUtf8String( panels.dump() );
+}
+
+
+bool AiAgentSnapshotNeedsBackgroundTick( const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    if( aSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
+        return false;
+
+    if( activeToolStateNeedsBackgroundTick( aSnapshot.m_ToolState.m_Kind ) )
+        return true;
+
+    return snapshotHasFocusedPanel( aSnapshot )
+           && AiDynamicContextKind( aSnapshot ) == wxS( "panel" );
+}
+
+
+bool AiAgentSnapshotNeedsContinuousBackgroundIdle( const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    return aSnapshot.m_EditorKind != AI_EDITOR_KIND::Unknown
+           && activeToolStateNeedsBackgroundTick( aSnapshot.m_ToolState.m_Kind );
+}
+
+
+wxString AiAgentBackgroundTickFingerprint( const AI_CONTEXT_SNAPSHOT& aSnapshot )
+{
+    if( !AiAgentSnapshotNeedsBackgroundTick( aSnapshot ) )
+        return wxString();
+
+    nlohmann::json fingerprint = {
+        { "editor", static_cast<int>( aSnapshot.m_EditorKind ) },
+        { "version", toUtf8String( aSnapshot.m_Version.AsString() ) },
+        { "dynamic_context", toUtf8String( AiDynamicContextKind( aSnapshot ) ) },
+        { "tool_state", toUtf8String( aSnapshot.m_ToolState.KindAsString() ) },
+        { "active_action", toUtf8String( aSnapshot.m_ToolState.m_ActiveActionName ) },
+        { "shared_context", toUtf8String( aSnapshot.m_ToolState.m_SharedContextJson ) },
+        { "mode_context", toUtf8String( aSnapshot.m_ToolState.m_ModeContextJson ) },
+        { "panel_states", toUtf8String( semanticPanelFingerprintJson( aSnapshot ) ) }
+    };
+
+    return fromUtf8String( fingerprint.dump() );
+}
+
+
+bool AiAgentShouldQueueBackgroundTick(
+        const AI_CONTEXT_SNAPSHOT& aSnapshot,
+        const wxString& aLastBackgroundTickFingerprint )
+{
+    const wxString fingerprint = AiAgentBackgroundTickFingerprint( aSnapshot );
+
+    if( fingerprint.IsEmpty() )
+        return false;
+
+    if( fingerprint != aLastBackgroundTickFingerprint )
+        return true;
+
+    return AiAgentSnapshotNeedsContinuousBackgroundIdle( aSnapshot );
+}
+
+
 AI_AGENT_PANEL::AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
                                 CONTEXT_PROVIDER aContextProvider ) :
         AI_AGENT_PANEL_BASE( aParent ),
         m_EditorKind( aEditorKind ),
         m_ContextProvider( std::move( aContextProvider ) ),
-        m_Model( std::make_unique<AI_AGENT_PANEL_MODEL>( MakeDefaultAiProvider() ) ),
-        m_BackgroundUpdateState( std::make_shared<BACKGROUND_UPDATE_STATE>() )
+        m_Model( std::make_shared<AI_AGENT_PANEL_MODEL>( MakeDefaultAiProvider() ) ),
+        m_BackgroundUpdateState( std::make_shared<BACKGROUND_UPDATE_STATE>() ),
+        m_ChatSendState( std::make_shared<CHAT_SEND_STATE>() )
 {
     m_BackgroundAgentToggle->SetValue( m_Model->BackgroundAgentEnabled() );
 
@@ -882,6 +1106,9 @@ AI_AGENT_PANEL::~AI_AGENT_PANEL()
 {
     if( m_BackgroundUpdateState )
         m_BackgroundUpdateState->m_Alive.store( false );
+
+    if( m_ChatSendState )
+        m_ChatSendState->m_Alive.store( false );
 }
 
 
@@ -959,6 +1186,9 @@ void AI_AGENT_PANEL::OnRejectSuggestion( wxCommandEvent& aEvent )
 
 void AI_AGENT_PANEL::StartNewChat()
 {
+    if( m_ChatSendInFlight )
+        return;
+
     if( HasPendingChatSessionPreview() )
         rejectActiveChatSession();
 
@@ -967,6 +1197,8 @@ void AI_AGENT_PANEL::StartNewChat()
     if( m_Input )
         m_Input->Clear();
 
+    m_PendingUserText.clear();
+    m_StreamingAssistantText.clear();
     RefreshTranscript();
     RefreshSuggestions();
     RefreshLog();
@@ -976,18 +1208,136 @@ void AI_AGENT_PANEL::StartNewChat()
 
 void AI_AGENT_PANEL::SendCurrentText()
 {
+    if( m_ChatSendInFlight )
+        return;
+
     const wxString text = m_Input->GetValue();
 
     if( !m_Model->CanSend( text ) )
         return;
 
-    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
-    m_Model->SendUserText( text, m_EditorKind, snapshot );
-    m_Input->Clear();
-    RefreshTranscript();
-    RefreshSuggestions();
-    RefreshLog();
+    m_ChatSendInFlight = true;
+    m_PendingUserText = text;
+    m_StreamingAssistantText.clear();
+
+    const uint64_t generation =
+            m_ChatSendState ? m_ChatSendState->m_Generation.fetch_add( 1 ) + 1 : 0;
+
+    renderPendingChatRequest();
     updateComposerStatus();
+    RefreshLog();
+
+    if( wxTheApp )
+    {
+        wxTheApp->CallAfter(
+                [this, text, generation]()
+                {
+                    prepareAndRunPendingChatRequest( text, generation );
+                } );
+        return;
+    }
+
+    prepareAndRunPendingChatRequest( text, generation );
+}
+
+
+void AI_AGENT_PANEL::prepareAndRunPendingChatRequest(
+        wxString aText, uint64_t aGeneration )
+{
+    if( !m_ChatSendInFlight || !m_ChatSendState
+        || !m_ChatSendState->m_Alive.load()
+        || m_ChatSendState->m_Generation.load() != aGeneration )
+    {
+        return;
+    }
+
+    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+    AI_CHAT_REQUEST_STATE requestState =
+            m_Model->PrepareUserTextRequest( aText, m_EditorKind, std::move( snapshot ) );
+
+    if( !m_ChatSendState->m_Alive.load()
+        || m_ChatSendState->m_Generation.load() != aGeneration )
+    {
+        return;
+    }
+
+    m_PendingUserText.clear();
+    renderPendingChatRequest();
+    RefreshLog();
+
+    std::shared_ptr<AI_AGENT_PANEL_MODEL> model = m_Model;
+    std::shared_ptr<CHAT_SEND_STATE> chatState = m_ChatSendState;
+
+    std::thread(
+            [this, model = std::move( model ), chatState = std::move( chatState ),
+             state = std::move( requestState ), aGeneration]() mutable
+            {
+                runPreparedChatRequest( std::move( model ), std::move( chatState ),
+                                        std::move( state ), aGeneration );
+            } )
+            .detach();
+}
+
+
+void AI_AGENT_PANEL::runPreparedChatRequest(
+        std::shared_ptr<AI_AGENT_PANEL_MODEL> aModel,
+        std::shared_ptr<CHAT_SEND_STATE> aChatState,
+        AI_CHAT_REQUEST_STATE aState,
+                                             uint64_t aGeneration )
+{
+    AI_RUNTIME_STREAM_EVENT_SINK eventSink =
+            [this, aChatState, aGeneration]( const AI_RUNTIME_STREAM_EVENT& aEvent )
+            {
+                if( !wxTheApp )
+                    return;
+
+                wxTheApp->CallAfter(
+                        [this, chatState = aChatState, aGeneration, aEvent]()
+                        {
+                            if( !chatState || !chatState->m_Alive.load()
+                                || chatState->m_Generation.load() != aGeneration )
+                            {
+                                return;
+                            }
+
+                            handlePreparedChatStreamEvent( aEvent, aGeneration );
+                        } );
+            };
+
+    AI_PROVIDER_RESPONSE response =
+            aModel->ExecutePreparedChatRequest( aState, std::move( eventSink ) );
+
+    if( wxTheApp )
+    {
+        wxTheApp->CallAfter(
+                [this, model = std::move( aModel ), chatState = std::move( aChatState ),
+                 state = std::move( aState ), response = std::move( response ),
+                 aGeneration]() mutable
+                {
+                    const bool panelAlive =
+                            chatState && chatState->m_Alive.load();
+                    const bool generationCurrent =
+                            chatState
+                            && chatState->m_Generation.load() == aGeneration;
+
+                    model->FinishPreparedChatRequest( std::move( state ),
+                                                      std::move( response ) );
+
+                    if( !panelAlive || !generationCurrent )
+                        return;
+
+                    m_ChatSendInFlight = false;
+                    m_PendingUserText.clear();
+                    m_StreamingAssistantText.clear();
+                    RefreshTranscript();
+                    RefreshSuggestions();
+                    RefreshLog();
+                    updateComposerStatus();
+                } );
+        return;
+    }
+
+    aModel->FinishPreparedChatRequest( std::move( aState ), std::move( response ) );
 }
 
 
@@ -1015,6 +1365,7 @@ void AI_AGENT_PANEL::ConfigureActionToolCalls(
                 return AiNextActionContextVersionFromSnapshot(
                         snapshot, latestActivitySequence );
             } );
+    m_RuntimeToolCallHandler.reset();
     m_ToolCallHandler.reset();
     m_SessionToolCallHandler = nullptr;
     m_HasSessionPreviewService = aPreviewService != nullptr;
@@ -1054,7 +1405,24 @@ void AI_AGENT_PANEL::ConfigureActionToolCalls(
     }
 
     m_ToolCallHandler = std::move( dispatcher );
-    m_Model->SetToolCallHandler( m_ToolCallHandler.get() );
+    m_RuntimeToolCallHandler =
+            std::make_unique<AI_MARSHALLED_TOOL_CALL_HANDLER>(
+                    *m_ToolCallHandler,
+                    [this]( std::function<void()> aTask )
+                    {
+                        CallAfter( [this, task = std::move( aTask )]() mutable
+                                   {
+                                       RefreshLog();
+                                       task();
+                                       RefreshLog();
+                                       updateComposerStatus();
+                                   } );
+                    },
+                    []()
+                    {
+                        return wxThread::IsMain();
+                    } );
+    m_Model->SetToolCallHandler( m_RuntimeToolCallHandler.get() );
 }
 
 
@@ -1074,6 +1442,7 @@ void AI_AGENT_PANEL::ConfigureSuggestionReview(
 void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )
 {
     m_Model->SetBackgroundAgentEnabled( aEnabled );
+    m_LastBackgroundTickFingerprint.Clear();
 
     if( m_BackgroundAgentToggle && m_BackgroundAgentToggle->GetValue() != aEnabled )
         m_BackgroundAgentToggle->SetValue( aEnabled );
@@ -1167,16 +1536,17 @@ AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    const bool hasPendingChatSession = HasPendingChatSessionPreview();
-    view.m_HasActiveSuggestion = activeSuggestion.has_value() || hasPendingChatSession;
+    const bool pendingChatSessionPreview = HasPendingChatSessionPreview();
+    view.m_HasActiveSuggestion = activeSuggestion.has_value()
+                                 || pendingChatSessionPreview;
     view.m_CanPreviewSuggestion =
-            ( activeSuggestion && m_PreviewSuggestionHandler
-              && m_Model->CanPreviewSuggestion( *activeSuggestion ) )
-            || ( hasPendingChatSession && m_HasSessionPreviewService );
+            pendingChatSessionPreview
+            || ( activeSuggestion && m_PreviewSuggestionHandler
+              && m_Model->CanPreviewSuggestion( *activeSuggestion ) );
     view.m_CanAcceptSuggestion =
-            ( activeSuggestion && m_AcceptSuggestionHandler
-              && m_Model->CanAcceptSuggestion( *activeSuggestion ) )
-            || ( hasPendingChatSession && m_HasSessionAcceptAdapter );
+            ( pendingChatSessionPreview && m_HasSessionAcceptAdapter )
+            || ( activeSuggestion && m_AcceptSuggestionHandler
+              && m_Model->CanAcceptSuggestion( *activeSuggestion ) );
     view.m_MessageCount = m_Model->Messages().size();
     view.m_SuggestionCount = m_Model->Suggestions().size();
     AI_PROVIDER_RECOVERY_POLICY chatRecovery =
@@ -1567,6 +1937,7 @@ bool AI_AGENT_PANEL::AcceptLatestSuggestion()
 
     if( acceptActionPreviewSuggestion( *suggestionId ) )
     {
+        m_LastBackgroundTickFingerprint.Clear();
         RefreshSuggestions();
         RefreshLog();
         updateComposerStatus();
@@ -1586,6 +1957,9 @@ bool AI_AGENT_PANEL::AcceptLatestSuggestion()
             AiNextActionContextVersionFromSnapshot( snapshot, latestActivitySequence );
     bool handled = m_AcceptSuggestionHandler( *m_Model, *suggestionId,
                                               contextVersion );
+    if( handled )
+        m_LastBackgroundTickFingerprint.Clear();
+
     RefreshSuggestions();
     RefreshLog();
     updateComposerStatus();
@@ -1607,6 +1981,9 @@ bool AI_AGENT_PANEL::RejectLatestSuggestion()
     bool handled = m_RejectSuggestionHandler
                          ? m_RejectSuggestionHandler( *m_Model, *suggestionId )
                          : m_Model->RejectSuggestion( *suggestionId );
+
+    if( handled )
+        m_LastBackgroundTickFingerprint.Clear();
 
     RefreshSuggestions();
     RefreshLog();
@@ -1661,12 +2038,114 @@ bool AI_AGENT_PANEL::HandlePreviewPointer( bool aFocusInsideAgentPanel )
 }
 
 
+bool AI_AGENT_PANEL::PulseBackgroundAgent( const wxString& aReason )
+{
+    if( !BackgroundAgentEnabled() || !m_ContextProvider
+        || backgroundSuggestionUpdateInFlight()
+        || m_Model->LatestActiveSuggestionId().has_value() )
+    {
+        return false;
+    }
+
+    AI_CONTEXT_SNAPSHOT snapshot = contextSnapshotWithPanelState();
+
+    if( !AiAgentSnapshotNeedsBackgroundTick( snapshot ) )
+        return false;
+
+    const wxString fingerprint = AiAgentBackgroundTickFingerprint( snapshot );
+
+    if( !AiAgentShouldQueueBackgroundTick( snapshot,
+                                           m_LastBackgroundTickFingerprint ) )
+        return false;
+
+    m_LastBackgroundTickFingerprint = fingerprint;
+
+    nlohmann::json args = {
+        { "schema", { { "name", "kisurf.ai.background_semantic_tick" },
+                      { "version", 1 } } },
+        { "reason", toUtf8String( aReason ) },
+        { "fingerprint", toUtf8String( fingerprint ) },
+        { "dynamic_context", toUtf8String( AiDynamicContextKind( snapshot ) ) },
+        { "tool_state", toUtf8String( snapshot.m_ToolState.KindAsString() ) }
+    };
+
+    AI_ACTIVITY_RECORD record;
+    record.m_Kind = AI_ACTIVITY_KIND::UserAction;
+    record.m_EditorKind = m_EditorKind;
+    record.m_ActionName = wxS( "agent.background.semantic_tick" );
+    record.m_ArgumentsJson = fromUtf8String( args.dump() );
+    record.m_Allowed = true;
+    record.m_Executed = true;
+    record.m_Message = wxS( "Background Agent semantic tick." );
+    RecordActivity( std::move( record ) );
+    return true;
+}
+
+
+bool AI_AGENT_PANEL::ShouldContinueBackgroundIdlePulse() const
+{
+    if( !BackgroundAgentEnabled() || !m_ContextProvider
+        || m_Model->LatestActiveSuggestionId().has_value() )
+    {
+        return false;
+    }
+
+    return AiAgentSnapshotNeedsContinuousBackgroundIdle(
+            contextSnapshotWithPanelState() );
+}
+
+
 void AI_AGENT_PANEL::RefreshTranscript()
 {
     if( !m_Transcript )
         return;
 
     m_Transcript->SetPage( AiAgentTranscriptHtml( m_Model->Messages() ) );
+}
+
+
+void AI_AGENT_PANEL::renderPendingChatRequest()
+{
+    if( m_Input )
+        m_Input->Clear();
+
+    if( m_Transcript )
+    {
+        std::vector<AI_AGENT_MESSAGE> pendingMessages = m_Model->Messages();
+
+        if( !m_PendingUserText.IsEmpty() )
+            pendingMessages.push_back( { wxS( "user" ), m_PendingUserText } );
+
+        pendingMessages.push_back(
+                { wxS( "assistant" ),
+                  m_StreamingAssistantText.IsEmpty()
+                          ? wxString( wxS( "Agent thinking..." ) )
+                          : m_StreamingAssistantText } );
+        m_Transcript->SetPage( AiAgentTranscriptHtml( pendingMessages ) );
+        m_Transcript->Update();
+    }
+
+    Layout();
+    Update();
+}
+
+
+void AI_AGENT_PANEL::handlePreparedChatStreamEvent(
+        const AI_RUNTIME_STREAM_EVENT& aEvent, uint64_t aGeneration )
+{
+    if( !m_ChatSendInFlight || !m_ChatSendState
+        || m_ChatSendState->m_Generation.load() != aGeneration )
+    {
+        return;
+    }
+
+    m_StreamingAssistantText =
+            AiAgentStreamingAssistantTextAfterEvent( m_StreamingAssistantText,
+                                                     aEvent );
+
+    renderPendingChatRequest();
+    RefreshLog();
+    updateComposerStatus();
 }
 
 
@@ -1721,17 +2200,17 @@ void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )
 void AI_AGENT_PANEL::updateModeControls()
 {
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    const bool              hasPendingChatSession = HasPendingChatSessionPreview();
-    const bool              hasActiveSuggestion =
-            activeSuggestion.has_value() || hasPendingChatSession;
+    const bool              pendingChatSessionPreview = HasPendingChatSessionPreview();
+    const bool              hasActiveSuggestion = activeSuggestion.has_value()
+                                                  || pendingChatSessionPreview;
     const bool              canPreviewSuggestion =
-            ( activeSuggestion && m_PreviewSuggestionHandler
-              && m_Model->CanPreviewSuggestion( *activeSuggestion ) )
-            || ( hasPendingChatSession && m_HasSessionPreviewService );
+            pendingChatSessionPreview
+            || ( activeSuggestion && m_PreviewSuggestionHandler
+              && m_Model->CanPreviewSuggestion( *activeSuggestion ) );
     const bool              canAcceptSuggestion =
-            ( activeSuggestion && m_AcceptSuggestionHandler
-              && m_Model->CanAcceptSuggestion( *activeSuggestion ) )
-            || ( hasPendingChatSession && m_HasSessionAcceptAdapter );
+            ( pendingChatSessionPreview && m_HasSessionAcceptAdapter )
+            || ( activeSuggestion && m_AcceptSuggestionHandler
+              && m_Model->CanAcceptSuggestion( *activeSuggestion ) );
 
     if( m_PreviewButton )
         m_PreviewButton->Enable( canPreviewSuggestion );
@@ -1755,12 +2234,19 @@ void AI_AGENT_PANEL::updateComposerStatus()
     AI_AGENT_COMPOSER_STATUS_VIEW view;
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
     view.m_BackgroundAgentBusy = backgroundSuggestionUpdateInFlight();
+    view.m_ChatAgentBusy = m_ChatSendInFlight;
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
     view.m_HasActiveSuggestion =
             m_Model->LatestActiveSuggestionId().has_value()
             || HasPendingChatSessionPreview();
     view.m_LatestRequestId = m_Model->LastRequestId();
     view.m_LastRequestCancelled = m_Model->LastRequestCancelled();
+
+    if( m_SendButton )
+        m_SendButton->Enable( view.m_InputHasText && !view.m_ChatAgentBusy );
+
+    if( m_StopButton )
+        m_StopButton->Enable( view.m_ChatAgentBusy || backgroundSuggestionUpdateInFlight() );
 
     m_ComposerStatus->SetLabel( AiAgentComposerStatusText( view ) );
     m_ComposerStatus->Wrap( -1 );
@@ -1794,21 +2280,17 @@ void AI_AGENT_PANEL::queueBackgroundSuggestionUpdate( AI_CONTEXT_SNAPSHOT aSnaps
     if( !state->m_InFlight.compare_exchange_strong( expected, true ) )
         return;
 
-    const wxString researchDirectory = m_Model->LocalTextResearchDirectory();
+    std::shared_ptr<AI_AGENT_PANEL_MODEL> model = m_Model;
 
     std::thread(
-            [state, panel = this, generation,
+            [state, panel = this, model = std::move( model ), generation,
              snapshot = std::move( aSnapshot ),
              activity = std::move( aActivity ),
-             reason = std::move( aReason ),
-             researchDirectory]() mutable
+             reason = std::move( aReason )]() mutable
             {
                 std::optional<AI_SUGGESTION_RECORD> suggestion;
 
-                AI_AGENT_PANEL_MODEL workerModel( MakeDefaultAiProvider() );
-                workerModel.SetBackgroundAgentEnabled( true );
-                workerModel.SetLocalTextResearchDirectory( researchDirectory );
-                suggestion = workerModel.UpdateSuggestionsIfBackgroundEnabled(
+                suggestion = model->UpdateSuggestionsIfBackgroundEnabled(
                         std::move( snapshot ), std::move( activity ), reason );
 
                 if( !state->m_Alive.load() || !wxTheApp )
@@ -1848,7 +2330,13 @@ void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(
     std::optional<AI_SUGGESTION_RECORD> stored;
 
     if( aSuggestion )
-        stored = m_Model->AddSuggestion( std::move( *aSuggestion ) );
+    {
+        if( aSuggestion->m_Id != 0 )
+            stored = m_Model->FindSuggestion( aSuggestion->m_Id );
+
+        if( !stored )
+            stored = m_Model->AddSuggestion( std::move( *aSuggestion ) );
+    }
 
     AI_AGENT_BACKGROUND_PREVIEW_VIEW previewView;
     previewView.m_BackgroundAgentEnabled = BackgroundAgentEnabled();
@@ -1861,6 +2349,8 @@ void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(
                 m_Model->CanPreviewSuggestion( stored->m_Id );
         previewView.m_TargetsWorkspacePreview =
                 AiAgentSuggestionTargetsWorkspacePreview( *stored );
+        previewView.m_TargetsAutomaticPreview =
+                AiAgentSuggestionTargetsAutomaticPreview( *stored );
     }
 
     if( AiAgentShouldAutoPreviewBackgroundSuggestion( previewView ) )

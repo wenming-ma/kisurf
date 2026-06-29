@@ -60,6 +60,7 @@ set( QA_PCBNEW_SRCS
     test_ai_pcb_operation_edit_adapter.cpp
     test_ai_pcb_preview_adapter.cpp
     test_ai_pcb_session_apply_adapter.cpp
+    test_ai_pcb_actual_project_e2e.cpp
     test_ai_pcb_suggestion_review.cpp
     test_ai_agent_panel_ui.cpp
     test_ai_pcb_tool_state_provider.cpp
@@ -251,6 +252,7 @@ add_executable( qa_pcbnew
 # Pcbnew tests, so pretend to be pcbnew (for units, etc)
 target_compile_definitions( qa_pcbnew
     PRIVATE PCBNEW
+            "QA_SRC_ROOT=(\"${CMAKE_SOURCE_DIR}\")"
 )
 
 # Anytime we link to the kiface_objects, we have to add a dependency on the last object

@@ -36,6 +36,7 @@ public:
     AI_CHAT_SESSION_RECORD LoadSession( uint64_t aConversationId, wxString& aError ) const;
 
     wxString SessionPath( uint64_t aConversationId ) const;
+    uint64_t NextConversationId( uint64_t aMinimumConversationId = 1 ) const;
     static wxString DefaultDirectory();
 
     const wxString& Directory() const { return m_Directory; }

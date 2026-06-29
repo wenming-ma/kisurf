@@ -127,6 +127,17 @@ BOOST_AUTO_TEST_CASE( RequestKindDefaultPoliciesSeparateChatAndNextAction )
 }
 
 
+BOOST_AUTO_TEST_CASE( ChatPolicyKeepsToolResultsWithinDefaultBudget )
+{
+    const AI_TOKEN_BUDGET_POLICY baseline;
+    const AI_TOKEN_BUDGET_POLICY chat =
+            AiProviderInputBudgetPolicyForRequestKind( AI_PROVIDER_REQUEST_KIND::Chat );
+
+    BOOST_CHECK_LE( chat.m_MaxToolResultChars,
+                    baseline.m_MaxToolResultChars );
+}
+
+
 BOOST_AUTO_TEST_CASE( PlansProviderInputBudgetFromRequestKind )
 {
     AI_PROVIDER_REQUEST chatRequest;

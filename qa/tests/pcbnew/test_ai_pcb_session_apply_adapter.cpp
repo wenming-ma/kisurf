@@ -237,6 +237,41 @@ BOOST_AUTO_TEST_CASE( NativeValidationServiceRunsDrcLiteOnBoardDrcEngine )
 }
 
 
+BOOST_AUTO_TEST_CASE( NativeValidationServiceProviderUsesCurrentBoardAtRunTime )
+{
+    BOARD firstBoard;
+    BOARD secondBoard;
+    BOARD* currentBoard = &firstBoard;
+
+    KISURF_AI_PCB_SESSION_VALIDATION_SERVICE validationService(
+            [&currentBoard]() { return currentBoard; } );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    const uint64_t stepId = session.BeginStep( wxS( "native validation provider" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    const wxString args = wxS( "{\"scope\":\"session\",\"level\":\"drc_lite\"}" );
+    AI_ATOMIC_EXECUTION_RESULT commonValidation =
+            AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                    session, AI_SESSION_OPERATION_KIND::RunValidation, args );
+    BOOST_REQUIRE( commonValidation.m_Ok );
+
+    currentBoard = &secondBoard;
+
+    AI_SESSION_VALIDATION_RESULT nativeValidation =
+            validationService.RunValidation( session, args,
+                                             commonValidation.m_ResultJson );
+
+    BOOST_REQUIRE( nativeValidation.m_Ok );
+    nlohmann::json payload =
+            nlohmann::json::parse( nativeValidation.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["validation"]["native_backend"].get<std::string>(),
+                       "pcbnew.drc_engine" );
+    BOOST_CHECK_EQUAL( payload["validation"]["status"].get<std::string>(),
+                       "native_checked" );
+}
+
+
 BOOST_AUTO_TEST_CASE( NativeValidationServiceProjectsDrcIssueItemBboxes )
 {
     BOARD board;
@@ -392,6 +427,94 @@ BOOST_AUTO_TEST_CASE( ShadowSeederReconstructsLiveBoardItems )
 }
 
 
+BOOST_AUTO_TEST_CASE( ShadowSeederProviderUsesCurrentBoardAtSeedTime )
+{
+    BOARD firstBoard;
+    NETINFO_ITEM* firstGnd = new NETINFO_ITEM( &firstBoard, wxS( "GND" ), 1 );
+    firstBoard.Add( firstGnd );
+    addTrackSegment( firstBoard, firstGnd, VECTOR2I( 0, 0 ), VECTOR2I( 100, 0 ) );
+
+    BOARD secondBoard;
+    NETINFO_ITEM* secondGnd = new NETINFO_ITEM( &secondBoard, wxS( "GND" ), 1 );
+    secondBoard.Add( secondGnd );
+    addFootprintWithPad( secondBoard, secondGnd );
+
+    BOARD* currentBoard = &firstBoard;
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder(
+            [&currentBoard]() { return currentBoard; } );
+
+    AI_EXECUTION_SESSION firstSession = makeSession();
+    seeder.Seed( firstSession );
+    BOOST_CHECK_EQUAL( firstSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "track_segment" ) ),
+                       1 );
+    BOOST_CHECK_EQUAL( firstSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "footprint" ) ),
+                       0 );
+
+    currentBoard = &secondBoard;
+
+    AI_EXECUTION_SESSION secondSession = makeSession();
+    seeder.Seed( secondSession );
+    BOOST_CHECK_EQUAL( secondSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "track_segment" ) ),
+                       0 );
+    BOOST_CHECK_EQUAL( secondSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "footprint" ) ),
+                       1 );
+    BOOST_CHECK_EQUAL( secondSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "pad" ) ),
+                       1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ShadowSeederProviderHandlesTemporarilyUnavailableBoard )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    addTrackSegment( board, gnd, VECTOR2I( 0, 0 ), VECTOR2I( 100, 0 ) );
+
+    BOARD* currentBoard = nullptr;
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder(
+            [&currentBoard]() { return currentBoard; } );
+
+    AI_EXECUTION_SESSION unavailableSession = makeSession();
+    seeder.Seed( unavailableSession );
+    BOOST_CHECK_EQUAL( unavailableSession.ShadowBoard().QueryItems().size(), 0 );
+
+    currentBoard = &board;
+
+    AI_EXECUTION_SESSION restoredSession = makeSession();
+    seeder.Seed( restoredSession );
+    BOOST_CHECK_EQUAL( restoredSession.ShadowBoard().LiveItemCountByType(
+                               wxS( "track_segment" ) ),
+                       1 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ShadowSeederCanSkipFootprintsForLiveUiGenericSeed )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    addTrackSegment( board, gnd, VECTOR2I( 0, 0 ), VECTOR2I( 100, 0 ) );
+    addFootprintWithPad( board, gnd );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder(
+            [&board]() { return &board; },
+            KISURF_AI_PCB_SESSION_SHADOW_SEEDER::SEED_OPTIONS{ false } );
+    seeder.Seed( session );
+
+    nlohmann::json summary =
+            nlohmann::json::parse( session.ShadowBoard().QueryBoardSummary().ToStdString() );
+    BOOST_CHECK_EQUAL( summary["track_segments"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( summary["footprints"].get<size_t>(), 0 );
+    BOOST_CHECK_EQUAL( summary["pads"].get<size_t>(), 0 );
+}
+
+
 BOOST_AUTO_TEST_CASE( ShadowSeederMarksSelectedLiveBoardItems )
 {
     BOARD board;
@@ -490,6 +613,42 @@ BOOST_AUTO_TEST_CASE( ShadowSeederExposesFootprintIdentityFacts )
                        wxString( wxS( "U7" ) ) );
     BOOST_CHECK_EQUAL( footprints.front().m_Metadata.at( wxS( "footprint_value" ) ),
                        wxString( wxS( "LDO-3V3" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( ShadowSeederExposesFootprintPlacementStateFacts )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    FOOTPRINT* placedFootprint = addFootprintWithPad( board, gnd );
+    placedFootprint->SetReference( wxS( "U1" ) );
+    placedFootprint->SetIsPlaced( true );
+
+    FOOTPRINT* unplacedFootprint = addFootprintWithPad( board, gnd );
+    unplacedFootprint->SetReference( wxS( "U2" ) );
+    unplacedFootprint->SetIsPlaced( false );
+
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( session );
+
+    std::vector<AI_SHADOW_ITEM> unplacedFootprints =
+            session.ShadowBoard().QueryItems(
+                    wxS( "{\"type\":\"footprint\","
+                         "\"metadata\":{\"is_placed\":\"false\"}}" ) );
+
+    BOOST_REQUIRE_EQUAL( unplacedFootprints.size(), 1 );
+    BOOST_CHECK_EQUAL(
+            unplacedFootprints.front().m_Metadata.at( wxS( "footprint_reference" ) ),
+            wxString( wxS( "U2" ) ) );
+    BOOST_CHECK_EQUAL( unplacedFootprints.front().m_Metadata.at( wxS( "is_placed" ) ),
+                       wxString( wxS( "false" ) ) );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( unplacedFootprints.front().m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["is_placed"].get<bool>(), false );
 }
 
 
