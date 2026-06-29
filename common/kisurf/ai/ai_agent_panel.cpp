@@ -968,7 +968,8 @@ bool AiAgentReviewCommandTargetsChatSession(
         bool aHasActiveSuggestion, bool aHasPendingChatSession )
 {
     wxUnusedVar( aHasActiveSuggestion );
-    return aHasPendingChatSession;
+    wxUnusedVar( aHasPendingChatSession );
+    return false;
 }
 
 
@@ -1088,8 +1089,12 @@ AI_AGENT_PANEL::AI_AGENT_PANEL( wxWindow* aParent, AI_EDITOR_KIND aEditorKind,
         m_ContextProvider( std::move( aContextProvider ) ),
         m_Model( std::make_shared<AI_AGENT_PANEL_MODEL>( MakeDefaultAiProvider() ) ),
         m_BackgroundUpdateState( std::make_shared<BACKGROUND_UPDATE_STATE>() ),
-        m_ChatSendState( std::make_shared<CHAT_SEND_STATE>() )
+        m_ChatSendState( std::make_shared<CHAT_SEND_STATE>() ),
+        m_BackgroundPulseTimer( this )
 {
+    Bind( wxEVT_TIMER, &AI_AGENT_PANEL::OnBackgroundPulseTimer, this,
+          m_BackgroundPulseTimer.GetId() );
+
     m_BackgroundAgentToggle->SetValue( m_Model->BackgroundAgentEnabled() );
 
     loadConfiguredResearchFolder( AI_MODEL_CONFIG_STORE::LoadUserConfig(), false );
@@ -1109,6 +1114,12 @@ AI_AGENT_PANEL::~AI_AGENT_PANEL()
 
     if( m_ChatSendState )
         m_ChatSendState->m_Alive.store( false );
+
+    if( m_BackgroundPulseTimer.IsRunning() )
+        m_BackgroundPulseTimer.Stop();
+
+    Unbind( wxEVT_TIMER, &AI_AGENT_PANEL::OnBackgroundPulseTimer, this,
+            m_BackgroundPulseTimer.GetId() );
 }
 
 
@@ -1181,6 +1192,13 @@ void AI_AGENT_PANEL::OnRejectSuggestion( wxCommandEvent& aEvent )
 {
     aEvent.Skip( false );
     RejectLatestSuggestion();
+}
+
+
+void AI_AGENT_PANEL::OnBackgroundPulseTimer( wxTimerEvent& aEvent )
+{
+    aEvent.Skip( false );
+    PulseBackgroundAgent( wxS( "agent.background.timer" ) );
 }
 
 
@@ -1326,6 +1344,7 @@ void AI_AGENT_PANEL::runPreparedChatRequest(
                     if( !panelAlive || !generationCurrent )
                         return;
 
+                    autoAcceptCompletedChatSession();
                     m_ChatSendInFlight = false;
                     m_PendingUserText.clear();
                     m_StreamingAssistantText.clear();
@@ -1447,6 +1466,11 @@ void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )
     if( m_BackgroundAgentToggle && m_BackgroundAgentToggle->GetValue() != aEnabled )
         m_BackgroundAgentToggle->SetValue( aEnabled );
 
+    if( aEnabled && !m_BackgroundPulseTimer.IsRunning() )
+        m_BackgroundPulseTimer.Start( 750 );
+    else if( !aEnabled && m_BackgroundPulseTimer.IsRunning() )
+        m_BackgroundPulseTimer.Stop();
+
     updateComposerStatus();
 }
 
@@ -1536,16 +1560,12 @@ AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const
     view.m_BackgroundAgentEnabled = m_Model->BackgroundAgentEnabled();
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    const bool pendingChatSessionPreview = HasPendingChatSessionPreview();
-    view.m_HasActiveSuggestion = activeSuggestion.has_value()
-                                 || pendingChatSessionPreview;
+    view.m_HasActiveSuggestion = activeSuggestion.has_value();
     view.m_CanPreviewSuggestion =
-            pendingChatSessionPreview
-            || ( activeSuggestion && m_PreviewSuggestionHandler
+            ( activeSuggestion && m_PreviewSuggestionHandler
               && m_Model->CanPreviewSuggestion( *activeSuggestion ) );
     view.m_CanAcceptSuggestion =
-            ( pendingChatSessionPreview && m_HasSessionAcceptAdapter )
-            || ( activeSuggestion && m_AcceptSuggestionHandler
+            ( activeSuggestion && m_AcceptSuggestionHandler
               && m_Model->CanAcceptSuggestion( *activeSuggestion ) );
     view.m_MessageCount = m_Model->Messages().size();
     view.m_SuggestionCount = m_Model->Suggestions().size();
@@ -1821,6 +1841,18 @@ bool AI_AGENT_PANEL::acceptActionPreviewSuggestion( uint64_t aSuggestionId )
         return false;
 
     return m_Model->MarkSuggestionAccepted( aSuggestionId );
+}
+
+
+bool AI_AGENT_PANEL::autoAcceptCompletedChatSession()
+{
+    if( !HasPendingChatSessionPreview() )
+        return false;
+
+    if( !m_HasSessionAcceptAdapter )
+        return false;
+
+    return acceptActiveChatSession();
 }
 
 
@@ -2200,16 +2232,12 @@ void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )
 void AI_AGENT_PANEL::updateModeControls()
 {
     std::optional<uint64_t> activeSuggestion = m_Model->LatestActiveSuggestionId();
-    const bool              pendingChatSessionPreview = HasPendingChatSessionPreview();
-    const bool              hasActiveSuggestion = activeSuggestion.has_value()
-                                                  || pendingChatSessionPreview;
+    const bool              hasActiveSuggestion = activeSuggestion.has_value();
     const bool              canPreviewSuggestion =
-            pendingChatSessionPreview
-            || ( activeSuggestion && m_PreviewSuggestionHandler
+            ( activeSuggestion && m_PreviewSuggestionHandler
               && m_Model->CanPreviewSuggestion( *activeSuggestion ) );
     const bool              canAcceptSuggestion =
-            ( pendingChatSessionPreview && m_HasSessionAcceptAdapter )
-            || ( activeSuggestion && m_AcceptSuggestionHandler
+            ( activeSuggestion && m_AcceptSuggestionHandler
               && m_Model->CanAcceptSuggestion( *activeSuggestion ) );
 
     if( m_PreviewButton )
@@ -2236,9 +2264,7 @@ void AI_AGENT_PANEL::updateComposerStatus()
     view.m_BackgroundAgentBusy = backgroundSuggestionUpdateInFlight();
     view.m_ChatAgentBusy = m_ChatSendInFlight;
     view.m_InputHasText = m_Input && m_Model->CanSend( m_Input->GetValue() );
-    view.m_HasActiveSuggestion =
-            m_Model->LatestActiveSuggestionId().has_value()
-            || HasPendingChatSessionPreview();
+    view.m_HasActiveSuggestion = m_Model->LatestActiveSuggestionId().has_value();
     view.m_LatestRequestId = m_Model->LastRequestId();
     view.m_LastRequestCancelled = m_Model->LastRequestCancelled();
 

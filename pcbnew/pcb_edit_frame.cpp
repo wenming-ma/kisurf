@@ -765,13 +765,7 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
               }
 
               if( m_agentPanel )
-              {
-                  const bool queuedPulse =
-                          m_agentPanel->PulseBackgroundAgent( wxS( "pcbnew.idle" ) );
-
-                  if( queuedPulse || m_agentPanel->ShouldContinueBackgroundIdlePulse() )
-                      aEvent.RequestMore();
-              }
+                  m_agentPanel->PulseBackgroundAgent( wxS( "pcbnew.idle" ) );
 
               // Do not forget to pass the Idle event to other clients:
               aEvent.Skip();

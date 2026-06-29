@@ -72,16 +72,17 @@ std::string sourceSlice( const std::string& aSource, const std::string& aStartNe
 BOOST_AUTO_TEST_SUITE( AiPcbToolStateProvider )
 
 
-BOOST_AUTO_TEST_CASE( PcbEditFrameRequestsMoreIdleTicksWhileBackgroundAgentCanObserve )
+BOOST_AUTO_TEST_CASE( PcbEditFrameDoesNotContinuouslyRequestIdleForBackgroundAgent )
 {
     const std::string source = readPcbEditFrameSource();
     const std::string idleHandler = sourceSlice(
             source, "Bind( wxEVT_IDLE,", "resolveCanvasType();" );
 
     BOOST_CHECK( idleHandler.find( "PulseBackgroundAgent" ) != std::string::npos );
-    BOOST_CHECK( idleHandler.find( "aEvent.RequestMore()" ) != std::string::npos );
-    BOOST_CHECK( idleHandler.find( "aEvent.RequestMore()" )
-                 < idleHandler.find( "aEvent.Skip()" ) );
+    BOOST_CHECK_EQUAL( idleHandler.find( "ShouldContinueBackgroundIdlePulse()" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( idleHandler.find( "aEvent.RequestMore()" ),
+                       std::string::npos );
 }
 
 

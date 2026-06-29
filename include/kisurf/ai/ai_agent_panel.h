@@ -13,6 +13,7 @@
 #include <functional>
 #include <memory>
 #include <vector>
+#include <wx/timer.h>
 
 class wxCommandEvent;
 class AI_ACCEPT_APPLY_ADAPTER;
@@ -140,8 +141,10 @@ private:
     void OnPreviewSuggestion( wxCommandEvent& aEvent ) override;
     void OnAcceptSuggestion( wxCommandEvent& aEvent ) override;
     void OnRejectSuggestion( wxCommandEvent& aEvent ) override;
+    void OnBackgroundPulseTimer( wxTimerEvent& aEvent );
 
     bool acceptActionPreviewSuggestion( uint64_t aSuggestionId );
+    bool autoAcceptCompletedChatSession();
     bool previewActiveChatSession();
     bool acceptActiveChatSession();
     bool rejectActiveChatSession();
@@ -196,6 +199,7 @@ private:
 
     std::shared_ptr<BACKGROUND_UPDATE_STATE> m_BackgroundUpdateState;
     std::shared_ptr<CHAT_SEND_STATE>         m_ChatSendState;
+    wxTimer                                  m_BackgroundPulseTimer;
     wxString                                 m_LastBackgroundTickFingerprint;
     bool                                     m_ChatSendInFlight = false;
     wxString                                 m_PendingUserText;

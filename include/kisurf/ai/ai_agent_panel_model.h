@@ -168,6 +168,8 @@ public:
 private:
     void refreshLocalTextResearchDirectory( const AI_CONTEXT_SNAPSHOT& aContextSnapshot );
     void persistActiveChatSession();
+    bool autoAcceptCompletedChatSession( const AI_CHAT_REQUEST_STATE& aState,
+                                         AI_PROVIDER_RESPONSE& aResponse );
 
     AI_ACTIVITY_LOG                         m_ActivityLog;
     std::unique_ptr<AI_PROMPT_TRACE_STORE>  m_DefaultPromptTraceStore;

@@ -9,10 +9,6 @@
 
 namespace
 {
-constexpr size_t CHAT_RECENT_TURN_LIMIT = 8;
-constexpr size_t CHAT_MAX_CHARS_PER_RECENT_TURN = 1200;
-
-
 std::string toUtf8String( const wxString& aText )
 {
     wxScopedCharBuffer buffer = aText.ToUTF8();
@@ -72,43 +68,30 @@ AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
     if( aMessages.empty() )
         return block;
 
-    const size_t start = aMessages.size() > CHAT_RECENT_TURN_LIMIT
-                         ? aMessages.size() - CHAT_RECENT_TURN_LIMIT : 0;
-    const size_t olderMessageCount = start;
-    size_t       truncatedMessageCount = 0;
     size_t       originalChars = 0;
     size_t       sentMessageChars = 0;
 
     wxString text;
     text << wxS( "Previous chat turns (current chat only):" );
 
-    for( size_t i = start; i < aMessages.size(); ++i )
+    for( size_t i = 0; i < aMessages.size(); ++i )
     {
         wxString message = aMessages[i].m_Text;
         originalChars += message.length();
-
-        if( message.length() > CHAT_MAX_CHARS_PER_RECENT_TURN )
-        {
-            message = message.Left( CHAT_MAX_CHARS_PER_RECENT_TURN );
-            message << wxS( "\n[truncated chat turn]" );
-            ++truncatedMessageCount;
-        }
 
         sentMessageChars += message.length();
         text << wxS( "\n" ) << aMessages[i].m_Role << wxS( ": " ) << message;
     }
 
-    const bool omittedOlderMessages = olderMessageCount > 0;
-    const bool truncatedMessages = truncatedMessageCount > 0;
-
     nlohmann::json metadata = {
         { "message_count", aMessages.size() },
-        { "sent_message_count", aMessages.size() - start },
-        { "older_message_count", olderMessageCount },
-        { "truncated_chat_turn_count", truncatedMessageCount },
+        { "sent_message_count", aMessages.size() },
+        { "older_message_count", 0 },
+        { "truncated_chat_turn_count", 0 },
         { "original_message_chars", originalChars },
         { "sent_message_chars", sentMessageChars },
-        { "max_chars_per_recent_turn", CHAT_MAX_CHARS_PER_RECENT_TURN }
+        { "compression_policy",
+          "full_current_chat_until_provider_input_budget" }
     };
 
     block.m_Id = wxS( "chat.recent_turns" );
@@ -117,14 +100,52 @@ AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
     block.m_Text = text;
     block.m_OriginalChars = originalChars;
     block.m_SentChars = text.length();
-    block.m_OmissionReason =
-            omittedOlderMessages
-                    ? wxString( wxS( "older_messages_omitted" ) )
-                    : ( truncatedMessages
-                                ? wxString( wxS( "chat_turns_truncated" ) )
-                                : wxString() );
     block.m_MetadataJson = fromUtf8String( metadata.dump() );
     return block;
+}
+
+
+bool toolResultHasSessionMutation( const AI_TOOL_CALL_RECORD& aToolCall )
+{
+    if( !aToolCall.m_Executed || aToolCall.m_ResultJson.IsEmpty() )
+        return false;
+
+    nlohmann::json result = nlohmann::json::parse(
+            toUtf8String( aToolCall.m_ResultJson ), nullptr, false );
+
+    if( result.is_discarded() || !result.is_object() )
+        return false;
+
+    if( result.value( "shadow_board_mutated", false )
+        && !result.value( "board_mutated", false ) )
+    {
+        return true;
+    }
+
+    if( !result.contains( "operation_results" )
+        || !result["operation_results"].is_array() )
+    {
+        return false;
+    }
+
+    for( const nlohmann::json& operation : result["operation_results"] )
+    {
+        if( operation.is_object()
+            && operation.value( "shadow_board_mutated", false )
+            && !operation.value( "board_mutated", false ) )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+bool responseHasSessionMutation( const AI_PROVIDER_RESPONSE& aResponse )
+{
+    return std::any_of( aResponse.m_ToolCalls.begin(), aResponse.m_ToolCalls.end(),
+                        toolResultHasSessionMutation );
 }
 
 
@@ -474,6 +495,8 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::FinishPreparedChatRequest(
     if( aResponse.m_RequestId != 0 )
         m_LastRequestId = aResponse.m_RequestId;
 
+    autoAcceptCompletedChatSession( aState, aResponse );
+
     if( aState.m_DocumentWriteOwned )
         ReleaseDocumentWriteOwnership( wxS( "chat" ), aState.m_OwnershipContext );
 
@@ -481,6 +504,74 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::FinishPreparedChatRequest(
     persistActiveChatSession();
 
     return aResponse;
+}
+
+
+bool AI_AGENT_PANEL_MODEL::autoAcceptCompletedChatSession(
+        const AI_CHAT_REQUEST_STATE& aState, AI_PROVIDER_RESPONSE& aResponse )
+{
+    if( !m_ToolCallHandler || !responseHasSessionMutation( aResponse ) )
+        return false;
+
+    AI_SESSION_TOOL_CALL_HANDLER* sessionHandler =
+            dynamic_cast<AI_SESSION_TOOL_CALL_HANDLER*>( m_ToolCallHandler );
+
+    if( !sessionHandler || !sessionHandler->HasPendingSessionPreview() )
+        return false;
+
+    AI_PROVIDER_REQUEST request = aState.m_Request;
+    request.m_RequestId = aResponse.m_RequestId;
+
+    if( request.m_ContextSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
+        request.m_ContextSnapshot.m_EditorKind = request.m_EditorKind;
+
+    request.m_ContextVersion = request.m_ContextSnapshot.m_Version;
+
+    AI_TOOL_CALL_RECORD toolCall;
+    toolCall.m_RequestId = request.m_RequestId;
+    toolCall.m_ToolCallId = wxS( "chat_session_auto_accept" );
+    toolCall.m_ToolName = wxS( "kisurf_accept_session" );
+    toolCall.m_ArgumentsJson = wxS( "{}" );
+
+    AI_ACTIVITY_RECORD toolRequest;
+    toolRequest.m_RequestId = toolCall.m_RequestId;
+    toolRequest.m_ToolCallId = toolCall.m_ToolCallId;
+    toolRequest.m_Kind = AI_ACTIVITY_KIND::ModelToolRequest;
+    toolRequest.m_EditorKind = request.m_EditorKind;
+    toolRequest.m_ActionName = toolCall.m_ToolName;
+    toolRequest.m_ArgumentsJson = toolCall.m_ArgumentsJson;
+    toolRequest.m_Message = wxS( "Chat session auto-accept requested." );
+    m_ActivityLog.Append( std::move( toolRequest ) );
+
+    AI_TOOL_INVOCATION_RESULT result =
+            sessionHandler->HandleToolCall( request, toolCall );
+
+    AI_ACTIVITY_RECORD resultRecord;
+    resultRecord.m_RequestId = result.m_RequestId;
+    resultRecord.m_ToolCallId = result.m_ToolCallId;
+    resultRecord.m_Kind = AI_ACTIVITY_KIND::ToolResult;
+    resultRecord.m_EditorKind = request.m_EditorKind;
+    resultRecord.m_ActionName = result.m_ActionName.IsEmpty()
+                                        ? toolCall.m_ToolName
+                                        : result.m_ActionName;
+    resultRecord.m_ResultJson = result.m_ResultJson;
+    resultRecord.m_ErrorCode = result.m_ErrorCode;
+    resultRecord.m_Allowed = result.m_Allowed;
+    resultRecord.m_Executed = result.m_Executed;
+    resultRecord.m_Message = result.m_Message;
+    m_ActivityLog.Append( std::move( resultRecord ) );
+
+    if( result.m_Allowed && result.m_Executed )
+        return true;
+
+    if( !aResponse.m_Body.IsEmpty() )
+        aResponse.m_Body << wxS( "\n\n" );
+
+    aResponse.m_Body << wxS( "Chat tool changes were prepared but could not be "
+                             "committed to the board: " )
+                     << ( result.m_Message.IsEmpty() ? result.m_ErrorCode
+                                                     : result.m_Message );
+    return false;
 }
 
 

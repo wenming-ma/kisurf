@@ -1120,7 +1120,7 @@ BOOST_AUTO_TEST_CASE( StartNewChatCancelsActiveExecutionSessionBoundary )
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextKeepsCompletedChatExecutionSessionPendingAcceptance )
+BOOST_AUTO_TEST_CASE( SendUserTextAutoAcceptsCompletedChatExecutionSession )
 {
     auto* provider = new SESSION_MUTATION_CHAT_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
@@ -1141,20 +1141,26 @@ BOOST_AUTO_TEST_CASE( SendUserTextKeepsCompletedChatExecutionSessionPendingAccep
 
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Placed the via." ) ) );
     BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
-    BOOST_CHECK_EQUAL( acceptAdapter.m_BeginCount, 0 );
-    BOOST_CHECK_EQUAL( acceptAdapter.m_CommitCount, 0 );
-    BOOST_CHECK( acceptAdapter.m_OperationKinds.empty() );
-    BOOST_CHECK( handler.ActiveSession() );
-    BOOST_CHECK( handler.HasPendingSessionPreview() );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_CommitCount, 1 );
+    BOOST_REQUIRE_EQUAL( acceptAdapter.m_OperationKinds.size(), 1 );
+    BOOST_CHECK_EQUAL(
+            static_cast<int>( acceptAdapter.m_OperationKinds.front() ),
+            static_cast<int>( AI_SESSION_OPERATION_KIND::CreateVia ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
 
     const std::vector<AI_ACTIVITY_RECORD> activity = model.ActivityRecords();
     BOOST_CHECK(
-            std::none_of( activity.begin(), activity.end(),
-                          []( const AI_ACTIVITY_RECORD& aRecord )
-                          {
-                              return aRecord.m_ToolCallId
-                                             == wxS( "chat_session_auto_accept" );
-                          } ) );
+            std::any_of( activity.begin(), activity.end(),
+                         []( const AI_ACTIVITY_RECORD& aRecord )
+                         {
+                             return aRecord.m_ToolCallId
+                                            == wxS( "chat_session_auto_accept" )
+                                    && aRecord.m_ActionName
+                                               == wxS( "kisurf_accept_session" )
+                                    && aRecord.m_Executed;
+                         } ) );
 }
 
 
@@ -1448,7 +1454,7 @@ BOOST_AUTO_TEST_CASE( SendUserTextIncludesRecentToolCallSummary )
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextDropsOlderChatTurnsFromProviderInput )
+BOOST_AUTO_TEST_CASE( SendUserTextKeepsFullCurrentChatTurnsUntilProviderBudget )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
@@ -1473,14 +1479,12 @@ BOOST_AUTO_TEST_CASE( SendUserTextDropsOlderChatTurnsFromProviderInput )
             wxS( "Previous chat turns" ) ) );
     BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "RECENT_CONTEXT_NEEDLE" ) ) );
-    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
-            wxS( "Earlier chat summary" ) ) );
-    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+    BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "EARLIEST_CONTEXT_NEEDLE" ) ) );
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextTracesTruncatedChatTurnsInProviderInput )
+BOOST_AUTO_TEST_CASE( SendUserTextDoesNotTruncateIndividualChatTurnsBeforeBudget )
 {
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
@@ -1512,13 +1516,11 @@ BOOST_AUTO_TEST_CASE( SendUserTextTracesTruncatedChatTurnsInProviderInput )
     BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "LONG_CONTEXT_HEAD" ) ) );
     BOOST_CHECK( provider->m_LastRequest.m_CompiledUserMessageText.Contains(
-            wxS( "[truncated chat turn]" ) ) );
-    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "LONG_CONTEXT_TAIL_SHOULD_NOT_BE_SENT" ) ) );
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "[truncated chat turn]" ) ) );
     BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
-            wxS( "truncated_chat_turn_count" ) ) );
-    BOOST_CHECK( provider->m_LastRequest.m_PromptTraceJson.Contains(
-            wxS( "older_message_count" ) ) );
+            wxS( "\"older_message_count\":0" ) ) );
 }
 
 

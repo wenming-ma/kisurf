@@ -138,6 +138,26 @@ BOOST_AUTO_TEST_CASE( ChatPolicyKeepsToolResultsWithinDefaultBudget )
 }
 
 
+BOOST_AUTO_TEST_CASE( ChatDefaultBudgetDoesNotShrinkNormalRequest )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestKind = AI_PROVIDER_REQUEST_KIND::Chat;
+    request.m_MaxProviderInputChars = 24000;
+    request.m_MaxContextActivityRecords = 24;
+    request.m_MaxToolResultChars = 4096;
+    request.m_MaxRetrievedMemoryChars = 4096;
+
+    const AI_TOKEN_BUDGET_PLAN plan =
+            AiPlanProviderInputBudgetForRequest( request );
+
+    BOOST_CHECK( !plan.m_ShouldShrink );
+    BOOST_CHECK_EQUAL( plan.m_MaxProviderInputChars,
+                       request.m_MaxProviderInputChars );
+    BOOST_CHECK_EQUAL( plan.m_MaxContextActivityRecords,
+                       request.m_MaxContextActivityRecords );
+}
+
+
 BOOST_AUTO_TEST_CASE( PlansProviderInputBudgetFromRequestKind )
 {
     AI_PROVIDER_REQUEST chatRequest;

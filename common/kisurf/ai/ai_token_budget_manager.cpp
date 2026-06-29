@@ -50,6 +50,7 @@ AI_TOKEN_BUDGET_POLICY AiProviderInputBudgetPolicyForRequestKind(
     switch( aRequestKind )
     {
     case AI_PROVIDER_REQUEST_KIND::Chat:
+        policy.m_TargetInputChars = 36000;
         return policy;
 
     case AI_PROVIDER_REQUEST_KIND::NextActionDecision:

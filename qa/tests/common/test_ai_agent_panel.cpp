@@ -354,8 +354,8 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesProviderRecoveryCommand )
 
 BOOST_AUTO_TEST_CASE( ReviewCommandsTargetPendingChatSession )
 {
-    BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( false, true ) );
-    BOOST_CHECK( AiAgentReviewCommandTargetsChatSession( true, true ) );
+    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( false, true ) );
+    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( true, true ) );
     BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( true, false ) );
     BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( false, false ) );
 }
@@ -639,7 +639,7 @@ BOOST_AUTO_TEST_CASE( AgentPanelResetsBackgroundTickAfterSuggestionReview )
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelDoesNotAutoAcceptPendingChatSessionWhenResponseFinishes )
+BOOST_AUTO_TEST_CASE( AgentPanelAutoAcceptsPendingChatSessionWhenResponseFinishes )
 {
     const std::string source = readAiAgentPanelSource();
     const std::string finishBody = sourceFunctionBody(
@@ -647,14 +647,14 @@ BOOST_AUTO_TEST_CASE( AgentPanelDoesNotAutoAcceptPendingChatSessionWhenResponseF
             "void AI_AGENT_PANEL::ConfigureActionToolCalls(" );
 
     BOOST_CHECK( finishBody.find(
-            "autoAcceptCompletedChatSession()" ) == std::string::npos );
+            "autoAcceptCompletedChatSession()" ) != std::string::npos );
     BOOST_CHECK( finishBody.find(
             "model->FinishPreparedChatRequest( std::move( state )," )
                  != std::string::npos );
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelSemanticViewEnablesReviewForPendingChatSession )
+BOOST_AUTO_TEST_CASE( AgentPanelSemanticViewDoesNotExposeChatSessionReview )
 {
     const std::string source = readAiAgentPanelSource();
     const std::string semanticBody = sourceFunctionBody(
@@ -664,12 +664,10 @@ BOOST_AUTO_TEST_CASE( AgentPanelSemanticViewEnablesReviewForPendingChatSession )
             source, "void AI_AGENT_PANEL::updateModeControls()",
             "void AI_AGENT_PANEL::updateComposerStatus()" );
 
-    BOOST_CHECK( semanticBody.find( "HasPendingChatSessionPreview()" )
-                 != std::string::npos );
-    BOOST_CHECK( semanticBody.find( "pendingChatSessionPreview" )
-                 != std::string::npos );
-    BOOST_CHECK( modeBody.find( "HasPendingChatSessionPreview()" )
-                 != std::string::npos );
+    BOOST_CHECK_EQUAL( semanticBody.find( "pendingChatSessionPreview" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( modeBody.find( "pendingChatSessionPreview" ),
+                       std::string::npos );
     BOOST_CHECK( modeBody.find( "m_PreviewButton->Enable( canPreviewSuggestion )" )
                  != std::string::npos );
 }
