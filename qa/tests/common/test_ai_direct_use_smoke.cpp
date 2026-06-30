@@ -178,17 +178,13 @@ BOOST_AUTO_TEST_CASE( ProviderAdvertisesDirectUseToolSurface )
                 const std::vector<std::string> requiredTools = {
                     "kisurf_run_action",
                     "kisurf_check_action",
-                    "kisurf_get_context_snapshot",
-                    "kisurf_get_visual_frame",
-                    "kisurf_get_activity_timeline",
                     "kisurf_get_workspace_view",
                     "kisurf_invoke_semantic_ui_action",
-                    "kisurf_open_session",
                     "kisurf_run_cell",
-                    "kisurf_checkpoint",
-                    "kisurf_rollback_to",
-                    "kisurf_render_preview",
-                    "kisurf_accept_session",
+                    "kisurf_run_atomic_operation",
+                    "kisurf_query_board_summary",
+                    "kisurf_query_items",
+                    "kisurf_run_validation",
                 };
 
                 for( const std::string& requiredTool : requiredTools )
@@ -197,6 +193,20 @@ BOOST_AUTO_TEST_CASE( ProviderAdvertisesDirectUseToolSurface )
                             std::find( toolNames.begin(), toolNames.end(), requiredTool )
                                     != toolNames.end(),
                             "missing AI direct-use tool: " << requiredTool );
+                }
+
+                for( const std::string& removedTool :
+                     { "kisurf_open_session",
+                       "kisurf_checkpoint",
+                       "kisurf_rollback_to",
+                       "kisurf_render_preview",
+                       "kisurf_accept_session" } )
+                {
+                    BOOST_CHECK_MESSAGE(
+                            std::find( toolNames.begin(), toolNames.end(), removedTool )
+                                    == toolNames.end(),
+                            "Chat direct-use surface still exposes session tool: "
+                                    << removedTool );
                 }
 
                 BOOST_REQUIRE( body.contains( "parallel_tool_calls" ) );

@@ -127,6 +127,32 @@ BOOST_AUTO_TEST_CASE( RequestKindDefaultPoliciesSeparateChatAndNextAction )
 }
 
 
+BOOST_AUTO_TEST_CASE( NextActionBudgetUsesConfiguredContextWindow )
+{
+    AI_PROVIDER_REQUEST decisionRequest;
+    decisionRequest.m_RequestKind = AI_PROVIDER_REQUEST_KIND::NextActionDecision;
+    decisionRequest.m_MaxProviderInputChars = 160000;
+    decisionRequest.m_MaxContextActivityRecords = 8;
+    decisionRequest.m_MaxToolResultChars = 16384;
+    decisionRequest.m_MaxRetrievedMemoryChars = 2048;
+
+    AI_PROVIDER_REQUEST reviewRequest = decisionRequest;
+    reviewRequest.m_RequestKind = AI_PROVIDER_REQUEST_KIND::NextActionReview;
+    reviewRequest.m_MaxToolResultChars = 24576;
+    reviewRequest.m_MaxRetrievedMemoryChars = 1536;
+
+    const AI_TOKEN_BUDGET_PLAN decisionPlan =
+            AiPlanProviderInputBudgetForRequest( decisionRequest );
+    const AI_TOKEN_BUDGET_PLAN reviewPlan =
+            AiPlanProviderInputBudgetForRequest( reviewRequest );
+
+    BOOST_CHECK_EQUAL( decisionPlan.m_MaxProviderInputChars, 160000 );
+    BOOST_CHECK_EQUAL( reviewPlan.m_MaxProviderInputChars, 160000 );
+    BOOST_CHECK( !decisionPlan.m_Reason.Contains( wxS( "compiled_input_budget" ) ) );
+    BOOST_CHECK( !reviewPlan.m_Reason.Contains( wxS( "compiled_input_budget" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( ChatPolicyKeepsToolResultsWithinDefaultBudget )
 {
     const AI_TOKEN_BUDGET_POLICY baseline;

@@ -3,8 +3,16 @@
 #include <kisurf/ai/ai_session_tool_call_handler.h>
 
 #include <functional>
+#include <wx/string.h>
 
 class BOARD;
+class BOARD_ITEM;
+
+void KisurfAiPcbRecordLiveItemAlias( BOARD& aBoard, const BOARD_ITEM& aItem,
+                                     const wxString& aAlias );
+wxString KisurfAiPcbLiveItemAlias( const BOARD& aBoard,
+                                   const BOARD_ITEM& aItem );
+void KisurfAiPcbForgetLiveItemAlias( BOARD& aBoard, const BOARD_ITEM& aItem );
 
 class KISURF_AI_PCB_SESSION_SHADOW_SEEDER : public AI_SESSION_SHADOW_BOARD_SEEDER
 {

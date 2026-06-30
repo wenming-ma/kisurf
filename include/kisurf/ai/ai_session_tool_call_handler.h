@@ -111,6 +111,14 @@ public:
     const AI_EXECUTION_SESSION* ActiveSession() const;
     bool HasPendingSessionPreview() const;
     bool HasAcceptApplyAdapter() const { return m_AcceptAdapter != nullptr; }
+    void SetDirectLiveApplyAfterMutation( bool aEnabled )
+    {
+        m_DirectLiveApplyAfterMutation = aEnabled;
+    }
+    bool DirectLiveApplyAfterMutation() const
+    {
+        return m_DirectLiveApplyAfterMutation;
+    }
     wxString ToolCatalogJson() const;
 
 private:
@@ -131,7 +139,13 @@ private:
     AI_EXECUTION_SESSION& openSessionFromRequest(
             const AI_PROVIDER_REQUEST& aRequest, const wxString& aBoardId,
             const wxString& aBaseHash );
-    bool ensureShadowBoardSeeded( wxString& aErrorCode, wxString& aMessage );
+    void clearActiveSessionState( bool aStopPythonWorker );
+    bool ensureShadowBoardSeeded( const AI_PROVIDER_REQUEST& aRequest,
+                                  wxString& aErrorCode, wxString& aMessage );
+    AI_TOOL_INVOCATION_RESULT maybeApplyDirectLiveMutation(
+            const AI_PROVIDER_REQUEST& aRequest,
+            const AI_TOOL_CALL_RECORD& aToolCall,
+            AI_TOOL_INVOCATION_RESULT aResult );
 
     void rememberCheckpointPreviewState( uint64_t aCheckpointId );
     void rememberRenderedPreview( const wxString& aArgumentsJson );
@@ -151,6 +165,7 @@ private:
     AI_SESSION_PREVIEW_SERVICE*          m_PreviewService = nullptr;
     AI_SESSION_SHADOW_BOARD_SEEDER*      m_ShadowBoardSeeder = nullptr;
     AI_SESSION_VALIDATION_SERVICE*       m_ValidationService = nullptr;
+    bool                                 m_DirectLiveApplyAfterMutation = false;
     bool                                 m_ShadowBoardSeeded = false;
     AI_CONTEXT_SNAPSHOT                  m_SessionOpenContextSnapshot;
     PREVIEW_RESTORE_STATE               m_CurrentPreviewState;

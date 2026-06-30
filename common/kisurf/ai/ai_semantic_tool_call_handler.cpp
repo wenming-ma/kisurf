@@ -49,9 +49,94 @@ wxString deniedResultJson( const AI_TOOL_INVOCATION_RESULT& aResult )
     nlohmann::json payload = { { "tool", toUtf8String( aResult.m_ActionName ) },
                                { "allowed", aResult.m_Allowed },
                                { "executed", aResult.m_Executed },
+                               { "ok", false },
                                { "status", "denied" },
                                { "error_code", toUtf8String( aResult.m_ErrorCode ) },
-                               { "message", toUtf8String( aResult.m_Message ) } };
+                               { "message", toUtf8String( aResult.m_Message ) },
+                               { "retryable", true },
+                               { "retry_hint", "" },
+                               { "valid_tools",
+                                 nlohmann::json::array(
+                                         { "kisurf_get_workspace_view",
+                                           "kisurf_invoke_semantic_ui_action" } ) } };
+
+    const std::string tool = toUtf8String( aResult.m_ActionName );
+    const std::string code = toUtf8String( aResult.m_ErrorCode );
+
+    if( code == "unknown_tool" )
+    {
+        payload["retry_hint"] =
+                "Use kisurf_get_workspace_view for workspace, visual, activity, "
+                "and panel observations. Legacy separate observation tools are "
+                "not available.";
+    }
+    else if( code == "malformed_arguments" )
+    {
+        payload["retry_hint"] =
+                "Retry with a JSON object matching the selected tool schema. "
+                "For kisurf_get_workspace_view, use views plus nested context, "
+                "visual, activity, or panels options.";
+    }
+    else if( code == "handler_not_configured" )
+    {
+        payload["retryable"] = false;
+        payload["retry_hint"] =
+                "Semantic UI invocation is unavailable in this editor context; "
+                "use non-UI session or observation tools instead.";
+    }
+    else if( code == "unknown_node" || code == "disabled_node"
+             || code == "unsupported_action" )
+    {
+        payload["retry_hint"] =
+                "Refresh the workspace or panel state, then retry with a current "
+                "enabled node_id and matching action.";
+    }
+    else if( code == "confirmation_required" )
+    {
+        payload["retryable"] = false;
+        payload["retry_hint"] =
+                "This UI node requires direct user confirmation and cannot be "
+                "invoked by the model.";
+    }
+    else
+    {
+        payload["retry_hint"] =
+                "Use error_code and message to correct the tool arguments, then "
+                "retry if the UI state has not changed.";
+    }
+
+    if( tool == "kisurf_get_workspace_view" || code == "unknown_tool" )
+    {
+        payload["expected_arguments"] =
+                { { "type", "object" },
+                  { "properties",
+                    { { "views",
+                        { { "type", "array" },
+                          { "items",
+                            { { "type", "string" },
+                              { "enum",
+                                nlohmann::json::array(
+                                        { "context", "visual", "activity",
+                                          "panels" } ) } } },
+                          { "description",
+                            "Optional list of workspace sections to return." } } },
+                      { "context", { { "type", "object" } } },
+                      { "visual", { { "type", "object" } } },
+                      { "activity", { { "type", "object" } } },
+                      { "panels", { { "type", "object" } } } } } };
+    }
+    else if( tool == "kisurf_invoke_semantic_ui_action" )
+    {
+        payload["expected_arguments"] =
+                { { "type", "object" },
+                  { "required",
+                    nlohmann::json::array( { "node_id", "action" } ) },
+                  { "properties",
+                    { { "node_id", { { "type", "string" } } },
+                      { "action", { { "type", "string" } } },
+                      { "text", { { "type", "string" } } },
+                      { "checked", { { "type", "boolean" } } } } } };
+    }
 
     return fromJson( payload );
 }
@@ -74,10 +159,7 @@ AI_TOOL_INVOCATION_RESULT deniedResult( const AI_PROVIDER_REQUEST& aRequest,
 
 bool supportedTool( const wxString& aToolName )
 {
-    return aToolName == wxS( "kisurf_get_context_snapshot" )
-           || aToolName == wxS( "kisurf_get_workspace_view" )
-           || aToolName == wxS( "kisurf_get_visual_frame" )
-           || aToolName == wxS( "kisurf_get_activity_timeline" )
+    return aToolName == wxS( "kisurf_get_workspace_view" )
            || aToolName == wxS( "kisurf_invoke_semantic_ui_action" );
 }
 
@@ -309,35 +391,6 @@ nlohmann::json contextSnapshotJson( const AI_CONTEXT_SNAPSHOT& aSnapshot,
         context.erase( "visual" );
 
     return context;
-}
-
-
-AI_TOOL_INVOCATION_RESULT contextSnapshotResult( const AI_PROVIDER_REQUEST& aRequest,
-                                                 const AI_TOOL_CALL_RECORD& aToolCall,
-                                                 const nlohmann::json& aArgs )
-{
-    wxString error;
-    std::optional<CONTEXT_TOOL_OPTIONS> options = parseContextToolOptions( aArgs, error );
-
-    if( !options )
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
-
-    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
-    result.m_Allowed = true;
-    result.m_Executed = false;
-    result.m_Message = wxS( "Context snapshot ready." );
-
-    nlohmann::json payload = { { "tool", toUtf8String( result.m_ActionName ) },
-                               { "allowed", true },
-                               { "executed", false },
-                               { "status", "context_ready" },
-                               { "context",
-                                 contextSnapshotJson( aRequest.m_ContextSnapshot,
-                                                      *options ) },
-                               { "message", toUtf8String( result.m_Message ) } };
-
-    result.m_ResultJson = fromJson( payload );
-    return result;
 }
 
 
@@ -743,50 +796,6 @@ nlohmann::json visualFrameJson( const AI_CONTEXT_SNAPSHOT& aSnapshot,
 }
 
 
-AI_TOOL_INVOCATION_RESULT visualFrameResult( const AI_PROVIDER_REQUEST& aRequest,
-                                             const AI_TOOL_CALL_RECORD& aToolCall,
-                                             const nlohmann::json& aArgs )
-{
-    wxString error;
-    std::optional<VISUAL_FRAME_TOOL_OPTIONS> options =
-            parseVisualFrameToolOptions( aArgs, error );
-
-    if( !options )
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
-
-    applyVisualDefaults( aRequest, *options );
-
-    if( !validateVisualFrameToolOptions( aRequest.m_ContextSnapshot, *options, error ) )
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
-
-    const AI_VISUAL_SNAPSHOT& visual = aRequest.m_ContextSnapshot.m_Visual;
-
-    if( options->m_IncludePixels && visual.HasPixels()
-        && visual.m_ByteSize > options->m_MaxBytes )
-    {
-        return deniedResult(
-                aRequest, aToolCall, wxS( "visual_too_large" ),
-                wxS( "Visual frame pixel payload exceeds max_bytes." ) );
-    }
-
-    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
-    result.m_Allowed = true;
-    result.m_Executed = false;
-    result.m_Message = wxS( "Visual frame ready." );
-
-    nlohmann::json payload = { { "tool", toUtf8String( result.m_ActionName ) },
-                               { "allowed", true },
-                               { "executed", false },
-                               { "status", "visual_ready" },
-                               { "visual",
-                                 visualFrameJson( aRequest.m_ContextSnapshot, *options ) },
-                               { "message", toUtf8String( result.m_Message ) } };
-
-    result.m_ResultJson = fromJson( payload );
-    return result;
-}
-
-
 struct ACTIVITY_TIMELINE_TOOL_OPTIONS
 {
     size_t                         m_MaxActivity = 64;
@@ -951,38 +960,6 @@ nlohmann::json activityTimelineJson( const std::vector<AI_ACTIVITY_RECORD>& aAct
 
     return { { "activity_count", filteredCount },
              { "records", std::move( activity ) } };
-}
-
-
-AI_TOOL_INVOCATION_RESULT activityTimelineResult(
-        const AI_PROVIDER_REQUEST& aRequest, const AI_TOOL_CALL_RECORD& aToolCall,
-        const nlohmann::json& aArgs )
-{
-    wxString error;
-    std::optional<ACTIVITY_TIMELINE_TOOL_OPTIONS> options =
-            parseActivityTimelineToolOptions( aArgs, error );
-
-    if( !options )
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
-
-    nlohmann::json activity =
-            activityTimelineJson( aRequest.m_ContextSnapshot.m_RecentActivity, *options );
-
-    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
-    result.m_Allowed = true;
-    result.m_Executed = false;
-    result.m_Message = wxS( "Activity timeline ready." );
-
-    nlohmann::json payload = { { "tool", toUtf8String( result.m_ActionName ) },
-                               { "allowed", true },
-                               { "executed", false },
-                               { "status", "activity_ready" },
-                               { "activity_count", activity["activity_count"] },
-                               { "activity", std::move( activity["records"] ) },
-                               { "message", toUtf8String( result.m_Message ) } };
-
-    result.m_ResultJson = fromJson( payload );
-    return result;
 }
 
 
@@ -1397,6 +1374,7 @@ AI_TOOL_INVOCATION_RESULT workspaceViewResult( const AI_PROVIDER_REQUEST& aReque
     nlohmann::json payload = { { "tool", toUtf8String( result.m_ActionName ) },
                                { "allowed", true },
                                { "executed", false },
+                               { "ok", true },
                                { "status", "workspace_view_ready" },
                                { "workspace_view", std::move( workspaceView ) },
                                { "message", toUtf8String( result.m_Message ) } };
@@ -1473,6 +1451,8 @@ wxString semanticUiActionResultJson(
         { "tool", toUtf8String( aResult.m_ActionName ) },
         { "allowed", aResult.m_Allowed },
         { "executed", aResult.m_Executed },
+        { "ok", aResult.m_Allowed && aResult.m_Executed
+                  && aResult.m_ErrorCode.IsEmpty() },
         { "status", aStatus },
         { "node_id", toUtf8String( aActionRequest.m_NodeId ) },
         { "action", toUtf8String( aActionRequest.m_Action ) },
@@ -1541,20 +1521,6 @@ AI_TOOL_INVOCATION_RESULT AI_SEMANTIC_TOOL_CALL_HANDLER::HandleToolCall(
                              wxS( "Unsupported KiSurf semantic tool call." ) );
     }
 
-    if( aToolCall.m_ToolName == wxS( "kisurf_get_context_snapshot" ) )
-    {
-        wxString parseError;
-        std::optional<nlohmann::json> args = parseObjectArguments( aToolCall, parseError );
-
-        if( !args )
-        {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
-                                 parseError );
-        }
-
-        return contextSnapshotResult( aRequest, aToolCall, *args );
-    }
-
     if( aToolCall.m_ToolName == wxS( "kisurf_get_workspace_view" ) )
     {
         wxString parseError;
@@ -1567,34 +1533,6 @@ AI_TOOL_INVOCATION_RESULT AI_SEMANTIC_TOOL_CALL_HANDLER::HandleToolCall(
         }
 
         return workspaceViewResult( aRequest, aToolCall, *args );
-    }
-
-    if( aToolCall.m_ToolName == wxS( "kisurf_get_visual_frame" ) )
-    {
-        wxString parseError;
-        std::optional<nlohmann::json> args = parseObjectArguments( aToolCall, parseError );
-
-        if( !args )
-        {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
-                                 parseError );
-        }
-
-        return visualFrameResult( aRequest, aToolCall, *args );
-    }
-
-    if( aToolCall.m_ToolName == wxS( "kisurf_get_activity_timeline" ) )
-    {
-        wxString parseError;
-        std::optional<nlohmann::json> args = parseObjectArguments( aToolCall, parseError );
-
-        if( !args )
-        {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
-                                 parseError );
-        }
-
-        return activityTimelineResult( aRequest, aToolCall, *args );
     }
 
     if( aToolCall.m_ToolName == wxS( "kisurf_invoke_semantic_ui_action" ) )

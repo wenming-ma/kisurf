@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <exception>
 #include <utility>
 
 namespace
@@ -156,50 +157,6 @@ AI_PROVIDER_INPUT_BLOCK recentChatTurnsBlock(
 }
 
 
-bool toolResultHasSessionMutation( const AI_TOOL_CALL_RECORD& aToolCall )
-{
-    if( !aToolCall.m_Executed || aToolCall.m_ResultJson.IsEmpty() )
-        return false;
-
-    nlohmann::json result = nlohmann::json::parse(
-            toUtf8String( aToolCall.m_ResultJson ), nullptr, false );
-
-    if( result.is_discarded() || !result.is_object() )
-        return false;
-
-    if( result.value( "shadow_board_mutated", false )
-        && !result.value( "board_mutated", false ) )
-    {
-        return true;
-    }
-
-    if( !result.contains( "operation_results" )
-        || !result["operation_results"].is_array() )
-    {
-        return false;
-    }
-
-    for( const nlohmann::json& operation : result["operation_results"] )
-    {
-        if( operation.is_object()
-            && operation.value( "shadow_board_mutated", false )
-            && !operation.value( "board_mutated", false ) )
-        {
-            return true;
-        }
-    }
-
-    return false;
-}
-
-
-bool responseHasSessionMutation( const AI_PROVIDER_RESPONSE& aResponse )
-{
-    return std::any_of( aResponse.m_ToolCalls.begin(), aResponse.m_ToolCalls.end(),
-                        toolResultHasSessionMutation );
-}
-
-
 AI_PROVIDER_INPUT_BLOCK recentChatToolCallsBlock(
         const std::vector<AI_TRACE_RECORD>& aTraceRecords,
         uint64_t aConversationId )
@@ -299,6 +256,43 @@ nlohmann::json parseJsonObjectOrString( const wxString& aText )
     }
 
     return nlohmann::json{ { "raw", toUtf8String( aText ) } };
+}
+
+
+AI_ACTIVITY_RECORD nextActionRuntimeFailureRecord(
+        const AI_CONTEXT_SNAPSHOT& aContextSnapshot,
+        const AI_ACTIVITY_RECORD& aActivity,
+        const wxString& aReason,
+        const wxString& aErrorCode,
+        const wxString& aMessage )
+{
+    nlohmann::json args = {
+        { "reason", toUtf8String( aReason ) },
+        { "activity_sequence", aActivity.m_Sequence },
+        { "context_version", toUtf8String( aContextSnapshot.m_Version.AsString() ) },
+        { "tool_state", toUtf8String( aContextSnapshot.m_ToolState.KindAsString() ) },
+        { "dynamic_context", toUtf8String( AiDynamicContextKind( aContextSnapshot ) ) }
+    };
+
+    nlohmann::json result = {
+        { "ok", false },
+        { "status", "failed" },
+        { "error_code", toUtf8String( aErrorCode ) },
+        { "message", toUtf8String( aMessage ) }
+    };
+
+    AI_ACTIVITY_RECORD record;
+    record.m_RequestId = aActivity.m_RequestId;
+    record.m_Kind = AI_ACTIVITY_KIND::PolicyDecision;
+    record.m_EditorKind = aContextSnapshot.m_EditorKind;
+    record.m_ActionName = wxS( "agent.background.next_action_failed" );
+    record.m_ArgumentsJson = fromUtf8String( args.dump() );
+    record.m_ResultJson = fromUtf8String( result.dump() );
+    record.m_ErrorCode = aErrorCode;
+    record.m_Allowed = false;
+    record.m_Executed = true;
+    record.m_Message = aMessage;
+    return record;
 }
 
 
@@ -422,6 +416,7 @@ AI_CHAT_REQUEST_STATE AI_AGENT_PANEL_MODEL::PrepareUserTextRequest(
     request.m_ConversationId = m_ActiveChatSessionId;
     request.m_EditorKind = aEditorKind;
     request.m_ContextSnapshot = std::move( aContextSnapshot );
+    request.m_MaxProviderInputChars = m_ProviderInputBudgetChars;
 
     if( request.m_ContextSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
         request.m_ContextSnapshot.m_EditorKind = aEditorKind;
@@ -443,7 +438,7 @@ AI_CHAT_REQUEST_STATE AI_AGENT_PANEL_MODEL::PrepareUserTextRequest(
 
     request.m_ContextVersion = request.m_ContextSnapshot.m_Version;
     request.m_UserText = aText;
-    request.m_MaxToolRounds = 6;
+    request.m_MaxToolRounds = 12;
 
     AI_PROVIDER_INPUT_BLOCK recentTurns =
             recentChatTurnsBlock( priorMessages,
@@ -485,7 +480,7 @@ AI_CHAT_REQUEST_STATE AI_AGENT_PANEL_MODEL::PrepareUserTextRequest(
         && request.m_RetrievedMemoryBlocks.size() < request.m_MaxRetrievedMemoryRecords )
     {
         AI_LOCAL_TEXT_MEMORY_QUERY query;
-        query.m_Text = aText + wxS( "\n" ) + request.m_ContextSnapshot.AsPromptText();
+        query.m_Text = aText;
         query.m_ProjectId = request.m_ContextSnapshot.m_ProjectId;
         query.m_DocumentId = request.m_ContextSnapshot.m_DocumentId;
 
@@ -548,8 +543,6 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::FinishPreparedChatRequest(
     if( aResponse.m_RequestId != 0 )
         m_LastRequestId = aResponse.m_RequestId;
 
-    autoAcceptCompletedChatSession( aState, aResponse );
-
     if( aState.m_DocumentWriteOwned )
         ReleaseDocumentWriteOwnership( wxS( "chat" ), aState.m_OwnershipContext );
 
@@ -557,74 +550,6 @@ AI_PROVIDER_RESPONSE AI_AGENT_PANEL_MODEL::FinishPreparedChatRequest(
     persistActiveChatSession();
 
     return aResponse;
-}
-
-
-bool AI_AGENT_PANEL_MODEL::autoAcceptCompletedChatSession(
-        const AI_CHAT_REQUEST_STATE& aState, AI_PROVIDER_RESPONSE& aResponse )
-{
-    if( !m_ToolCallHandler || !responseHasSessionMutation( aResponse ) )
-        return false;
-
-    AI_SESSION_TOOL_CALL_HANDLER* sessionHandler =
-            dynamic_cast<AI_SESSION_TOOL_CALL_HANDLER*>( m_ToolCallHandler );
-
-    if( !sessionHandler || !sessionHandler->HasPendingSessionPreview() )
-        return false;
-
-    AI_PROVIDER_REQUEST request = aState.m_Request;
-    request.m_RequestId = aResponse.m_RequestId;
-
-    if( request.m_ContextSnapshot.m_EditorKind == AI_EDITOR_KIND::Unknown )
-        request.m_ContextSnapshot.m_EditorKind = request.m_EditorKind;
-
-    request.m_ContextVersion = request.m_ContextSnapshot.m_Version;
-
-    AI_TOOL_CALL_RECORD toolCall;
-    toolCall.m_RequestId = request.m_RequestId;
-    toolCall.m_ToolCallId = wxS( "chat_session_auto_accept" );
-    toolCall.m_ToolName = wxS( "kisurf_accept_session" );
-    toolCall.m_ArgumentsJson = wxS( "{}" );
-
-    AI_ACTIVITY_RECORD toolRequest;
-    toolRequest.m_RequestId = toolCall.m_RequestId;
-    toolRequest.m_ToolCallId = toolCall.m_ToolCallId;
-    toolRequest.m_Kind = AI_ACTIVITY_KIND::ModelToolRequest;
-    toolRequest.m_EditorKind = request.m_EditorKind;
-    toolRequest.m_ActionName = toolCall.m_ToolName;
-    toolRequest.m_ArgumentsJson = toolCall.m_ArgumentsJson;
-    toolRequest.m_Message = wxS( "Chat session auto-accept requested." );
-    m_ActivityLog.Append( std::move( toolRequest ) );
-
-    AI_TOOL_INVOCATION_RESULT result =
-            sessionHandler->HandleToolCall( request, toolCall );
-
-    AI_ACTIVITY_RECORD resultRecord;
-    resultRecord.m_RequestId = result.m_RequestId;
-    resultRecord.m_ToolCallId = result.m_ToolCallId;
-    resultRecord.m_Kind = AI_ACTIVITY_KIND::ToolResult;
-    resultRecord.m_EditorKind = request.m_EditorKind;
-    resultRecord.m_ActionName = result.m_ActionName.IsEmpty()
-                                        ? toolCall.m_ToolName
-                                        : result.m_ActionName;
-    resultRecord.m_ResultJson = result.m_ResultJson;
-    resultRecord.m_ErrorCode = result.m_ErrorCode;
-    resultRecord.m_Allowed = result.m_Allowed;
-    resultRecord.m_Executed = result.m_Executed;
-    resultRecord.m_Message = result.m_Message;
-    m_ActivityLog.Append( std::move( resultRecord ) );
-
-    if( result.m_Allowed && result.m_Executed )
-        return true;
-
-    if( !aResponse.m_Body.IsEmpty() )
-        aResponse.m_Body << wxS( "\n\n" );
-
-    aResponse.m_Body << wxS( "Chat tool changes were prepared but could not be "
-                             "committed to the board: " )
-                     << ( result.m_Message.IsEmpty() ? result.m_ErrorCode
-                                                     : result.m_Message );
-    return false;
 }
 
 
@@ -1145,6 +1070,13 @@ void AI_AGENT_PANEL_MODEL::SetNextActionProvider( std::unique_ptr<AI_PROVIDER> a
 }
 
 
+void AI_AGENT_PANEL_MODEL::SetModelContextLengthChars( size_t aContextLengthChars )
+{
+    m_ProviderInputBudgetChars =
+            AI_PROVIDER_SETTINGS::InputBudgetCharsForContextLength( aContextLengthChars );
+}
+
+
 void AI_AGENT_PANEL_MODEL::ConfigureNextActionServices(
         AI_SESSION_PREVIEW_SERVICE* aPreviewService,
         AI_SESSION_VALIDATION_SERVICE* aValidationService )
@@ -1241,8 +1173,10 @@ std::optional<wxString> AI_AGENT_PANEL_MODEL::ActiveDocumentWriteOwnerNamespace(
 
 void AI_AGENT_PANEL_MODEL::ReloadDefaultProviders()
 {
-    SetProvider( MakeDefaultAiProvider() );
-    SetNextActionProvider( MakeDefaultAiProvider() );
+    AI_MODEL_CONFIG config = AI_MODEL_CONFIG_STORE::LoadUserConfig();
+    SetModelContextLengthChars( config.m_ContextLengthChars );
+    SetProvider( MakeAiProviderFromModelConfig( config ) );
+    SetNextActionProvider( MakeAiProviderFromModelConfig( config ) );
 }
 
 
@@ -1391,18 +1325,42 @@ AI_AGENT_PANEL_MODEL::UpdateSuggestionsIfBackgroundEnabled(
         return std::nullopt;
     }
 
-    AI_SUGGESTION_TRIGGER trigger;
-    trigger.m_EditorKind = aContextSnapshot.m_EditorKind;
-    trigger.m_ContextVersion = aContextSnapshot.m_Version;
-    trigger.m_ContextSnapshot = std::move( aContextSnapshot );
-    trigger.m_Activity = std::move( aActivity );
-    trigger.m_Reason = aReason;
-    trigger.m_PreviewOnly = true;
-    std::optional<AI_SUGGESTION_RECORD> suggestion =
-            m_NextActionRuntime->Update( std::move( trigger ) );
+    const AI_CONTEXT_SNAPSHOT failureContext = aContextSnapshot;
+    const AI_ACTIVITY_RECORD   failureActivity = aActivity;
 
-    ReleaseDocumentWriteOwnership( wxS( "nextaction" ), ownershipContext );
-    return suggestion;
+    try
+    {
+        AI_SUGGESTION_TRIGGER trigger;
+        trigger.m_EditorKind = aContextSnapshot.m_EditorKind;
+        trigger.m_ContextVersion = aContextSnapshot.m_Version;
+        trigger.m_ContextSnapshot = std::move( aContextSnapshot );
+        trigger.m_Activity = std::move( aActivity );
+        trigger.m_Reason = aReason;
+        trigger.m_PreviewOnly = true;
+        std::optional<AI_SUGGESTION_RECORD> suggestion =
+                m_NextActionRuntime->Update( std::move( trigger ) );
+
+        ReleaseDocumentWriteOwnership( wxS( "nextaction" ), ownershipContext );
+        return suggestion;
+    }
+    catch( const std::exception& e )
+    {
+        ReleaseDocumentWriteOwnership( wxS( "nextaction" ), ownershipContext );
+        RecordActivity( nextActionRuntimeFailureRecord(
+                failureContext, failureActivity, aReason,
+                wxS( "next_action_runtime_exception" ),
+                wxString::FromUTF8( e.what() ) ) );
+        return std::nullopt;
+    }
+    catch( ... )
+    {
+        ReleaseDocumentWriteOwnership( wxS( "nextaction" ), ownershipContext );
+        RecordActivity( nextActionRuntimeFailureRecord(
+                failureContext, failureActivity, aReason,
+                wxS( "next_action_runtime_exception" ),
+                wxS( "Next Action runtime failed with an unknown exception." ) ) );
+        return std::nullopt;
+    }
 }
 
 

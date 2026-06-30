@@ -117,7 +117,6 @@ public:
     bool AcceptLatestSuggestion();
     bool RejectLatestSuggestion();
     bool RecoverLatestProviderFailure();
-    bool HasPendingChatSessionPreview() const;
     bool HandlePreviewShortcut( int aKeyCode, bool aHasModifier = false,
                                 bool aFocusInsideAgentPanel = false );
     bool HandlePreviewPointer( bool aFocusInsideAgentPanel = false );
@@ -138,19 +137,10 @@ private:
     void OnPromptEnter( wxCommandEvent& aEvent ) override;
     void OnSend( wxCommandEvent& aEvent ) override;
     void OnStop( wxCommandEvent& aEvent ) override;
-    void OnPreviewSuggestion( wxCommandEvent& aEvent ) override;
-    void OnAcceptSuggestion( wxCommandEvent& aEvent ) override;
-    void OnRejectSuggestion( wxCommandEvent& aEvent ) override;
+    void OnChatStartTimer( wxTimerEvent& aEvent );
     void OnBackgroundPulseTimer( wxTimerEvent& aEvent );
 
     bool acceptActionPreviewSuggestion( uint64_t aSuggestionId );
-    bool autoAcceptCompletedChatSession();
-    bool previewActiveChatSession();
-    bool acceptActiveChatSession();
-    bool rejectActiveChatSession();
-    bool invokeActiveChatSessionTool( const wxString& aToolName,
-                                      const wxString& aArgumentsJson,
-                                      const wxString& aToolCallId );
     void loadConfiguredResearchFolder( const AI_MODEL_CONFIG& aConfig,
                                        bool aReportErrors );
     AI_CONTEXT_SNAPSHOT contextSnapshotWithPanelState() const;
@@ -161,6 +151,10 @@ private:
     void queueBackgroundSuggestionUpdate( AI_CONTEXT_SNAPSHOT aSnapshot,
                                           AI_ACTIVITY_RECORD aActivity,
                                           wxString aReason );
+    void scheduleBackgroundSemanticTick(
+            const wxString& aReason = wxS( "semantic_event" ) );
+    void scheduleBackgroundRetryAfterEmptyResult(
+            const wxString& aReason = wxS( "agent.background.empty_retry" ) );
     void finishBackgroundSuggestionUpdate(
             uint64_t aGeneration,
             std::optional<AI_SUGGESTION_RECORD> aSuggestion );
@@ -182,6 +176,10 @@ private:
     std::unique_ptr<AI_ACTION_RUNNER>         m_ActionRunner;
     std::unique_ptr<AI_TOOL_CALL_HANDLER>     m_ToolCallHandler;
     std::unique_ptr<AI_TOOL_CALL_HANDLER>     m_RuntimeToolCallHandler;
+    std::unique_ptr<AI_SESSION_PREVIEW_SERVICE>
+            m_MarshalledNextActionPreviewService;
+    std::unique_ptr<AI_SESSION_VALIDATION_SERVICE>
+            m_MarshalledNextActionValidationService;
     AI_SESSION_TOOL_CALL_HANDLER*             m_SessionToolCallHandler = nullptr;
     bool                                      m_HasSessionPreviewService = false;
     bool                                      m_HasSessionAcceptAdapter = false;
@@ -199,11 +197,16 @@ private:
 
     std::shared_ptr<BACKGROUND_UPDATE_STATE> m_BackgroundUpdateState;
     std::shared_ptr<CHAT_SEND_STATE>         m_ChatSendState;
+    wxTimer                                  m_ChatStartTimer;
     wxTimer                                  m_BackgroundPulseTimer;
     wxString                                 m_LastBackgroundTickFingerprint;
+    wxString                                 m_LastBackgroundEmptyRetryFingerprint;
+    wxString                                 m_DeferredBackgroundReason;
     bool                                     m_ChatSendInFlight = false;
     wxString                                 m_PendingUserText;
     wxString                                 m_StreamingAssistantText;
+    wxString                                 m_DeferredChatText;
+    uint64_t                                 m_DeferredChatGeneration = 0;
 };
 
 KICOMMON_API wxString AiAgentWorkspaceContextTitle( AI_AGENT_WORKSPACE_CONTEXT_KIND aMode );
@@ -231,13 +234,9 @@ KICOMMON_API bool AiAgentShouldAutoPreviewBackgroundSuggestion(
         const AI_AGENT_BACKGROUND_PREVIEW_VIEW& aView );
 KICOMMON_API AI_AGENT_BACKGROUND_UPDATE_ACTION AiAgentBackgroundUpdateAction(
         const AI_AGENT_BACKGROUND_UPDATE_VIEW& aView );
-KICOMMON_API bool AiAgentReviewCommandTargetsChatSession(
-        bool aHasActiveSuggestion, bool aHasPendingChatSession );
 KICOMMON_API bool AiAgentSnapshotNeedsBackgroundTick(
         const AI_CONTEXT_SNAPSHOT& aSnapshot );
 KICOMMON_API wxString AiAgentBackgroundTickFingerprint(
-        const AI_CONTEXT_SNAPSHOT& aSnapshot );
-KICOMMON_API bool AiAgentSnapshotNeedsContinuousBackgroundIdle(
         const AI_CONTEXT_SNAPSHOT& aSnapshot );
 KICOMMON_API bool AiAgentShouldQueueBackgroundTick(
         const AI_CONTEXT_SNAPSHOT& aSnapshot,

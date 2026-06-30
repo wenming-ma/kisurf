@@ -1,12 +1,21 @@
 #include <kisurf/ai/ai_token_budget_manager.h>
 
 #include <algorithm>
+#include <limits>
 
 namespace
 {
 size_t subtractHeadroom( size_t aTarget, size_t aHeadroom )
 {
     return aTarget > aHeadroom ? aTarget - aHeadroom : 0;
+}
+
+
+size_t addHeadroom( size_t aTarget, size_t aHeadroom )
+{
+    const size_t max = std::numeric_limits<size_t>::max();
+
+    return aTarget > max - aHeadroom ? max : aTarget + aHeadroom;
 }
 
 
@@ -152,7 +161,24 @@ AI_TOKEN_BUDGET_PLAN AiPlanProviderInputBudgetForRequest(
             AiProviderInputBudgetPolicyForRequestKind( aRequest.m_RequestKind );
 
     if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::Chat )
+    {
         policy.m_TargetInputChars = aRequest.m_MaxProviderInputChars;
+        policy.m_OutputHeadroomChars = 0;
+        policy.m_ToolHeadroomChars = 0;
+        policy.m_VisualHeadroomChars = 0;
+    }
+    else if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision
+             || aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+    {
+        size_t target = aRequest.m_MaxProviderInputChars;
+        target = addHeadroom( target, policy.m_OutputHeadroomChars );
+        target = addHeadroom( target, policy.m_ToolHeadroomChars );
+
+        if( aRequest.m_ContextSnapshot.m_Visual.HasPixels() )
+            target = addHeadroom( target, policy.m_VisualHeadroomChars );
+
+        policy.m_TargetInputChars = target;
+    }
 
     return AiPlanProviderInputBudget( aRequest, policy );
 }

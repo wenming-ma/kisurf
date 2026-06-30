@@ -65,6 +65,9 @@ AI_ATOMIC_EXECUTION_RESULT errorResult( const wxString& aCode, const wxString& a
 }
 
 
+nlohmann::json handleJson( const AI_SESSION_HANDLE& aHandle );
+
+
 std::optional<AI_SESSION_HANDLE> resolveHandle( const AI_EXECUTION_SESSION& aSession,
                                                 const nlohmann::json& aHandleJson )
 {
@@ -82,6 +85,15 @@ std::optional<AI_SESSION_HANDLE> resolveHandle( const AI_EXECUTION_SESSION& aSes
     }
     else if( aHandleJson.is_object() )
     {
+        if( !aHandleJson.contains( "handle_id" )
+            && aHandleJson.contains( "alias" )
+            && aHandleJson["alias"].is_string() )
+        {
+            return aSession.ResolveAlias(
+                    wxString::FromUTF8(
+                            aHandleJson["alias"].get_ref<const std::string&>().c_str() ) );
+        }
+
         if( aHandleJson.contains( "session_id" ) )
             handle.m_SessionId = aHandleJson["session_id"].get<uint64_t>();
 
@@ -105,7 +117,12 @@ std::optional<AI_SESSION_HANDLE> resolveHandle( const AI_EXECUTION_SESSION& aSes
     }
 
     if( aSession.ResolveHandle( handle ) != AI_SESSION_HANDLE_STATUS::Live )
+    {
+        if( !handle.m_Alias.IsEmpty() )
+            return aSession.ResolveAlias( handle.m_Alias );
+
         return std::nullopt;
+    }
 
     if( handle.m_Alias.IsEmpty() )
     {
@@ -118,14 +135,40 @@ std::optional<AI_SESSION_HANDLE> resolveHandle( const AI_EXECUTION_SESSION& aSes
 
 
 std::vector<AI_SESSION_HANDLE> resolveHandles( const AI_EXECUTION_SESSION& aSession,
-                                               const nlohmann::json& aArgs )
+                                                const nlohmann::json& aArgs )
 {
     std::vector<AI_SESSION_HANDLE> handles;
+
+    auto appendUnique = [&]( const AI_SESSION_HANDLE& aHandle )
+    {
+        const auto it = std::find_if(
+                handles.begin(), handles.end(),
+                [&]( const AI_SESSION_HANDLE& aExisting )
+                {
+                    return aExisting.m_SessionId == aHandle.m_SessionId
+                           && aExisting.m_HandleId == aHandle.m_HandleId
+                           && aExisting.m_Generation == aHandle.m_Generation;
+                } );
+
+        if( it == handles.end() )
+            handles.push_back( aHandle );
+    };
+
+    if( aArgs.contains( "alias" ) && aArgs["alias"].is_string()
+        && !aArgs.contains( "handle" ) && !aArgs.contains( "handles" ) )
+    {
+        if( std::optional<AI_SESSION_HANDLE> handle = aSession.ResolveAlias(
+                    wxString::FromUTF8(
+                             aArgs["alias"].get_ref<const std::string&>().c_str() ) ) )
+        {
+            appendUnique( *handle );
+        }
+    }
 
     if( aArgs.contains( "handle" ) )
     {
         if( std::optional<AI_SESSION_HANDLE> handle = resolveHandle( aSession, aArgs["handle"] ) )
-            handles.push_back( *handle );
+            appendUnique( *handle );
     }
 
     if( aArgs.contains( "handles" ) && aArgs["handles"].is_array() )
@@ -133,7 +176,16 @@ std::vector<AI_SESSION_HANDLE> resolveHandles( const AI_EXECUTION_SESSION& aSess
         for( const nlohmann::json& entry : aArgs["handles"] )
         {
             if( std::optional<AI_SESSION_HANDLE> handle = resolveHandle( aSession, entry ) )
-                handles.push_back( *handle );
+                appendUnique( *handle );
+        }
+    }
+
+    if( aArgs.contains( "filter" ) && aArgs["filter"].is_object() )
+    {
+        for( const AI_SHADOW_ITEM& item :
+             aSession.ShadowBoard().QueryItems( fromJson( aArgs["filter"] ) ) )
+        {
+            appendUnique( item.m_Handle );
         }
     }
 
@@ -158,18 +210,73 @@ struct LOCAL_GEOMETRY_BOX
 };
 
 
+long long millimetersToInternalUnits( double aValue )
+{
+    return static_cast<long long>( std::llround( aValue * 1000000.0 ) );
+}
+
+
+long long lengthShortcutToInternalUnits( double aValue )
+{
+    if( aValue > 0.0 && std::abs( aValue ) < 1000.0 )
+        return millimetersToInternalUnits( aValue );
+
+    return static_cast<long long>( std::llround( aValue ) );
+}
+
+
 std::optional<POINT_COORDINATES> pointCoordinates( const nlohmann::json& aPoint )
 {
+    if( aPoint.is_array() && aPoint.size() >= 2 && aPoint[0].is_number()
+        && aPoint[1].is_number() )
+    {
+        return POINT_COORDINATES{
+            millimetersToInternalUnits( aPoint[0].get<double>() ),
+            millimetersToInternalUnits( aPoint[1].get<double>() )
+        };
+    }
+
+    if( aPoint.is_object() && aPoint.contains( "x" ) && aPoint.contains( "y" )
+        && aPoint["x"].is_number() && aPoint["y"].is_number() )
+    {
+        if( aPoint.contains( "units" ) && aPoint["units"].is_string() )
+        {
+            wxString units = wxString::FromUTF8(
+                    aPoint["units"].get_ref<const std::string&>().c_str() );
+            units.MakeLower();
+
+            if( units == wxS( "mm" ) || units == wxS( "millimeter" )
+                || units == wxS( "millimeters" ) )
+            {
+                return POINT_COORDINATES{
+                    millimetersToInternalUnits( aPoint["x"].get<double>() ),
+                    millimetersToInternalUnits( aPoint["y"].get<double>() )
+                };
+            }
+        }
+
+        return POINT_COORDINATES{
+            static_cast<long long>( std::llround( aPoint["x"].get<double>() ) ),
+            static_cast<long long>( std::llround( aPoint["y"].get<double>() ) )
+        };
+    }
+
     if( !aPoint.is_object() || !aPoint.contains( "x" ) || !aPoint.contains( "y" )
         || !aPoint["x"].is_number() || !aPoint["y"].is_number() )
     {
+        if( aPoint.is_object() && aPoint.contains( "x_mm" ) && aPoint.contains( "y_mm" )
+            && aPoint["x_mm"].is_number() && aPoint["y_mm"].is_number() )
+        {
+            return POINT_COORDINATES{
+                millimetersToInternalUnits( aPoint["x_mm"].get<double>() ),
+                millimetersToInternalUnits( aPoint["y_mm"].get<double>() )
+            };
+        }
+
         return std::nullopt;
     }
 
-    return POINT_COORDINATES{
-        static_cast<long long>( std::llround( aPoint["x"].get<double>() ) ),
-        static_cast<long long>( std::llround( aPoint["y"].get<double>() ) )
-    };
+    return std::nullopt;
 }
 
 
@@ -475,6 +582,12 @@ std::optional<POINT_COORDINATES> resolvePointExpression(
 bool resolvePointInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::json& aPoint,
                           wxString& aError )
 {
+    if( std::optional<POINT_COORDINATES> point = pointCoordinates( aPoint ) )
+    {
+        aPoint = pointJson( *point );
+        return true;
+    }
+
     if( !aPoint.is_object() )
         return true;
 
@@ -499,6 +612,12 @@ bool resolvePointInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::json& 
 bool resolvePointTreeInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::json& aValue,
                               wxString& aError )
 {
+    if( std::optional<POINT_COORDINATES> point = pointCoordinates( aValue ) )
+    {
+        aValue = pointJson( *point );
+        return true;
+    }
+
     if( aValue.is_object() )
     {
         if( !resolvePointInPlace( aSession, aValue, aError ) )
@@ -528,11 +647,28 @@ bool resolvePointTreeInPlace( const AI_EXECUTION_SESSION& aSession, nlohmann::js
 }
 
 
+nlohmann::json normalizeModelFacingLengthShortcuts( const nlohmann::json& aArgs )
+{
+    nlohmann::json normalized = aArgs;
+
+    for( const char* key : { "diameter", "drill", "width", "clearance" } )
+    {
+        if( normalized.contains( key ) && normalized[key].is_number() )
+        {
+            normalized[key] =
+                    lengthShortcutToInternalUnits( normalized[key].get<double>() );
+        }
+    }
+
+    return normalized;
+}
+
+
 std::optional<nlohmann::json> normalizedCreatePointArgs(
         const AI_EXECUTION_SESSION& aSession, const nlohmann::json& aArgs,
         std::initializer_list<const char*> aPointFields, wxString& aError )
 {
-    nlohmann::json normalized = aArgs;
+    nlohmann::json normalized = normalizeModelFacingLengthShortcuts( aArgs );
 
     for( const char* field : aPointFields )
     {
@@ -834,6 +970,37 @@ void appendRecord( AI_EXECUTION_SESSION& aSession, AI_ATOMIC_EXECUTION_RESULT& a
 
     const AI_SESSION_OPERATION_RECORD& appended = aSession.AppendOperation( std::move( record ) );
     aResult.m_OperationIds.push_back( appended.m_Id );
+}
+
+
+nlohmann::json resolvedItemProvenanceJson(
+        const AI_EXECUTION_SESSION& aSession,
+        const std::vector<AI_SESSION_HANDLE>& aHandles )
+{
+    nlohmann::json items = nlohmann::json::array();
+
+    for( const AI_SESSION_HANDLE& handle : aHandles )
+    {
+        const AI_SHADOW_ITEM* item = aSession.ShadowBoard().FindItem( handle );
+
+        if( !item )
+            continue;
+
+        nlohmann::json entry = {
+            { "handle", handleJson( handle ) },
+            { "type", toUtf8String( item->m_Type ) },
+            { "alias", toUtf8String( item->m_Alias ) }
+        };
+
+        const auto liveUuid = item->m_Metadata.find( wxS( "live_uuid" ) );
+
+        if( liveUuid != item->m_Metadata.end() && !liveUuid->second.IsEmpty() )
+            entry["live_uuid"] = toUtf8String( liveUuid->second );
+
+        items.push_back( std::move( entry ) );
+    }
+
+    return items;
 }
 
 
@@ -1179,11 +1346,220 @@ bool canApplyHandleMutation( const AI_EXECUTION_SESSION& aSession,
 }
 
 
+std::optional<nlohmann::json> normalizedHandleMutationArgs(
+        const AI_EXECUTION_SESSION& aSession, AI_SESSION_OPERATION_KIND aKind,
+        const nlohmann::json& aArgs, wxString& aError )
+{
+    nlohmann::json normalized = aArgs;
+
+    if( aKind == AI_SESSION_OPERATION_KIND::MoveItems
+        && normalized.contains( "items" ) )
+    {
+        auto itemHandleReference = []( const nlohmann::json& aEntry ) -> nlohmann::json
+        {
+            if( aEntry.is_object() )
+            {
+                for( const char* key : { "handle", "item", "ref", "reference" } )
+                {
+                    if( aEntry.contains( key ) )
+                        return aEntry[key];
+                }
+
+                if( aEntry.contains( "alias" ) || aEntry.contains( "uuid" )
+                    || aEntry.contains( "session_id" ) )
+                {
+                    return aEntry;
+                }
+            }
+
+            return aEntry;
+        };
+
+        auto itemTarget = []( const nlohmann::json& aEntry )
+                -> std::optional<nlohmann::json>
+        {
+            if( !aEntry.is_object() )
+                return std::nullopt;
+
+            for( const char* key : { "target_position", "position", "target",
+                                     "target_point", "destination", "to",
+                                     "move_to" } )
+            {
+                if( aEntry.contains( key ) )
+                    return aEntry[key];
+            }
+
+            return std::nullopt;
+        };
+
+        if( normalized["items"].is_array() )
+        {
+            nlohmann::json handles = nlohmann::json::array();
+            nlohmann::json targets = nlohmann::json::array();
+            bool           sawTarget = false;
+            bool           allHaveTargets = true;
+
+            for( const nlohmann::json& entry : normalized["items"] )
+            {
+                handles.push_back( itemHandleReference( entry ) );
+
+                if( std::optional<nlohmann::json> target = itemTarget( entry ) )
+                {
+                    sawTarget = true;
+                    targets.push_back( *target );
+                }
+                else
+                {
+                    allHaveTargets = false;
+                }
+            }
+
+            if( !normalized.contains( "handles" ) )
+                normalized["handles"] = std::move( handles );
+
+            if( sawTarget && allHaveTargets
+                && !normalized.contains( "target_positions" ) )
+            {
+                normalized["target_positions"] = std::move( targets );
+            }
+        }
+        else if( normalized["items"].is_object() )
+        {
+            if( !normalized.contains( "handle" ) && !normalized.contains( "handles" )
+                && !normalized.contains( "alias" ) )
+            {
+                normalized["handle"] = itemHandleReference( normalized["items"] );
+            }
+
+            if( !normalized.contains( "target_positions" ) )
+            {
+                if( std::optional<nlohmann::json> target =
+                            itemTarget( normalized["items"] ) )
+                {
+                    normalized["target_positions"] = *target;
+                }
+            }
+        }
+    }
+
+    const bool hasHandleReference = normalized.contains( "handle" )
+                                    || normalized.contains( "handles" )
+                                    || normalized.contains( "alias" );
+
+    if( !hasHandleReference )
+    {
+        if( normalized.contains( "items" ) )
+        {
+            if( normalized["items"].is_array() )
+                normalized["handles"] = normalized["items"];
+            else
+                normalized["handle"] = normalized["items"];
+
+            normalized.erase( "items" );
+        }
+        else if( normalized.contains( "item" ) )
+        {
+            normalized["handle"] = normalized["item"];
+            normalized.erase( "item" );
+        }
+    }
+
+    if( aKind != AI_SESSION_OPERATION_KIND::MoveItems )
+        return normalized;
+
+    auto normalizeDeltaPair = [&]( const char* aXKey, const char* aYKey ) -> bool
+    {
+        if( normalized.contains( "delta" )
+            || !normalized.contains( aXKey )
+            || !normalized.contains( aYKey ) )
+        {
+            return false;
+        }
+
+        normalized["delta"] = {
+            { "x", normalized[aXKey] },
+            { "y", normalized[aYKey] }
+        };
+        return true;
+    };
+
+    normalizeDeltaPair( "delta_x", "delta_y" )
+            || normalizeDeltaPair( "dx", "dy" )
+            || normalizeDeltaPair( "deltaX", "deltaY" );
+
+    if( !normalized.contains( "target_positions" )
+        && normalized.contains( "target_position" ) )
+    {
+        normalized["target_positions"] = normalized["target_position"];
+        normalized.erase( "target_position" );
+    }
+
+    auto normalizeTargetShortcut = [&]( const char* aKey ) -> bool
+    {
+        if( normalized.contains( "target_positions" )
+            || !normalized.contains( aKey ) )
+        {
+            return false;
+        }
+
+        normalized["target_positions"] = normalized[aKey];
+        normalized.erase( aKey );
+        return true;
+    };
+
+    normalizeTargetShortcut( "position" )
+            || normalizeTargetShortcut( "target" )
+            || normalizeTargetShortcut( "target_point" )
+            || normalizeTargetShortcut( "destination" )
+            || normalizeTargetShortcut( "to" )
+            || normalizeTargetShortcut( "move_to" );
+
+    if( !normalized.contains( "target_positions" )
+        && normalized.contains( "x" ) && normalized.contains( "y" )
+        && normalized["x"].is_number() && normalized["y"].is_number() )
+    {
+        normalized["target_positions"] = {
+            { "x", normalized["x"] },
+            { "y", normalized["y"] }
+        };
+    }
+
+    if( normalized.contains( "delta" )
+        && !resolvePointTreeInPlace( aSession, normalized["delta"], aError ) )
+    {
+        return std::nullopt;
+    }
+
+    if( normalized.contains( "target_positions" )
+        && !resolvePointTreeInPlace( aSession, normalized["target_positions"],
+                                     aError ) )
+    {
+        return std::nullopt;
+    }
+
+    return normalized;
+}
+
+
 AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
                                           AI_SESSION_OPERATION_KIND aKind,
                                           const nlohmann::json& aArgs )
 {
-    std::vector<AI_SESSION_HANDLE> handles = resolveHandles( aSession, aArgs );
+    wxString normalizationError;
+    std::optional<nlohmann::json> normalizedArgs =
+            normalizedHandleMutationArgs( aSession, aKind, aArgs, normalizationError );
+
+    if( !normalizedArgs )
+    {
+        return errorResult( wxS( "invalid_arguments" ),
+                            normalizationError.IsEmpty()
+                                    ? wxString( wxS( "Could not normalize mutation arguments." ) )
+                                    : normalizationError );
+    }
+
+    const nlohmann::json& args = *normalizedArgs;
+
+    std::vector<AI_SESSION_HANDLE> handles = resolveHandles( aSession, args );
 
     if( handles.empty() )
         return errorResult( wxS( "invalid_handle" ), wxS( "No live handle resolved." ) );
@@ -1192,7 +1568,7 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
     {
         if( aKind == AI_SESSION_OPERATION_KIND::UpdateItemGeometry )
         {
-            if( !aArgs.contains( "geometry_patch" ) || !aArgs["geometry_patch"].is_object() )
+            if( !args.contains( "geometry_patch" ) || !args["geometry_patch"].is_object() )
             {
                 return errorResult( wxS( "invalid_arguments" ),
                                     wxS( "UpdateItemGeometry requires geometry_patch object." ) );
@@ -1201,7 +1577,7 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
 
         if( aKind == AI_SESSION_OPERATION_KIND::SetItemProperties )
         {
-            if( !aArgs.contains( "typed_props" ) )
+            if( !args.contains( "typed_props" ) )
             {
                 return errorResult( wxS( "invalid_arguments" ),
                                     wxS( "SetItemProperties requires typed_props." ) );
@@ -1212,14 +1588,14 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
             if( item )
             {
                 if( std::optional<AI_ATOMIC_EXECUTION_RESULT> error =
-                            validateTypedPropertyPatch( *item, aArgs["typed_props"] ) )
+                            validateTypedPropertyPatch( *item, args["typed_props"] ) )
                 {
                     return *error;
                 }
             }
         }
 
-        if( !canApplyHandleMutation( aSession, aKind, aArgs, handles[i], i,
+        if( !canApplyHandleMutation( aSession, aKind, args, handles[i], i,
                                      handles.size() ) )
         {
             return errorResult( wxS( "mutation_failed" ),
@@ -1230,7 +1606,12 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
     AI_ATOMIC_EXECUTION_RESULT result;
     result.m_ResolvedHandles = handles;
 
-    appendRecord( aSession, result, aKind, aArgs, handles, {} );
+    nlohmann::json operationResult = {
+        { "resolved_items", resolvedItemProvenanceJson( aSession, handles ) }
+    };
+
+    appendRecord( aSession, result, aKind, args, handles, {}, {},
+                  fromJson( operationResult ) );
     const uint64_t epoch = aSession.Epoch();
 
     for( size_t i = 0; i < handles.size(); ++i )
@@ -1241,15 +1622,15 @@ AI_ATOMIC_EXECUTION_RESULT mutateHandles( AI_EXECUTION_SESSION& aSession,
         switch( aKind )
         {
         case AI_SESSION_OPERATION_KIND::MoveItems:
-            if( aArgs.contains( "delta" ) )
+            if( args.contains( "delta" ) )
             {
-                ok = aSession.ShadowBoard().MoveItem( handle, fromJson( aArgs["delta"] ),
+                ok = aSession.ShadowBoard().MoveItem( handle, fromJson( args["delta"] ),
                                                        epoch );
             }
-            else if( aArgs.contains( "target_positions" ) )
+            else if( args.contains( "target_positions" ) )
             {
                 std::optional<nlohmann::json> target = targetPositionForHandle(
-                        aArgs["target_positions"], handle, i, handles.size() );
+                        args["target_positions"], handle, i, handles.size() );
                 ok = target.has_value()
                      && aSession.ShadowBoard().MoveItemTo( handle, fromJson( *target ),
                                                            epoch );
@@ -1452,6 +1833,7 @@ std::vector<wxString> maintenanceWarnings( AI_SESSION_OPERATION_KIND aKind,
     case AI_SESSION_OPERATION_KIND::QueryBoardSummary:
     case AI_SESSION_OPERATION_KIND::QueryItems:
     case AI_SESSION_OPERATION_KIND::QueryItem:
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
     case AI_SESSION_OPERATION_KIND::QuerySelection:
     case AI_SESSION_OPERATION_KIND::QueryNets:
     case AI_SESSION_OPERATION_KIND::QueryLayers:
@@ -1672,6 +2054,7 @@ nlohmann::json maintenanceResult( AI_SESSION_OPERATION_KIND aKind,
     case AI_SESSION_OPERATION_KIND::QueryBoardSummary:
     case AI_SESSION_OPERATION_KIND::QueryItems:
     case AI_SESSION_OPERATION_KIND::QueryItem:
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
     case AI_SESSION_OPERATION_KIND::QuerySelection:
     case AI_SESSION_OPERATION_KIND::QueryNets:
     case AI_SESSION_OPERATION_KIND::QueryLayers:

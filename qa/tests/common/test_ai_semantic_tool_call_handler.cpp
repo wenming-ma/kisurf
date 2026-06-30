@@ -317,6 +317,16 @@ AI_TOOL_CALL_RECORD toolCall( const wxString& aToolName, const wxString& aArgume
 }
 
 
+void checkModelRetryFailureContract( const AI_TOOL_INVOCATION_RESULT& aResult )
+{
+    nlohmann::json payload = nlohmann::json::parse( aResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !payload["ok"].get<bool>() );
+    BOOST_CHECK( payload["retryable"].is_boolean() );
+    BOOST_CHECK( payload["retry_hint"].is_string() );
+    BOOST_CHECK( !payload["retry_hint"].get<std::string>().empty() );
+}
+
+
 AI_SEMANTIC_UI_NODE semanticUiNode( const wxString& aNodeId,
                                     const wxString& aAction,
                                     bool aEnabled = true,
@@ -383,589 +393,51 @@ BOOST_AUTO_TEST_CASE( LegacyPreviewCompositeToolsAreRejected )
 }
 
 
-BOOST_AUTO_TEST_CASE( ContextSnapshotToolReturnsBoundedUnifiedContextWithoutSuggestionSink )
+BOOST_AUTO_TEST_CASE( LegacyObservationToolsAreRejected )
 {
     AI_SEMANTIC_TOOL_CALL_HANDLER handler;
 
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_context_snapshot" ),
-                      wxS( "{\"max_objects\":1,\"max_actions\":1,"
-                           "\"max_activity\":1,\"max_anchors\":1,"
-                           "\"max_panels\":1}" ) ) );
+    const wxString legacyTools[] = {
+        wxS( "kisurf_get_context_snapshot" ),
+        wxS( "kisurf_get_visual_frame" ),
+        wxS( "kisurf_get_activity_timeline" ),
+    };
 
-    BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString() );
+    for( const wxString& toolName : legacyTools )
+    {
+        AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+                requestWithUnifiedContext(), toolCall( toolName, wxS( "{}" ) ) );
 
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "context_ready" );
-    BOOST_CHECK_EQUAL( payload["tool"].get<std::string>(), "kisurf_get_context_snapshot" );
-    BOOST_CHECK( payload["allowed"].get<bool>() );
-    BOOST_CHECK( !payload["executed"].get<bool>() );
-
-    const nlohmann::json& context = payload["context"];
-    BOOST_CHECK_EQUAL( context["editor"].get<std::string>(), "pcb" );
-    BOOST_CHECK_EQUAL( context["summary"].get<std::string>(), "unit context summary" );
-    BOOST_CHECK_EQUAL( context["dynamic_context"]["kind"].get<std::string>(),
-                       "routing" );
-    BOOST_CHECK_EQUAL( context["dynamic_context"]["source"].get<std::string>(),
-                       "tool_state" );
-    BOOST_CHECK_EQUAL( context["visible_object_count"].get<int>(), 3 );
-    BOOST_CHECK_EQUAL( context["visible_objects"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["selected_object_count"].get<int>(), 2 );
-    BOOST_CHECK_EQUAL( context["selected_objects"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["action_count"].get<int>(), 2 );
-    BOOST_CHECK_EQUAL( context["actions"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["recent_activity_count"].get<int>(), 2 );
-    BOOST_CHECK_EQUAL( context["recent_activity"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["anchor_count"].get<int>(), 2 );
-    BOOST_CHECK_EQUAL( context["anchors"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["panel_state_count"].get<int>(), 2 );
-    BOOST_CHECK_EQUAL( context["panel_states"].size(), 1 );
-    BOOST_CHECK_EQUAL( context["tool_state"]["kind"].get<std::string>(), "routing_track" );
-    BOOST_CHECK_EQUAL( context["visual"]["source"].get<std::string>(), "pcbnew.canvas" );
+        BOOST_TEST_CONTEXT( toolName )
+        {
+            BOOST_CHECK( !result.m_Allowed );
+            BOOST_CHECK( !result.m_Executed );
+            BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                               wxString( wxS( "unknown_tool" ) ) );
+        }
+    }
 }
 
 
-BOOST_AUTO_TEST_CASE( ContextSnapshotToolCanOmitRequestedSections )
+BOOST_AUTO_TEST_CASE( SemanticToolFailuresIncludeRetryContract )
 {
     AI_SEMANTIC_TOOL_CALL_HANDLER handler;
 
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_context_snapshot" ),
-                      wxS( "{\"include_visible_objects\":false,"
-                           "\"include_selected_objects\":false,"
-                           "\"include_actions\":false,"
-                           "\"include_recent_activity\":false,"
-                           "\"include_tool_state\":false,"
-                           "\"include_anchors\":false,"
-                           "\"include_panels\":false,"
-                           "\"include_visual\":false}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& context = payload["context"];
-
-    BOOST_CHECK_EQUAL( context["visible_object_count"].get<int>(), 3 );
-    BOOST_CHECK( !context.contains( "visible_objects" ) );
-    BOOST_CHECK_EQUAL( context["selected_object_count"].get<int>(), 2 );
-    BOOST_CHECK( !context.contains( "selected_objects" ) );
-    BOOST_CHECK_EQUAL( context["action_count"].get<int>(), 2 );
-    BOOST_CHECK( !context.contains( "actions" ) );
-    BOOST_CHECK_EQUAL( context["recent_activity_count"].get<int>(), 2 );
-    BOOST_CHECK( !context.contains( "recent_activity" ) );
-    BOOST_CHECK( !context.contains( "tool_state" ) );
-    BOOST_CHECK_EQUAL( context["anchor_count"].get<int>(), 2 );
-    BOOST_CHECK( !context.contains( "anchors" ) );
-    BOOST_CHECK_EQUAL( context["panel_state_count"].get<int>(), 2 );
-    BOOST_CHECK( !context.contains( "panel_states" ) );
-    BOOST_CHECK( !context.contains( "visual" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ContextSnapshotToolRejectsMalformedArguments )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT badBoolean = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_context_snapshot" ),
-                      wxS( "{\"include_visual\":\"yes\"}" ) ) );
-
-    BOOST_CHECK( !badBoolean.m_Allowed );
-    BOOST_CHECK_EQUAL( badBoolean.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badLimit = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_context_snapshot" ),
-                      wxS( "{\"max_objects\":-1}" ) ) );
-
-    BOOST_CHECK( !badLimit.m_Allowed );
-    BOOST_CHECK_EQUAL( badLimit.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolReturnsMetadataWithoutPixelsByDefault )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+    AI_TOOL_INVOCATION_RESULT unknown = handler.HandleToolCall(
             requestWithUnifiedContext(),
             toolCall( wxS( "kisurf_get_visual_frame" ), wxS( "{}" ) ) );
 
-    BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString() );
+    BOOST_CHECK_EQUAL( unknown.m_ErrorCode, wxString( wxS( "unknown_tool" ) ) );
+    checkModelRetryFailureContract( unknown );
 
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "visual_ready" );
-    BOOST_CHECK_EQUAL( payload["tool"].get<std::string>(), "kisurf_get_visual_frame" );
-
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_CHECK_EQUAL( visual["source"].get<std::string>(), "pcbnew.canvas" );
-    BOOST_CHECK_EQUAL( visual["mime_type"].get<std::string>(), "image/png" );
-    BOOST_CHECK_EQUAL( visual["width_px"].get<int>(), 1280 );
-    BOOST_CHECK_EQUAL( visual["height_px"].get<int>(), 720 );
-    BOOST_CHECK_EQUAL( visual["byte_size"].get<int>(), 2048 );
-    BOOST_CHECK( visual["has_pixels"].get<bool>() );
-    BOOST_CHECK( !visual.contains( "data_uri" ) );
-    BOOST_REQUIRE( visual.contains( "render_directives" ) );
-    const nlohmann::json& directives = visual["render_directives"];
-    BOOST_CHECK_EQUAL( directives["focus_layer"].get<std::string>(), "F.Cu" );
-    BOOST_CHECK_EQUAL( directives["focus_net"].get<std::string>(), "/GPIO" );
-    BOOST_CHECK( directives["dim_unfocused_layers"].get<bool>() );
-    BOOST_REQUIRE( directives.contains( "highlight_anchor_ids" ) );
-    BOOST_REQUIRE_EQUAL( directives["highlight_anchor_ids"].size(), 2 );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][0].get<std::string>(),
-                       "tool.routing.start" );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][1].get<std::string>(),
-                       "pcb.pad.target" );
-    BOOST_CHECK( !visual.contains( "unavailable_reason" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolOmitsRenderDirectivesByDefaultOutsideRouting )
-{
-    AI_PROVIDER_REQUEST request = requestWithSelection();
-    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "pcbnew.canvas" );
-    request.m_ContextSnapshot.m_Visual.m_MimeType = wxS( "image/png" );
-    request.m_ContextSnapshot.m_Visual.m_WidthPx = 640;
-    request.m_ContextSnapshot.m_Visual.m_HeightPx = 480;
-    request.m_ContextSnapshot.m_Visual.m_ByteSize = 0;
-
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            request,
-            toolCall( wxS( "kisurf_get_visual_frame" ), wxS( "{}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK( !payload["visual"].contains( "render_directives" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolHighlightsPlacementAnchorsByDefault )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithPlacementContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ), wxS( "{}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& directives = payload["visual"]["render_directives"];
-
-    BOOST_CHECK( !directives.contains( "focus_layer" ) );
-    BOOST_CHECK( !directives.contains( "focus_net" ) );
-    BOOST_CHECK( !directives.contains( "dim_unfocused_layers" ) );
-    BOOST_REQUIRE( directives.contains( "highlight_anchor_ids" ) );
-    BOOST_REQUIRE_EQUAL( directives["highlight_anchor_ids"].size(), 2 );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][0].get<std::string>(),
-                       "tool.placement.cursor" );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][1].get<std::string>(),
-                       "tool.placement.grid.east" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolPreservesExplicitPlacementHighlights )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithPlacementContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"highlight_anchor_ids\":[\"pcb.pad.target\"]}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& directives = payload["visual"]["render_directives"];
-    BOOST_REQUIRE_EQUAL( directives["highlight_anchor_ids"].size(), 1 );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][0].get<std::string>(),
-                       "pcb.pad.target" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolCarriesUnavailableReason )
-{
-    AI_PROVIDER_REQUEST request = requestWithUnifiedContext();
-    request.m_ContextSnapshot.m_Visual = AI_VISUAL_SNAPSHOT();
-    request.m_ContextSnapshot.m_Visual.m_Source = wxS( "canvas.opengl" );
-    request.m_ContextSnapshot.m_Visual.m_UnavailableReason = wxS( "invalid_image" );
-
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            request,
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_pixels\":true}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_CHECK_EQUAL( visual["source"].get<std::string>(), "canvas.opengl" );
-    BOOST_CHECK( !visual["has_pixels"].get<bool>() );
-    BOOST_CHECK( !visual.contains( "data_uri" ) );
-    BOOST_CHECK_EQUAL( visual["unavailable_reason"].get<std::string>(),
-                       "invalid_image" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolIncludesAnchorOverlaysByDefault )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ), wxS( "{}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-
-    BOOST_CHECK_EQUAL( visual["anchor_overlay_count"].get<int>(), 2 );
-    BOOST_REQUIRE( visual.contains( "anchor_overlays" ) );
-    BOOST_REQUIRE_EQUAL( visual["anchor_overlays"].size(), 2 );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["id"].get<std::string>(),
-                       "tool.routing.start" );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["kind"].get<std::string>(),
-                       "route_start" );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["label"].get<std::string>(),
-                       "tool.routing.start" );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["summary"].get<std::string>(),
-                       "test anchor" );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["position"]["x"].get<int>(), 100 );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["position"]["y"].get<int>(), 200 );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["layer"].get<int>(), 0 );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"][0]["confidence"].get<double>(), 1.0 );
-    BOOST_CHECK( !visual.contains( "data_uri" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolCanOmitAnchorOverlays )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_anchor_overlays\":false}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_CHECK_EQUAL( visual["anchor_overlay_count"].get<int>(), 2 );
-    BOOST_CHECK( !visual.contains( "anchor_overlays" ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolLimitsAnchorOverlays )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"max_anchor_overlays\":1}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_CHECK_EQUAL( visual["anchor_overlay_count"].get<int>(), 2 );
-    BOOST_REQUIRE( visual.contains( "anchor_overlays" ) );
-    BOOST_CHECK_EQUAL( visual["anchor_overlays"].size(), 1 );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolReturnsRenderDirectivesWhenRequested )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"focus_layer\":\"F.Cu\","
-                           "\"focus_net\":\"/GPIO\","
-                           "\"dim_unfocused_layers\":true,"
-                           "\"highlight_anchor_ids\":["
-                           "\"tool.routing.start\",\"pcb.pad.target\"]}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_REQUIRE( visual.contains( "render_directives" ) );
-
-    const nlohmann::json& directives = visual["render_directives"];
-    BOOST_CHECK_EQUAL( directives["focus_layer"].get<std::string>(), "F.Cu" );
-    BOOST_CHECK_EQUAL( directives["focus_net"].get<std::string>(), "/GPIO" );
-    BOOST_CHECK( directives["dim_unfocused_layers"].get<bool>() );
-    BOOST_REQUIRE_EQUAL( directives["highlight_anchor_ids"].size(), 2 );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][0].get<std::string>(),
-                       "tool.routing.start" );
-    BOOST_CHECK_EQUAL( directives["highlight_anchor_ids"][1].get<std::string>(),
-                       "pcb.pad.target" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolReturnsPixelsWithinRequestedLimit )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_pixels\":true,\"max_bytes\":4096}" ) ) );
-
-    BOOST_CHECK( result.m_Allowed );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    const nlohmann::json& visual = payload["visual"];
-    BOOST_CHECK_EQUAL( visual["data_uri"].get<std::string>(),
-                       "data:image/png;base64,dW5pdA==" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolDeniesOversizePixelPayload )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_pixels\":true,\"max_bytes\":1024}" ) ) );
-
-    BOOST_CHECK( !result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "visual_too_large" ) ) );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "denied" );
-    BOOST_CHECK_EQUAL( payload["error_code"].get<std::string>(), "visual_too_large" );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolRejectsMalformedArguments )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT badBoolean = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_pixels\":\"yes\"}" ) ) );
-
-    BOOST_CHECK( !badBoolean.m_Allowed );
-    BOOST_CHECK_EQUAL( badBoolean.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badLimit = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"max_bytes\":-1}" ) ) );
-
-    BOOST_CHECK( !badLimit.m_Allowed );
-    BOOST_CHECK_EQUAL( badLimit.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badOverlayBoolean = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"include_anchor_overlays\":\"yes\"}" ) ) );
-
-    BOOST_CHECK( !badOverlayBoolean.m_Allowed );
-    BOOST_CHECK_EQUAL( badOverlayBoolean.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badOverlayLimit = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"max_anchor_overlays\":0}" ) ) );
-
-    BOOST_CHECK( !badOverlayLimit.m_Allowed );
-    BOOST_CHECK_EQUAL( badOverlayLimit.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badFocusLayer = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"focus_layer\":\"\"}" ) ) );
-
-    BOOST_CHECK( !badFocusLayer.m_Allowed );
-    BOOST_CHECK_EQUAL( badFocusLayer.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badFocusNet = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"focus_net\":7}" ) ) );
-
-    BOOST_CHECK( !badFocusNet.m_Allowed );
-    BOOST_CHECK_EQUAL( badFocusNet.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badDim = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"dim_unfocused_layers\":\"yes\"}" ) ) );
-
-    BOOST_CHECK( !badDim.m_Allowed );
-    BOOST_CHECK_EQUAL( badDim.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badHighlightType = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"highlight_anchor_ids\":\"tool.routing.start\"}" ) ) );
-
-    BOOST_CHECK( !badHighlightType.m_Allowed );
-    BOOST_CHECK_EQUAL( badHighlightType.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badHighlightEntry = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"highlight_anchor_ids\":[\"\"]}" ) ) );
-
-    BOOST_CHECK( !badHighlightEntry.m_Allowed );
-    BOOST_CHECK_EQUAL( badHighlightEntry.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badHighlightUnknown = handler.HandleToolCall(
-            requestWithUnifiedContext(),
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"highlight_anchor_ids\":[\"missing.anchor\"]}" ) ) );
-
-    BOOST_CHECK( !badHighlightUnknown.m_Allowed );
-    BOOST_CHECK_EQUAL( badHighlightUnknown.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( VisualFrameToolRejectsNonPositionalHighlightAnchor )
-{
-    AI_PROVIDER_REQUEST request = requestWithUnifiedContext();
-    request.m_ContextSnapshot.m_Anchors.front().m_HasPosition = false;
-
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
-            request,
-            toolCall( wxS( "kisurf_get_visual_frame" ),
-                      wxS( "{\"highlight_anchor_ids\":[\"tool.routing.start\"]}" ) ) );
-
-    BOOST_CHECK( !result.m_Allowed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ActivityTimelineToolReturnsBoundedActivityWithoutSuggestionSink )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+    AI_TOOL_INVOCATION_RESULT malformed = handler.HandleToolCall(
             requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"max_activity\":2}" ) ) );
+            toolCall( wxS( "kisurf_get_workspace_view" ),
+                      wxS( "{\"views\":[\"layers\"]}" ) ) );
 
-    BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString() );
-
-    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "activity_ready" );
-    BOOST_CHECK_EQUAL( payload["tool"].get<std::string>(),
-                       "kisurf_get_activity_timeline" );
-    BOOST_CHECK_EQUAL( payload["activity_count"].get<int>(), 4 );
-    BOOST_REQUIRE_EQUAL( payload["activity"].size(), 2 );
-    BOOST_CHECK_EQUAL( payload["activity"][0]["action"].get<std::string>(),
-                       "common.Interactive.selected" );
-    BOOST_CHECK_EQUAL( payload["activity"][1]["action"].get<std::string>(),
-                       "mouse.click" );
-}
-
-
-BOOST_AUTO_TEST_CASE( ActivityTimelineToolFiltersByKindAndAction )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT userResult = handler.HandleToolCall(
-            requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"kind\":\"user_action\","
-                           "\"action_contains\":\"mouse\"}" ) ) );
-
-    BOOST_CHECK( userResult.m_Allowed );
-
-    nlohmann::json userPayload =
-            nlohmann::json::parse( userResult.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( userPayload["activity_count"].get<int>(), 1 );
-    BOOST_REQUIRE_EQUAL( userPayload["activity"].size(), 1 );
-    BOOST_CHECK_EQUAL( userPayload["activity"][0]["kind"].get<std::string>(),
-                       "user_action" );
-    BOOST_CHECK_EQUAL( userPayload["activity"][0]["action"].get<std::string>(),
-                       "mouse.click" );
-
-    AI_TOOL_INVOCATION_RESULT toolResult = handler.HandleToolCall(
-            requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"kind\":\"tool_result\"}" ) ) );
-
-    BOOST_CHECK( toolResult.m_Allowed );
-
-    nlohmann::json toolPayload =
-            nlohmann::json::parse( toolResult.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( toolPayload["activity_count"].get<int>(), 1 );
-    BOOST_REQUIRE_EQUAL( toolPayload["activity"].size(), 1 );
-    BOOST_CHECK_EQUAL( toolPayload["activity"][0]["kind"].get<std::string>(),
-                       "tool_result" );
-}
-
-
-BOOST_AUTO_TEST_CASE( ActivityTimelineToolRejectsMalformedArguments )
-{
-    AI_SEMANTIC_TOOL_CALL_HANDLER handler;
-
-    AI_TOOL_INVOCATION_RESULT badKind = handler.HandleToolCall(
-            requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"kind\":\"mouse\"}" ) ) );
-
-    BOOST_CHECK( !badKind.m_Allowed );
-    BOOST_CHECK_EQUAL( badKind.m_ErrorCode,
+    BOOST_CHECK_EQUAL( malformed.m_ErrorCode,
                        wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badAction = handler.HandleToolCall(
-            requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"action_contains\":\"\"}" ) ) );
-
-    BOOST_CHECK( !badAction.m_Allowed );
-    BOOST_CHECK_EQUAL( badAction.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
-
-    AI_TOOL_INVOCATION_RESULT badLimit = handler.HandleToolCall(
-            requestWithActivityTimeline(),
-            toolCall( wxS( "kisurf_get_activity_timeline" ),
-                      wxS( "{\"max_activity\":-1}" ) ) );
-
-    BOOST_CHECK( !badLimit.m_Allowed );
-    BOOST_CHECK_EQUAL( badLimit.m_ErrorCode,
-                       wxString( wxS( "malformed_arguments" ) ) );
+    checkModelRetryFailureContract( malformed );
 }
 
 

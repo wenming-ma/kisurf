@@ -98,6 +98,54 @@ BOOST_AUTO_TEST_CASE( TrackPolylineLowersIntoTrackSegmentAtomicOps )
 }
 
 
+BOOST_AUTO_TEST_CASE( QueryItemsAcceptsCommonAgentTypeAliases )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+    session.BeginStep( wxS( "create query alias items" ) );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateTrackSegment,
+            wxS( "{\"alias\":\"alias-track\",\"net\":\"/CLK\",\"layer\":\"F.Cu\","
+                 "\"width\":150000,"
+                 "\"start\":{\"x\":0,\"y\":0},\"end\":{\"x\":1000,\"y\":0}}" ) )
+                           .m_Ok );
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"alias-via\",\"net\":\"GND\","
+                 "\"position\":{\"x\":2000,\"y\":2000}}" ) )
+                           .m_Ok );
+
+    for( const wxString& trackAlias :
+         { wxS( "track" ), wxS( "tracks" ), wxS( "trace" ),
+           wxS( "traces" ) } )
+    {
+        const wxString filter = wxString::Format(
+                wxS( "{\"type\":\"%s\"}" ), trackAlias );
+        std::vector<AI_SHADOW_ITEM> items = session.ShadowBoard().QueryItems( filter );
+        BOOST_REQUIRE_EQUAL( items.size(), 1 );
+        BOOST_CHECK_EQUAL( items.front().m_Type, wxString( wxS( "track_segment" ) ) );
+    }
+
+    for( const wxString& routingAlias :
+         { wxS( "route" ), wxS( "routes" ), wxS( "routing" ) } )
+    {
+        const wxString filter = wxString::Format(
+                wxS( "{\"type\":\"%s\"}" ), routingAlias );
+        std::vector<AI_SHADOW_ITEM> items = session.ShadowBoard().QueryItems( filter );
+        BOOST_REQUIRE_EQUAL( items.size(), 2 );
+    }
+
+    std::vector<AI_SHADOW_ITEM> explicitRouting =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":[\"tracks\",\"vias\"]}" ) );
+    BOOST_REQUIRE_EQUAL( explicitRouting.size(), 2 );
+
+    std::vector<AI_SHADOW_ITEM> vias =
+            session.ShadowBoard().QueryItems( wxS( "{\"type\":\"vias\"}" ) );
+    BOOST_REQUIRE_EQUAL( vias.size(), 1 );
+    BOOST_CHECK_EQUAL( vias.front().m_Type, wxString( wxS( "via" ) ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( CreateZoneAndShapeRequireExplicitGeometry )
 {
     AI_EXECUTION_SESSION session = makeSession();

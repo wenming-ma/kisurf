@@ -413,6 +413,28 @@ BOOST_AUTO_TEST_CASE( RoutingProviderUsesToolStateCursorWhenModeContextOmitsCurs
 }
 
 
+BOOST_AUTO_TEST_CASE( RoutingToolStateCanSuggestSegmentBeforeNetIsResolved )
+{
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            AiGenerateRoutingSegmentCandidate( makeRoutingTrigger(
+                    wxS( "{\"layer\":\"F.Cu\",\"width\":150000,"
+                         "\"start\":{\"x\":100,\"y\":200},"
+                         "\"cursor\":{\"x\":260,\"y\":200}}" ) ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsRouteSegmentPreview() );
+    BOOST_CHECK( operation->m_NetName.IsEmpty() );
+    BOOST_CHECK_EQUAL( operation->m_LayerName, wxString( wxS( "F.Cu" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_Start.x, 100 );
+    BOOST_CHECK_EQUAL( operation->m_Start.y, 200 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RoutingProviderRejectsInactiveOrIncompleteContext )
 {
     BOOST_CHECK( !AiGenerateRoutingSegmentCandidate(
@@ -421,7 +443,7 @@ BOOST_AUTO_TEST_CASE( RoutingProviderRejectsInactiveOrIncompleteContext )
                           .has_value() );
 
     BOOST_CHECK( !AiGenerateRoutingSegmentCandidate(
-                           makeRoutingTrigger( wxS( "{\"layer\":\"F.Cu\",\"width\":150000,"
+                           makeRoutingTrigger( wxS( "{\"width\":150000,"
                                                     "\"start\":{\"x\":100,\"y\":200},"
                                                     "\"cursor\":{\"x\":260,\"y\":200}}" ) ) )
                           .has_value() );

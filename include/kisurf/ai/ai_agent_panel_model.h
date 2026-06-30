@@ -64,6 +64,7 @@ public:
     uint64_t ActiveChatSessionId() const { return m_ActiveChatSessionId; }
     void SetProvider( std::unique_ptr<AI_PROVIDER> aProvider );
     void SetNextActionProvider( std::unique_ptr<AI_PROVIDER> aProvider );
+    void SetModelContextLengthChars( size_t aContextLengthChars );
     void SetPromptTraceStore( AI_PROMPT_TRACE_STORE* aStore );
     const wxString& PromptTraceStorePath() const;
     void SetMemoryStore( AI_MEMORY_STORE* aStore );
@@ -168,8 +169,6 @@ public:
 private:
     void refreshLocalTextResearchDirectory( const AI_CONTEXT_SNAPSHOT& aContextSnapshot );
     void persistActiveChatSession();
-    bool autoAcceptCompletedChatSession( const AI_CHAT_REQUEST_STATE& aState,
-                                         AI_PROVIDER_RESPONSE& aResponse );
 
     AI_ACTIVITY_LOG                         m_ActivityLog;
     std::unique_ptr<AI_PROMPT_TRACE_STORE>  m_DefaultPromptTraceStore;
@@ -197,6 +196,7 @@ private:
     uint64_t                                m_LastRequestId = 0;
     uint64_t                                m_ActiveChatSessionId = 1;
     uint64_t                                m_ChatActivityBoundarySequence = 0;
+    size_t                                  m_ProviderInputBudgetChars = 160000;
     wxString                                m_LastChatProjectId;
     wxString                                m_LastChatDocumentId;
     wxString                                m_LastNextActionProjectId;

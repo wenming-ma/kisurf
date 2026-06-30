@@ -323,6 +323,7 @@ public:
     void ActivateGalCanvas() override;
 
     void ShowBoardSetupDialog( const wxString& aInitialPage = wxEmptyString, wxWindow* aParent = nullptr );
+    void NotifyAiPanelSemanticStateChanged( const wxString& aReason );
 
     void PrepareLayerIndicator( bool aForceRebuild = false );
 

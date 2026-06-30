@@ -169,8 +169,11 @@ std::vector<wchar_t> buildEnvironmentBlock( const wxString& aSdkRootPath )
         {
             std::wstring entry = cursor;
 
-            if( _wcsnicmp( entry.c_str(), L"PYTHONPATH=", 11 ) != 0 )
+            if( _wcsnicmp( entry.c_str(), L"PYTHONPATH=", 11 ) != 0
+                && _wcsnicmp( entry.c_str(), L"PYTHONHOME=", 11 ) != 0 )
+            {
                 entries.push_back( entry );
+            }
 
             cursor += entry.size() + 1;
         }

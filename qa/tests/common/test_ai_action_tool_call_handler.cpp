@@ -90,7 +90,7 @@ BOOST_AUTO_TEST_CASE( CheckActionForcesDryRunAndDoesNotCallRunner )
 }
 
 
-BOOST_AUTO_TEST_CASE( RunActionDefaultsToDryRunForAllowlistedReadOnlyAction )
+BOOST_AUTO_TEST_CASE( RunActionExecutesAllowlistedReadOnlyActionImmediately )
 {
     AI_ACTIVITY_LOG          log( 16 );
     AI_TOOL_EXECUTION_POLICY policy;
@@ -108,16 +108,18 @@ BOOST_AUTO_TEST_CASE( RunActionDefaultsToDryRunForAllowlistedReadOnlyAction )
                                wxS( "{\"action\":\"common.Control.showAgentPanel\"}" ) ) );
 
     BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK( runner.m_Calls.empty() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE_EQUAL( runner.m_Calls.size(), 1 );
+    BOOST_CHECK_EQUAL( runner.m_Calls[0],
+                       wxString( wxS( "common.Control.showAgentPanel" ) ) );
 
     nlohmann::json resultJson = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK( resultJson["dry_run"].get<bool>() );
-    BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "allowed" );
+    BOOST_CHECK( !resultJson["dry_run"].get<bool>() );
+    BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "executed" );
 }
 
 
-BOOST_AUTO_TEST_CASE( RunActionCreatesPendingActionPreviewSuggestion )
+BOOST_AUTO_TEST_CASE( RunActionDoesNotCreatePreviewSuggestion )
 {
     AI_ACTIVITY_LOG          log( 16 );
     AI_TOOL_EXECUTION_POLICY policy;
@@ -144,24 +146,19 @@ BOOST_AUTO_TEST_CASE( RunActionCreatesPendingActionPreviewSuggestion )
             request, toolCall( wxS( "kisurf_run_action" ),
                                wxS( "{\"action\":\"common.Control.showAgentPanel\"}" ) ) );
 
-    BOOST_REQUIRE( storedSuggestion.has_value() );
-    BOOST_CHECK_EQUAL( storedSuggestion->m_Title,
-                       wxString( wxS( "Preview action" ) ) );
-    BOOST_CHECK( storedSuggestion->m_ArgumentsJson.Contains(
-            wxS( "\"operation\":\"action_preview\"" ) ) );
-    BOOST_CHECK( storedSuggestion->m_ArgumentsJson.Contains(
-            wxS( "\"action\":\"common.Control.showAgentPanel\"" ) ) );
-    BOOST_CHECK( storedSuggestion->m_EditObjects.empty() );
-    BOOST_CHECK( runner.m_Calls.empty() );
+    BOOST_CHECK( !storedSuggestion.has_value() );
+    BOOST_REQUIRE_EQUAL( runner.m_Calls.size(), 1 );
+    BOOST_CHECK_EQUAL( runner.m_Calls[0],
+                       wxString( wxS( "common.Control.showAgentPanel" ) ) );
 
     nlohmann::json resultJson = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "preview_ready" );
-    BOOST_CHECK_EQUAL( resultJson["suggestion_id"].get<int>(), 77 );
-    BOOST_CHECK( resultJson["preview_required"].get<bool>() );
+    BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "executed" );
+    BOOST_CHECK( !resultJson.value( "preview_required", false ) );
+    BOOST_CHECK( !resultJson.contains( "suggestion_id" ) );
 }
 
 
-BOOST_AUTO_TEST_CASE( RunActionIgnoresModelRequestedExecution )
+BOOST_AUTO_TEST_CASE( RunActionIgnoresModelRequestedDryRun )
 {
     AI_ACTIVITY_LOG          log( 16 );
     AI_TOOL_EXECUTION_POLICY policy;
@@ -177,14 +174,14 @@ BOOST_AUTO_TEST_CASE( RunActionIgnoresModelRequestedExecution )
     AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
             request, toolCall( wxS( "kisurf_run_action" ),
                                wxS( "{\"action\":\"common.Control.showAgentPanel\","
-                                    "\"dry_run\":false}" ) ) );
+                                    "\"dry_run\":true}" ) ) );
 
     BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK( runner.m_Calls.empty() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE_EQUAL( runner.m_Calls.size(), 1 );
 
     nlohmann::json resultJson = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
-    BOOST_CHECK( resultJson["dry_run"].get<bool>() );
+    BOOST_CHECK( !resultJson["dry_run"].get<bool>() );
 }
 
 
@@ -209,8 +206,8 @@ BOOST_AUTO_TEST_CASE( RequestContextDescriptorWinsOverFallbackDescriptor )
                                wxS( "{\"action\":\"common.Control.showAgentPanel\"}" ) ) );
 
     BOOST_CHECK( result.m_Allowed );
-    BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK( runner.m_Calls.empty() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE_EQUAL( runner.m_Calls.size(), 1 );
 }
 
 
@@ -234,6 +231,11 @@ BOOST_AUTO_TEST_CASE( UnknownToolFailsClosed )
     BOOST_CHECK( !resultJson["executed"].get<bool>() );
     BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "denied" );
     BOOST_CHECK_EQUAL( resultJson["error_code"].get<std::string>(), "unknown_tool" );
+    BOOST_CHECK( !resultJson["ok"].get<bool>() );
+    BOOST_CHECK( resultJson["retryable"].get<bool>() );
+    BOOST_CHECK( resultJson["retry_hint"].get<std::string>().find( "kisurf_run_action" )
+                 != std::string::npos );
+    BOOST_CHECK( resultJson["valid_tools"].is_array() );
     BOOST_CHECK( runner.m_Calls.empty() );
 }
 
@@ -257,6 +259,12 @@ BOOST_AUTO_TEST_CASE( MalformedJsonFailsClosed )
     BOOST_CHECK( !resultJson["executed"].get<bool>() );
     BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "denied" );
     BOOST_CHECK_EQUAL( resultJson["error_code"].get<std::string>(), "malformed_arguments" );
+    BOOST_CHECK( !resultJson["ok"].get<bool>() );
+    BOOST_CHECK( resultJson["retryable"].get<bool>() );
+    BOOST_CHECK( resultJson["retry_hint"].get<std::string>().find( "JSON object" )
+                 != std::string::npos );
+    BOOST_REQUIRE( resultJson["expected_arguments"].is_object() );
+    BOOST_CHECK( resultJson["expected_arguments"]["required"].is_array() );
     BOOST_CHECK( runner.m_Calls.empty() );
 }
 
@@ -281,6 +289,10 @@ BOOST_AUTO_TEST_CASE( UnknownActionFailsClosed )
     BOOST_CHECK( !resultJson["executed"].get<bool>() );
     BOOST_CHECK_EQUAL( resultJson["status"].get<std::string>(), "denied" );
     BOOST_CHECK_EQUAL( resultJson["error_code"].get<std::string>(), "unknown_action" );
+    BOOST_CHECK( !resultJson["ok"].get<bool>() );
+    BOOST_CHECK( resultJson["retryable"].get<bool>() );
+    BOOST_CHECK( resultJson["retry_hint"].get<std::string>().find( "kisurf_get_workspace_view" )
+                 != std::string::npos );
     BOOST_CHECK( runner.m_Calls.empty() );
 }
 
@@ -304,7 +316,8 @@ BOOST_AUTO_TEST_CASE( ModifyingActionIsDeniedByPolicy )
 
     BOOST_CHECK( !result.m_Allowed );
     BOOST_CHECK( !result.m_Executed );
-    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "requires_preview" ) ) );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "modifying_action_not_available" ) ) );
     BOOST_CHECK( runner.m_Calls.empty() );
 }
 

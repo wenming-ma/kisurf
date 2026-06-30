@@ -280,31 +280,9 @@ nlohmann::json actionToolParameters()
                  { "dry_run",
                    { { "type", "boolean" },
                      { "description",
-                       "When true, check policy and preview feasibility without executing." } } } } },
+                       "Ignored by kisurf_run_action; use kisurf_check_action for a "
+                       "non-executing policy check." } } } } },
              { "required", nlohmann::json::array( { "action" } ) },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionOpenToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "board_id",
-                   { { "type", "string" },
-                     { "description",
-                       "Optional stable board id. When omitted KiSurf uses the active "
-                       "PCB editor board." } } },
-                 { "base_hash",
-                   { { "type", "string" },
-                     { "description",
-                       "Optional live-board base hash. When omitted KiSurf derives it "
-                       "from the active editor context." } } },
-                 { "editor_context",
-                   { { "type", "object" },
-                     { "description",
-                       "Optional bounded editor context override for the session." },
-                     { "additionalProperties", true } } } } },
              { "additionalProperties", false } };
 }
 
@@ -324,8 +302,9 @@ nlohmann::json sessionRunCellToolParameters()
                { { "cell_text",
                    { { "type", "string" },
                      { "description",
-                       "Python session cell. The cell uses the KiSurf SDK and cannot "
-                       "access raw BOARD or BOARD_ITEM pointers." } } },
+                       "Python KiSurf cell applied to the current board. "
+                       "The cell uses the KiSurf SDK and cannot access raw BOARD "
+                       "or BOARD_ITEM pointers." } } },
                  { "cell_id",
                    { { "type", "string" },
                      { "description", "Optional caller supplied stable cell id." } } },
@@ -344,9 +323,9 @@ nlohmann::json sessionRunCellToolParameters()
 
 const char* sessionRunCellToolDescription()
 {
-    return "Run a Python-first KiSurf session cell. Python can only mutate "
-           "the board through typed session SDK operations; it cannot access "
-           "raw BOARD or BOARD_ITEM pointers and it cannot publish directly. "
+    return "Run a Python-first KiSurf cell against the current board. "
+           "Python can only mutate the current board through typed KiSurf SDK "
+           "operations; it cannot access raw BOARD or BOARD_ITEM pointers. "
            "Use max_operation_count to bound the emitted operation batch. "
            "Available atomic operation ids include: pcb.create_via, "
            "pcb.create_track_segment, pcb.create_track_polyline, "
@@ -385,17 +364,67 @@ nlohmann::json sessionAtomicOperationIdsJson()
 
 nlohmann::json internalPointSchema( const char* aDescription )
 {
-    return { { "type", "object" },
-             { "description", aDescription },
-             { "additionalProperties", false },
-             { "properties",
-               { { "x",
-                   { { "type", "integer" },
-                     { "description", "Internal-coordinate x value." } } },
-                 { "y",
-                   { { "type", "integer" },
-                     { "description", "Internal-coordinate y value." } } } } },
-             { "required", nlohmann::json::array( { "x", "y" } ) } };
+    return { { "description", aDescription },
+             { "anyOf",
+               nlohmann::json::array(
+                       { { { "type", "object" },
+                           { "description",
+                             "Model-facing point shortcut. Small numeric x/y values "
+                             "are millimeters; large integer values are KiCad internal "
+                             "units." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x",
+                                 { { "type", "number" },
+                                   { "description",
+                                     "X coordinate. Use millimeters for normal model "
+                                     "calls, e.g. 25.5." } } },
+                               { "y",
+                                 { { "type", "number" },
+                                   { "description",
+                                     "Y coordinate. Use millimeters for normal model "
+                                     "calls, e.g. 19.75." } } } } },
+                           { "required", nlohmann::json::array( { "x", "y" } ) } },
+                         { { "type", "object" },
+                           { "description", "Explicit millimeter point shortcut." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x_mm", { { "type", "number" } } },
+                               { "y_mm", { { "type", "number" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "x_mm", "y_mm" } ) } },
+                         { { "type", "object" },
+                           { "description", "Millimeter point with explicit units." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x", { { "type", "number" } } },
+                               { "y", { { "type", "number" } } },
+                               { "units",
+                                 { { "type", "string" },
+                                   { "enum",
+                                     nlohmann::json::array(
+                                             { "mm", "millimeter", "millimeters" } ) } } } } },
+                           { "required",
+                             nlohmann::json::array( { "x", "y", "units" } ) } },
+                         { { "type", "array" },
+                           { "description",
+                             "Two-number millimeter shortcut: [x_mm, y_mm]." },
+                           { "items", { { "type", "number" } } },
+                           { "minItems", 2 },
+                           { "maxItems", 2 } } } ) } };
+}
+
+
+nlohmann::json modelLengthSchema( const char* aDescription, double aMinimum )
+{
+    const std::string description =
+            std::string( aDescription )
+            + " Accepts internal integer units, or a positive number below "
+              "1000 as millimeters.";
+
+    return { { "type", "number" },
+             { "minimum", aMinimum },
+             { "description", description } };
 }
 
 
@@ -443,7 +472,7 @@ nlohmann::json operationScopeSchema( const char* aDescription )
              { "description", aDescription },
              { "enum",
                nlohmann::json::array(
-                       { "session", "affected_area", "selection", "region" } ) } };
+                       { "affected_area", "selection", "region" } ) } };
 }
 
 
@@ -527,13 +556,25 @@ nlohmann::json handleRefSchema( const char* aDescription )
              { "anyOf",
                nlohmann::json::array(
                        { { { "type", "string" },
-                           { "description", "Session handle alias." } },
+                           { "description", "Current-board handle alias." } },
                          { { "type", "object" },
                            { "additionalProperties", false },
                            { "properties",
-                             { { "session_id",
-                                 { { "type", "integer" }, { "minimum", 1 } } },
-                               { "handle_id",
+                             { { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "alias" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "uuid", { { "type", "string" } } },
+                               { "type", { { "type", "string" } } },
+                               { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "uuid" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "handle_id",
                                  { { "type", "integer" }, { "minimum", 1 } } },
                                { "generation",
                                  { { "type", "integer" }, { "minimum", 1 } } },
@@ -547,7 +588,7 @@ nlohmann::json handleArraySchema( const char* aDescription )
 {
     return { { "type", "array" },
              { "description", aDescription },
-             { "items", handleRefSchema( "Session handle or alias." ) },
+             { "items", handleRefSchema( "Current-board handle or alias." ) },
              { "minItems", 1 } };
 }
 
@@ -555,18 +596,24 @@ nlohmann::json handleArraySchema( const char* aDescription )
 nlohmann::json queryHandleFilterSchema()
 {
     return { { "description",
-               "Handle filter as an alias, session-local handle id, or handle object." },
+               "Handle filter as an alias, current-board handle id, or handle object." },
              { "anyOf",
                nlohmann::json::array(
                        { { { "type", "string" },
-                           { "description", "Session handle alias." } },
+                           { "description", "Current-board handle alias." } },
                          { { "type", "integer" }, { "minimum", 1 } },
                          { { "type", "object" },
                            { "additionalProperties", false },
                            { "properties",
-                             { { "session_id",
-                                 { { "type", "integer" }, { "minimum", 1 } } },
-                               { "handle_id",
+                             { { "uuid", { { "type", "string" } } },
+                               { "type", { { "type", "string" } } },
+                               { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "uuid" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "handle_id",
                                  { { "type", "integer" }, { "minimum", 1 } } },
                                { "generation",
                                  { { "type", "integer" }, { "minimum", 1 } } },
@@ -580,19 +627,15 @@ nlohmann::json queryItemsFilterSchema()
 {
     return { { "type", "object" },
              { "description",
-               "Optional semantic shadow-board filter aligned with AI_SHADOW_BOARD::QueryItems." },
+               "Optional current-board item filter." },
              { "additionalProperties", false },
              { "properties",
                { { "type", { { "type", "string" } } },
                  { "net", { { "type", "string" } } },
-                  { "layer", { { "type", "string" } } },
-                  { "alias", { { "type", "string" } } },
-                  { "selection", { { "type", "boolean" } } },
-                  { "live_board",
-                    { { "type", "boolean" },
-                      { "description",
-                        "Opt in to seeding live-board items into the active session shadow board." } } },
-                  { "bbox",
+                   { "layer", { { "type", "string" } } },
+                   { "alias", { { "type", "string" } } },
+                   { "selection", { { "type", "boolean" } } },
+                   { "bbox",
                     internalBoxSchema(
                             "Bounding box intersection filter in internal coordinates." ) },
                   { "handle", queryHandleFilterSchema() } } } };
@@ -617,8 +660,8 @@ nlohmann::json atomicOperationContractSchemas()
             { "properties",
               { { "position", internalPointSchema( "Via center position." ) },
                 { "net", { { "type", "string" } } },
-                { "diameter", { { "type", "integer" }, { "minimum", 1 } } },
-                { "drill", { { "type", "integer" }, { "minimum", 1 } } },
+                { "diameter", modelLengthSchema( "Via diameter.", 1 ) },
+                { "drill", modelLengthSchema( "Via drill.", 1 ) },
                 { "layer_pair",
                   { { "description", "Via layer pair, usually [start, end]." },
                     { "anyOf",
@@ -638,7 +681,7 @@ nlohmann::json atomicOperationContractSchemas()
                 { "end", internalPointSchema( "Track segment end point." ) },
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 1 } } },
+                { "width", modelLengthSchema( "Track width.", 1 ) },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
                   { { "type", "object" }, { "additionalProperties", true } } } } },
@@ -653,7 +696,7 @@ nlohmann::json atomicOperationContractSchemas()
                           2 ) },
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 1 } } },
+                { "width", modelLengthSchema( "Track width.", 1 ) },
                 { "alias", { { "type", "string" } } } } },
             { "required", nlohmann::json::array( { "points" } ) } } },
         { "pcb.create_zone",
@@ -663,7 +706,7 @@ nlohmann::json atomicOperationContractSchemas()
               { { "outline", zoneOutlineSchema() },
                 { "layer_set", stringArraySchema( "Copper layers for the zone." ) },
                 { "net", { { "type", "string" } } },
-                { "clearance", { { "type", "number" }, { "minimum", 0 } } },
+                { "clearance", modelLengthSchema( "Zone clearance.", 0 ) },
                 { "priority", { { "type", "number" }, { "minimum", 0 } } },
                 { "fill_mode",
                   { { "type", "string" },
@@ -697,13 +740,13 @@ nlohmann::json atomicOperationContractSchemas()
                         { "end", internalPointSchema( "Shape end point." ) },
                         { "center", internalPointSchema( "Circle center point." ) },
                         { "mid", internalPointSchema( "Arc midpoint." ) },
-                        { "radius", { { "type", "integer" }, { "minimum", 1 } } },
+                        { "radius", modelLengthSchema( "Circle radius.", 1 ) },
                         { "points",
                           internalPointArraySchema(
                                   "Polygon outline points using internal coordinates.",
                                   3 ) } } } } },
                 { "layer", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 0 } } },
+                { "width", modelLengthSchema( "Shape stroke width.", 0 ) },
                 { "fill", { { "type", "boolean" } } },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
@@ -714,7 +757,34 @@ nlohmann::json atomicOperationContractSchemas()
             { "additionalProperties", true },
             { "properties",
               { { "handles", handleArraySchema( "Items to move." ) },
+                { "handle", handleRefSchema( "Single item to move." ) },
+                { "items",
+                  { { "description",
+                      "Alias, handle object, array of aliases/handles, or per-item "
+                      "objects such as "
+                      "[{\"handle\":items[0].handle,\"position\":{\"x\":25.5,\"y\":19.75}}]. "
+                      "Use this per-item form when moving a queried item to an "
+                      "absolute target." } } },
+                { "item", handleRefSchema( "Single item to move." ) },
+                { "alias",
+                  { { "type", "string" },
+                    { "description",
+                      "Shortcut for moving a single item by alias." } } },
                 { "delta", internalPointSchema( "Movement delta." ) },
+                { "position",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
+                { "target",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
+                { "target_point",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
+                { "target_position",
+                  internalPointSchema( "Single target point shortcut." ) },
+                { "destination",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
+                { "to",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
+                { "move_to",
+                  internalPointSchema( "Single absolute target point shortcut." ) },
                 { "target_positions",
                   { { "description",
                       "Single target point, ordered target array, or alias/handle-id keyed target map." },
@@ -725,13 +795,27 @@ nlohmann::json atomicOperationContractSchemas()
                                   { "items",
                                     internalPointSchema( "Ordered target point." ) } },
                                 { { "type", "object" },
-                                  { "additionalProperties", true } } } ) } } } } },
-            { "required", nlohmann::json::array( { "handles" } ) } } },
+                                  { "additionalProperties", true } } } ) } } } } } } },
         { "pcb.delete_items",
           { { "type", "object" },
-            { "additionalProperties", false },
-            { "properties", { { "handles", handleArraySchema( "Items to delete." ) } } },
-            { "required", nlohmann::json::array( { "handles" } ) } } },
+            { "additionalProperties", true },
+            { "properties",
+              { { "handles", handleArraySchema( "Items to delete." ) },
+                { "handle", handleRefSchema( "Single item to delete." ) },
+                { "items",
+                  { { "description",
+                      "Alias, handle object, or array of aliases/handles to delete." } } },
+                { "item", handleRefSchema( "Single item to delete." ) },
+                { "alias",
+                  { { "type", "string" },
+                    { "description",
+                      "Shortcut for deleting a single item by alias." } } },
+                { "filter",
+                  { { "description",
+                      "Bulk delete matching current-board items. Prefer "
+                      "{\"type\":\"tracks\"} for deleting all track segments "
+                      "instead of enumerating every handle." },
+                    { "allOf", nlohmann::json::array( { queryItemsFilterSchema() } ) } } } } } } },
         { "pcb.update_item_geometry",
           { { "type", "object" },
             { "additionalProperties", true },
@@ -810,13 +894,13 @@ nlohmann::json atomicOperationContractSchemas()
                       nlohmann::json::array(
                               { "fill_empty_only", "allow_overwrite" } ) } } },
                 { "expected_surface_revision",
-                  { { "description", "Surface revision expected at accept time." } } },
+                  { { "description", "Surface revision expected at apply time." } } },
                 { "expected_schema_version",
-                  { { "description", "Surface schema version expected at accept time." } } },
+                  { { "description", "Surface schema version expected at apply time." } } },
                 { "expected_selection_fingerprint",
-                  { { "description", "Focused selection fingerprint expected at accept time." } } },
+                  { { "description", "Focused selection fingerprint expected at apply time." } } },
                 { "expected_overlap_set",
-                  { { "description", "Protected overlap set expected at accept time." } } },
+                  { { "description", "Protected overlap set expected at apply time." } } },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
                   { { "type", "object" }, { "additionalProperties", true } } } } },
@@ -836,8 +920,9 @@ nlohmann::json sessionAtomicOperationToolParameters()
                  { "arguments",
                    { { "type", "object" },
                      { "description",
-                       "Operation-specific JSON arguments. Handles must be session "
-                       "handles or aliases returned by prior session operations. "
+                       "Operation-specific JSON arguments. Handles must be "
+                       "current-board handles returned by query tools or aliases "
+                       "returned by prior operations. "
                        "Per-kind argument contracts are published in "
                        "$defs.operation_contracts." },
                      { "additionalProperties", true } } } } },
@@ -848,45 +933,11 @@ nlohmann::json sessionAtomicOperationToolParameters()
 }
 
 
-nlohmann::json sessionBeginStepToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "label",
-                   { { "type", "string" },
-                     { "description", "Short human-readable step label." } } },
-                 { "options",
-                   { { "type", "object" },
-                     { "description",
-                       "Optional step options such as validation level or preview mode." },
-                     { "additionalProperties", true } } } } },
-             { "required", nlohmann::json::array( { "label" } ) },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionStepIdToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "step_id",
-                   { { "type", "integer" },
-                     { "minimum", 1 },
-                     { "description", "AI execution session step id." } } } } },
-             { "required", nlohmann::json::array( { "step_id" } ) },
-             { "additionalProperties", false } };
-}
-
-
 nlohmann::json sessionQueryItemsToolParameters()
 {
     return { { "type", "object" },
              { "properties",
-               { { "filter", queryItemsFilterSchema() },
-                 { "live_board",
-                   { { "type", "boolean" },
-                     { "description",
-                       "Opt in to seeding live-board items into the active session shadow board." } } } } },
+               { { "filter", queryItemsFilterSchema() } } },
              { "additionalProperties", false } };
 }
 
@@ -898,87 +949,7 @@ nlohmann::json sessionQueryItemToolParameters()
                { { "handle", queryHandleFilterSchema() },
                  { "alias",
                    { { "type", "string" },
-                     { "description", "Optional session item alias to resolve." } } } } },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionCheckpointToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "name",
-                   { { "type", "string" },
-                     { "description", "Checkpoint name for later rollback." } } } } },
-             { "required", nlohmann::json::array( { "name" } ) },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionRollbackToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "checkpoint_id",
-                   { { "type", "integer" },
-                     { "minimum", 1 },
-                     { "description", "Checkpoint id returned by kisurf_checkpoint." } } },
-                 { "checkpoint_name",
-                   { { "type", "string" },
-                     { "description",
-                       "Checkpoint name previously supplied to kisurf_checkpoint or "
-                       "session.checkpoint(). Use this when the Python cell cannot know "
-                       "the runtime-assigned checkpoint id yet." } } } } },
-             { "required", nlohmann::json::array() },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionOptionalReasonToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "reason",
-                   { { "type", "string" },
-                     { "description", "Optional reason shown in the session journal." } } } } },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionAcceptToolParameters()
-{
-    return { { "type", "object" },
-             { "properties",
-               { { "base_hash",
-                   { { "type", "string" },
-                     { "description",
-                       "Optional live-board base hash to verify before accept. "
-                       "When omitted KiSurf derives it from the active editor context." } } } } },
-             { "additionalProperties", false } };
-}
-
-
-nlohmann::json sessionRenderPreviewToolParameters()
-{
-    nlohmann::json properties;
-    properties["region"] =
-            internalBoxSchema(
-                    "Optional board-space region to render around the shadow board preview." );
-    properties["layer_mask"] =
-            stringArraySchema( "Optional layer names to include." );
-    properties["mode"] = {
-        { "type", "string" },
-        { "enum", nlohmann::json::array( { "native", "visual", "semantic", "diff" } ) },
-        { "description", "Preview render mode." }
-    };
-    properties["view_mode"] = {
-        { "type", "string" },
-        { "description",
-          "Optional visual review mode or viewport profile requested by the model." }
-    };
-
-    return { { "type", "object" },
-             { "properties", std::move( properties ) },
+                     { "description", "Optional current-board item alias to resolve." } } } } },
              { "additionalProperties", false } };
 }
 
@@ -989,7 +960,7 @@ nlohmann::json sessionValidationToolParameters()
              { "properties",
                { { "scope",
                    operationScopeSchema(
-                           "Validation scope requested for the session attempt." ) },
+                           "Validation scope requested for the current board." ) },
                  { "level",
                    { { "type", "string" },
                      { "enum",
@@ -1001,15 +972,9 @@ nlohmann::json sessionValidationToolParameters()
                            "Optional board-space validation region in internal coordinates." ) },
                  { "handles",
                    { { "type", "array" },
-                     { "description", "Optional session handles to validate." },
+                     { "description", "Optional current-board handles to validate." },
                      { "items", queryHandleFilterSchema() },
-                     { "minItems", 1 } } },
-                 { "gate",
-                   { { "type", "string" },
-                     { "enum",
-                       nlohmann::json::array( { "preview", "accept" } ) },
-                     { "description",
-                       "Optional runtime gate requesting stricter validation facts." } } } } },
+                     { "minItems", 1 } } } } },
              { "additionalProperties", false } };
 }
 
@@ -1651,15 +1616,12 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
                     AI_PROVIDER_SETTINGS::DefaultContextLengthChars() );
     const size_t configuredInputBudget = m_Settings.EffectiveInputBudgetChars();
 
-    if( requestForCompile.m_RequestKind == AI_PROVIDER_REQUEST_KIND::Chat )
-    {
-        if( requestForCompile.m_MaxProviderInputChars >= defaultInputBudget )
-            requestForCompile.m_MaxProviderInputChars = configuredInputBudget;
-        else
-            requestForCompile.m_MaxProviderInputChars =
-                    std::min( requestForCompile.m_MaxProviderInputChars,
-                              configuredInputBudget );
-    }
+    if( requestForCompile.m_MaxProviderInputChars >= defaultInputBudget )
+        requestForCompile.m_MaxProviderInputChars = configuredInputBudget;
+    else
+        requestForCompile.m_MaxProviderInputChars =
+                std::min( requestForCompile.m_MaxProviderInputChars,
+                          configuredInputBudget );
 
     const AI_TOKEN_BUDGET_PLAN preflightPlan =
             AiPlanProviderInputBudgetForRequest( requestForCompile );
@@ -1713,14 +1675,56 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
     const wxString systemPrompt =
             compiledRequestForBody.m_SystemPromptOverride.IsEmpty()
                     ? wxString( wxS( "You are KiSurf's native KiCad assistant. Use the "
-                                      "supplied editor context and use the supplied tools "
-                                      "for any concrete KiCad inspection or edit task. "
-                                      "For Chat Agent edit requests, create or update the "
-                                      "AI execution session through tools; KiSurf will "
-                                      "apply completed chat edits as one undoable board "
-                                      "commit. Do not ask the user to click Show or Accept "
-                                      "for Chat Agent edits; if a tool succeeds, continue "
-                                      "the task and let KiSurf apply the finished edit. "
+                                      "minimal request context and call the supplied tools "
+                                      "on demand for any concrete KiCad inspection, visual "
+                                      "observation, board state, selection, validation, or "
+                                      "edit task. You must use the supplied tools when "
+                                      "current board details are needed; do not assume "
+                                      "them from "
+                                      "conversation text when a read-only tool can fetch "
+                                      "them. "
+                                      "Use kisurf_query_board_summary for board counts "
+                                      "such as track_segments, vias, zones, footprints, "
+                                      "pads, and total items. Use kisurf_query_items for "
+                                      "item lists and handles. Do not estimate board item "
+                                      "counts from screenshots, status text, visible "
+                                      "context, or chat history when these tools are "
+                                      "available. "
+                                      "For Chat Agent edit requests, use current-board "
+                                      "atomic or script tools directly. Do not use "
+                                      "preview, accept, reject, checkpoint, or rollback "
+                                      "workflows for Chat Agent work. If a current-board "
+                                      "mutation tool succeeds, continue the task and "
+                                      "re-query the board when you need to inspect the "
+                                      "result. When describing Chat Agent capabilities, "
+                                      "describe direct current-board edits and normal "
+                                      "KiCad undo; do not mention internal staging "
+                                      "surfaces, preview approval, or Accept buttons. "
+                                      "After a current-board mutation succeeds, "
+                                      "do not reuse created_handles or resolved_handles "
+                                      "from that tool result for later edit calls; use "
+                                      "aliases or re-query the current board first. "
+                                      "For bulk edits such as deleting all tracks or "
+                                      "routing, prefer one filtered atomic operation "
+                                      "such as pcb.delete_items with filter "
+                                      "{\"type\":\"tracks\"}; do not enumerate hundreds "
+                                      "of handles or fall back to UI instructions when "
+                                      "a filtered atomic operation can express the task. "
+                                      "If a broad query for tracks, vias, or routing "
+                                      "returns zero items, call kisurf_query_board_summary "
+                                      "before telling the user none exist; if the summary "
+                                      "reports nonzero track_segments or vias, retry with "
+                                      "canonical filters such as {\"type\":\"tracks\"}, "
+                                      "{\"type\":\"vias\"}, or {\"type\":\"route\"}. "
+                                      "For concrete edit requests, do not fall back to "
+                                      "manual KiCad UI instructions while a lower-level "
+                                      "script or atomic operation tool path remains "
+                                      "available; retry with the available tool path or "
+                                      "report the exact tool error. "
+                                      "When a tool fails, inspect error_code, retry_hint, "
+                                      "expected_arguments, valid_tools, and valid_operations "
+                                      "in the tool result; correct the tool name or arguments "
+                                      "and retry when retryable is true. "
                                       "Do not describe a board mutation as done "
                                       "unless the relevant tool result reports success. "
                                       "When a tool result includes validation facts, "
@@ -1772,123 +1776,83 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
     {
         body["tools"] = nlohmann::json::array(
             { functionTool( "kisurf_run_action",
-                            "Request a KiSurf editor action by native action name. Local KiSurf "
-                            "policy decides whether the action can run.",
+                            "Execute a safe allowlisted KiSurf editor action by native "
+                            "action name. This is immediate in Chat Agent flows; use "
+                            "kisurf_check_action when you only need availability or "
+                            "policy facts. Use current-board atomic/script tools for "
+                            "PCB edits instead of UI-action previews.",
                             actionToolParameters() ),
               functionTool( "kisurf_check_action",
                             "Check whether a KiSurf editor action is known, available, and "
                             "allowed without executing it.",
                             actionToolParameters() ),
-              functionTool( "kisurf_get_context_snapshot",
-                            "Read a bounded JSON snapshot of the current KiSurf editor "
-                            "context. This is read-only and never edits the board.",
-                            contextSnapshotToolParameters() ),
               functionTool( "kisurf_get_workspace_view",
                             "Preferred single read-only interface for a bounded workspace "
-                            "view: structured context, visual frame, and activity timeline.",
+                            "view: structured context, visual frame, panel state, and "
+                            "activity timeline. Use parameters to choose layers, regions, "
+                            "filters, overlays, pixels, and concise or detailed output.",
                             workspaceViewToolParameters() ),
-              functionTool( "kisurf_get_activity_timeline",
-                            "Read a bounded, optionally filtered timeline of recent "
-                            "user/model/tool activity. This is read-only.",
-                            activityTimelineToolParameters() ),
               functionTool( "kisurf_invoke_semantic_ui_action",
                             "Request an action on a current semantic UI node. KiSurf "
                             "checks the live semantic tree and refuses nodes that require "
                             "direct user confirmation.",
                             semanticUiActionToolParameters() ),
-              functionTool( "kisurf_open_session",
-                            "Open a KiSurf AI execution session for Python cells, typed "
-                            "atomic operations, rollback, validation, visual observation, "
-                            "and undoable commit. In Chat Agent flows, completed edits are "
-                            "applied automatically by KiSurf after the model finishes.",
-                            sessionOpenToolParameters() ),
-              functionTool( "kisurf_close_session",
-                            "Close the active KiSurf AI execution session without "
-                            "accepting pending preview changes.",
-                            sessionOptionalReasonToolParameters() ),
               functionTool( "kisurf_run_cell",
                             sessionRunCellToolDescription(),
                             sessionRunCellToolParameters() ),
               functionTool( "kisurf_run_atomic_operation",
-                            "Run one typed KiSurf atomic operation inside the active "
-                            "AI execution session. This mutates only the shadow board "
-                            "and journal; it cannot publish or mutate the live board "
-                            "during the tool call. In Chat Agent flows, KiSurf auto-applies "
-                            "completed edits after the final model response.",
+                            "Run one typed KiSurf atomic operation on the current design. "
+                            "In Chat Agent flows, successful mutations are applied "
+                            "directly to the current board during this tool call. "
+                            "Use query tools first when you need handles for existing "
+                            "items. After a successful Chat mutation, use aliases or "
+                            "re-query before later edit calls; do not reuse "
+                            "created_handles or resolved_handles from that result. "
+                            "For bulk deletion, prefer pcb.delete_items with a filter, "
+                            "for example filter {\"type\":\"tracks\"}, instead of "
+                            "enumerating every matching handle.",
                             sessionAtomicOperationToolParameters() ),
-              functionTool( "kisurf_begin_step",
-                            "Begin a named AI execution step. Atomic operations recorded "
-                            "after this call are grouped in the session journal.",
-                            sessionBeginStepToolParameters() ),
-              functionTool( "kisurf_end_step",
-                            "End a named AI execution step and return a bounded "
-                            "observation of the previewed result.",
-                            sessionStepIdToolParameters() ),
-              functionTool( "kisurf_checkpoint",
-                            "Create a rollback checkpoint in the active AI execution "
-                            "session.",
-                            sessionCheckpointToolParameters() ),
-              functionTool( "kisurf_rollback_to",
-                            "Rollback the active AI execution session to a prior "
-                            "checkpoint and mark newer handles stale.",
-                            sessionRollbackToolParameters() ),
-              functionTool( "kisurf_cancel_session",
-                            "Cancel the active AI execution session and stop any running "
-                            "Python worker.",
-                            sessionOptionalReasonToolParameters() ),
-              functionTool( "kisurf_reject_session",
-                            "Reject the active AI execution session preview and clear "
-                            "its native preview objects.",
-                            sessionOptionalReasonToolParameters() ),
-              functionTool( "kisurf_accept_session",
-                            "Accept the active AI execution session by replaying its "
-                            "journal to the live board as one undoable commit.",
-                            sessionAcceptToolParameters() ),
-              functionTool( "kisurf_observe_step",
-                            "Observe an AI execution step without closing it. This is "
-                            "used between Python cells to inspect intermediate results.",
-                            sessionStepIdToolParameters() ),
               functionTool( "kisurf_query_board_summary",
-                            "Query the semantic shadow-board summary for the active AI "
-                            "execution session without mutating the live board.",
+                            "Query a semantic summary of the current board. This is "
+                            "read-only. Use it for counts before reporting board state.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_items",
-                            "Query semantic shadow-board items for the active AI execution "
-                            "session without mutating the live board.",
+                            "Query current-board items by type, layer, net, selection, "
+                            "bbox, handle, or metadata. This is read-only; use returned "
+                            "handles for later edit tools.",
                             sessionQueryItemsToolParameters() ),
               functionTool( "kisurf_query_item",
-                            "Query one semantic shadow-board item by session handle or alias.",
+                            "Query one current-board item by handle or alias.",
                             sessionQueryItemToolParameters() ),
+              functionTool( "kisurf_query_unplaced_footprints",
+                            "On demand, compare schematic symbol footprint assignments "
+                            "against footprints already present on the current PCB and "
+                            "return placed and unplaced references. This is read-only "
+                            "placement inventory for deciding what to place next.",
+                            sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_selection",
-                            "Query the current editor selection attached to the active AI "
-                            "execution session observation context.",
+                            "Query the current editor selection from the live editor.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_nets",
-                            "Query net names visible to the active AI execution session "
-                            "from the shadow board and current editor context.",
+                            "Query net names from the current board and editor "
+                            "context.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_layers",
-                            "Query layer names visible to the active AI execution session "
-                            "from the shadow board and current editor context.",
+                            "Query layer names from the current board and editor "
+                            "context.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_design_rules",
-                            "Query design-rule context attached to the active AI execution "
-                            "session.",
+                            "Query current design-rule context.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_viewport",
                             "Query the current editor viewport, cursor, and visual-frame "
-                            "metadata for the active AI execution session.",
+                            "metadata.",
                             sessionEmptyToolParameters() ),
               functionTool( "kisurf_query_activity_timeline",
-                            "Query recent user/model/tool activity for the active AI "
-                            "execution session.",
+                            "Query recent user/model/tool activity.",
                             sessionEmptyToolParameters() ),
-              functionTool( "kisurf_render_preview",
-                            "Render the active AI execution session preview from the "
-                            "native preview scene.",
-                            sessionRenderPreviewToolParameters() ),
               functionTool( "kisurf_run_validation",
-                            "Run typed validation for the active AI execution session.",
+                            "Run typed validation against the current-board context.",
                             sessionValidationToolParameters() ) } );
     }
 
@@ -1897,7 +1861,8 @@ AI_PROVIDER_RESPONSE AI_OPENAI_COMPAT_PROVIDER::Generate(
     if( body.contains( "tools" ) && body["tools"].is_array()
         && !body["tools"].empty() )
     {
-        body["tool_choice"] = "auto";
+        body["tool_choice"] =
+                compiledRequestForBody.m_RequireToolCall ? "required" : "auto";
     }
 
     if( useStreaming )

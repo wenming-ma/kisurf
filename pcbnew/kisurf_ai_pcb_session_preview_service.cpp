@@ -18,6 +18,7 @@
 #include <string>
 #include <utility>
 #include <algorithm>
+#include <wx/thread.h>
 
 namespace
 {
@@ -1038,6 +1039,88 @@ std::optional<AI_OBJECT_REF> previewRefForShadowItem( const AI_SHADOW_ITEM& aIte
     return AI_OBJECT_REF( KIID(), type, shadowItemPreviewLabel( aItem ),
                           fromJson( details ) );
 }
+
+
+bool isHiddenAttemptRenderMode( const wxString& aArgumentsJson )
+{
+    const nlohmann::json arguments = parseObjectJson( aArgumentsJson );
+
+    if( !arguments.contains( "mode" ) || !arguments["mode"].is_string() )
+        return false;
+
+    const std::string mode = arguments["mode"].get<std::string>();
+    return mode == "hidden_attempt" || mode == "semantic_hidden_attempt";
+}
+
+
+bool shouldRenderSemanticOnly( const wxString& aArgumentsJson )
+{
+    return !wxThread::IsMain() || isHiddenAttemptRenderMode( aArgumentsJson );
+}
+
+
+bool shadowItemHasValidationOverlay( const AI_SHADOW_ITEM& aItem )
+{
+    return !metadataValue( aItem, wxS( "validation_status" ) ).IsEmpty()
+           || !metadataValue( aItem, wxS( "validation_severity" ) ).IsEmpty();
+}
+
+
+AI_SESSION_PREVIEW_RESULT renderSemanticOnlyPreview(
+        const AI_EXECUTION_SESSION& aSession, const wxString& aArgumentsJson )
+{
+    AI_SESSION_PREVIEW_RESULT result;
+    const uint64_t previewId = aSession.SessionId();
+    size_t renderedItemCount = 0;
+    size_t renderedOverlayCount = 0;
+    std::vector<AI_VISUAL_ANCHOR_RECORD> previewAnchors;
+
+    for( const AI_SHADOW_ITEM& item : aSession.ShadowBoard().QueryItems() )
+    {
+        if( !previewRefForShadowItem( item ) )
+            continue;
+
+        ++renderedItemCount;
+
+        if( std::optional<AI_VISUAL_ANCHOR_RECORD> anchor =
+                    previewAnchorForShadowItem( item ) )
+        {
+            previewAnchors.push_back( *anchor );
+        }
+
+        if( shadowItemHasValidationOverlay( item ) )
+            ++renderedOverlayCount;
+    }
+
+    AI_VISUAL_SNAPSHOT previewFrame;
+    previewFrame.m_FrameId = wxString::Format(
+            wxS( "hidden_preview_after_%llu" ),
+            static_cast<unsigned long long>( previewId ) );
+    previewFrame.m_FrameKind = wxS( "preview_after" );
+    previewFrame.m_Source = wxS( "pcbnew.hidden_semantic_preview" );
+    previewFrame.m_UnavailableReason =
+            wxS( "hidden_attempt_preview_is_semantic_only" );
+
+    result.m_Ok = true;
+    result.m_PreviewId = previewId;
+    result.m_RenderedItemCount = renderedItemCount;
+    result.m_ResultJson = fromJson( {
+        { "status", "preview_rendered" },
+        { "native_preview", true },
+        { "hidden_thread_safe_render", true },
+        { "visible_preview_created", false },
+        { "preview_id", previewId },
+        { "arguments", parseObjectJson( aArgumentsJson ) },
+        { "rendered_item_count", renderedItemCount },
+        { "rendered_overlay_count", renderedOverlayCount },
+        { "preview_frame",
+          previewFrameJson( previewFrame, previewId, aSession,
+                            renderedItemCount, renderedOverlayCount,
+                            previewAnchors ) }
+    } );
+
+    return result;
+}
 } // namespace
 
 
@@ -1124,6 +1207,9 @@ AI_SESSION_PREVIEW_RESULT KISURF_AI_PCB_SESSION_PREVIEW_SERVICE::RenderPreview(
         result.m_Message = wxS( "PCB session preview service can only render PCB sessions." );
         return result;
     }
+
+    if( shouldRenderSemanticOnly( aArgumentsJson ) )
+        return renderSemanticOnlyPreview( aSession, aArgumentsJson );
 
     if( !ensureBackend( result ) )
         return result;

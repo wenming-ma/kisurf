@@ -92,7 +92,6 @@
 #include <kisurf/ai/ai_context_anchor_provider.h>
 #include <kisurf/ai/ai_editor_activity_recorder.h>
 #include <kisurf/ai/ai_suggestion_operations.h>
-#include <kisurf/ai/ai_visual_snapshot.h>
 #include <kisurf_ai_pcb_context_adapter.h>
 #include <kisurf_ai_pcb_move_edit_adapter.h>
 #include <kisurf_ai_pcb_object_resolver.h>
@@ -103,6 +102,7 @@
 #include <kisurf_ai_pcb_session_validation_service.h>
 #include <kisurf_ai_pcb_suggestion_review.h>
 #include <kisurf_ai_pcb_tool_state_provider.h>
+#include <kisurf_ai_agent_panel_ui.h>
 #include <local_history.h>
 #include <tool/action_manager.h>
 #include <tool/tool_manager.h>
@@ -417,14 +417,6 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
                 if( GetBoard() )
                     index = KISURF_AI_PCB_CONTEXT_ADAPTER( *GetBoard() ).BuildIndex();
 
-                AI_VISUAL_SNAPSHOT visual;
-
-                if( GetCanvas() )
-                    CaptureAiVisualSnapshotFromCanvas( *GetCanvas(), visual );
-
-                if( visual.HasPixels() )
-                    index.SetVisualSnapshot( visual );
-
                 AI_CONTEXT_SNAPSHOT snapshot = index.BuildSnapshot();
 
                 if( m_aiToolStateProvider )
@@ -667,7 +659,16 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
     m_auimgr.GetPane( NetInspectorPanelName() ).Show( m_ShowNetInspector );
     m_auimgr.GetPane( SearchPaneName() ).Show( m_ShowSearch );
     m_auimgr.GetPane( DesignBlocksPaneName() ).Show( GetPcbNewSettings()->m_AuiPanels.design_blocks_show );
-    m_auimgr.GetPane( AgentPaneName() ).Show( GetPcbNewSettings()->m_AuiPanels.show_agent_panel );
+
+    if( wxAuiPaneInfo& agentPanel = m_auimgr.GetPane( AgentPaneName() );
+        GetPcbNewSettings()->m_AuiPanels.show_agent_panel )
+    {
+        KisurfPrepareVisibleAgentPane( agentPanel );
+    }
+    else
+    {
+        agentPanel.Show( false );
+    }
 
     // The selection filter doesn't need to grow in the vertical direction when docked
     m_auimgr.GetPane( "SelectionFilter" ).dock_proportion = 0;
@@ -762,6 +763,12 @@ PCB_EDIT_FRAME::PCB_EDIT_FRAME( KIWAY* aKiway, wxWindow* aParent ) :
               {
                   redrawNetnames();
                   m_lastNetnamesViewport = viewport;
+              }
+
+              if( m_agentPanel && m_agentPanel->ShouldContinueBackgroundIdlePulse() )
+              {
+                  m_agentPanel->PulseBackgroundAgent( wxS( "pcb.active_tool_idle" ) );
+                  aEvent.RequestMore();
               }
 
               // Do not forget to pass the Idle event to other clients:
@@ -1140,9 +1147,7 @@ void PCB_EDIT_FRAME::refreshAiPcbSessionServices()
     if( !m_aiSessionShadowSeeder )
         m_aiSessionShadowSeeder =
                 std::make_unique<KISURF_AI_PCB_SESSION_SHADOW_SEEDER>(
-                        [this]() { return GetBoard(); },
-                        KISURF_AI_PCB_SESSION_SHADOW_SEEDER::SEED_OPTIONS{
-                                false } );
+                        [this]() { return GetBoard(); } );
 
     if( !m_aiSessionValidationService )
         m_aiSessionValidationService =
@@ -2179,6 +2184,20 @@ void PCB_EDIT_FRAME::ShowBoardSetupDialog( const wxString& aInitialPage, wxWindo
 
     // Reset m_boardSetupDlg after the dialog is closed
     m_boardSetupDlg = nullptr;
+}
+
+
+void PCB_EDIT_FRAME::NotifyAiPanelSemanticStateChanged( const wxString& aReason )
+{
+    if( !m_agentPanel )
+        return;
+
+    CallAfter(
+            [this, reason = aReason]()
+            {
+                if( m_agentPanel )
+                    m_agentPanel->PulseBackgroundAgent( reason );
+            } );
 }
 
 

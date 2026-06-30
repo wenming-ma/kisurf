@@ -90,8 +90,10 @@ BOOST_AUTO_TEST_CASE( PolicyDeniesUnsafeActions )
     modifying.m_Action = actionDescriptor( wxS( "pcbnew.Place.move" ),
                                            AI_ACTION_SAFETY::Modifying );
     policy.AllowAction( modifying.m_Action.m_Name );
-    BOOST_CHECK_EQUAL( policy.Evaluate( modifying ).m_ErrorCode,
-                       wxString( wxS( "requires_preview" ) ) );
+    AI_TOOL_INVOCATION_RESULT modifyingResult = policy.Evaluate( modifying );
+    BOOST_CHECK_EQUAL( modifyingResult.m_ErrorCode,
+                       wxString( wxS( "modifying_action_not_available" ) ) );
+    BOOST_CHECK( modifyingResult.m_Message.Contains( wxS( "current-board atomic" ) ) );
 
     AI_TOOL_INVOCATION_REQUEST destructive;
     destructive.m_Action = actionDescriptor( wxS( "pcbnew.Edit.delete" ),

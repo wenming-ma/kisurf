@@ -21,86 +21,66 @@ wxString deniedResultJson( const AI_TOOL_INVOCATION_RESULT& aResult )
                                { "allowed", aResult.m_Allowed },
                                { "executed", aResult.m_Executed },
                                { "dry_run", false },
+                               { "ok", false },
                                { "status", "denied" },
                                { "error_code", toUtf8String( aResult.m_ErrorCode ) },
-                               { "message", toUtf8String( aResult.m_Message ) } };
+                               { "message", toUtf8String( aResult.m_Message ) },
+                               { "retryable", true },
+                               { "retry_hint", "" },
+                               { "valid_tools",
+                                 nlohmann::json::array(
+                                         { "kisurf_run_action",
+                                           "kisurf_check_action" } ) },
+                               { "expected_arguments",
+                                 { { "type", "object" },
+                                   { "required",
+                                     nlohmann::json::array( { "action" } ) },
+                                   { "properties",
+                                     { { "action",
+                                         { { "type", "string" },
+                                           { "description",
+                                             "Name from the current AI action catalog." } } },
+                                       { "arguments",
+                                         { { "type", "object" },
+                                           { "description",
+                                             "Optional action-specific arguments." } } },
+                                       { "dry_run",
+                                         { { "type", "boolean" },
+                                           { "description",
+                                             "Ignored by kisurf_run_action; use "
+                                             "kisurf_check_action when you only need "
+                                             "availability/policy facts." } } } } } } } };
+
+    const std::string code = toUtf8String( aResult.m_ErrorCode );
+
+    if( code == "unknown_tool" )
+    {
+        payload["retry_hint"] =
+                "Use kisurf_run_action or kisurf_check_action with a JSON object "
+                "containing an action string.";
+    }
+    else if( code == "malformed_arguments" )
+    {
+        payload["retry_hint"] =
+                "Retry with a valid JSON object such as "
+                "{\"action\":\"pcbnew.SomeAction\",\"arguments\":{}}.";
+    }
+    else if( code == "unknown_action" )
+    {
+        payload["retry_hint"] =
+                "The requested action is not in the current action catalog. "
+                "Call kisurf_get_workspace_view to inspect the current workspace "
+                "and choose an available action or use current-board atomic/script "
+                "tools for board edits.";
+    }
+    else
+    {
+        payload["retry_hint"] =
+                "Fix the requested action or arguments according to error_code "
+                "and retry only if the task still requires this action.";
+    }
 
     return wxString::FromUTF8( payload.dump().c_str() );
-}
-
-
-wxString fromJson( const nlohmann::json& aJson )
-{
-    return wxString::FromUTF8( aJson.dump().c_str() );
-}
-
-
-wxString actionPreviewArgumentsJson( const AI_TOOL_CALL_RECORD& aToolCall,
-                                     const wxString& aActionName,
-                                     const wxString& aArgumentsJson )
-{
-    nlohmann::json payload = {
-        { "operation", "action_preview" },
-        { "action", toUtf8String( aActionName ) },
-        { "tool_call_id", toUtf8String( aToolCall.m_ToolCallId ) }
-    };
-
-    if( !aArgumentsJson.IsEmpty() )
-        payload["arguments_json"] = toUtf8String( aArgumentsJson );
-
-    return fromJson( payload );
-}
-
-
-AI_SUGGESTION_RECORD actionPreviewSuggestion(
-        const AI_PROVIDER_REQUEST& aRequest,
-        const AI_TOOL_CALL_RECORD& aToolCall,
-        const AI_ACTION_DESCRIPTOR& aDescriptor,
-        const wxString& aArgumentsJson )
-{
-    AI_CONTEXT_VERSION version = aRequest.m_ContextVersion.IsValid()
-                                 ? aRequest.m_ContextVersion
-                                 : aRequest.m_ContextSnapshot.m_Version;
-
-    AI_SUGGESTION_RECORD suggestion;
-    suggestion.m_EditorKind = aRequest.m_EditorKind;
-    suggestion.m_Kind = AI_SUGGESTION_KIND::Preview;
-    suggestion.m_ContextVersion = version;
-    suggestion.m_Title = wxS( "Preview action" );
-    suggestion.m_Body = aDescriptor.m_FriendlyName.IsEmpty()
-                        ? aDescriptor.m_Name
-                        : aDescriptor.m_FriendlyName;
-    suggestion.m_ContextKind = AiDynamicContextKind( aRequest.m_ContextSnapshot );
-    suggestion.m_ContextDetailsJson =
-            AiDynamicContextDetailsJson( aRequest.m_ContextSnapshot,
-                                         wxS( "action_preview" ) );
-    suggestion.m_ArgumentsJson =
-            actionPreviewArgumentsJson( aToolCall, aDescriptor.m_Name, aArgumentsJson );
-    suggestion.m_Fingerprint = wxS( "action|" ) + version.AsString() + wxS( "|" )
-                               + aDescriptor.m_Name + wxS( "|" ) + aArgumentsJson;
-    return suggestion;
-}
-
-
-wxString actionPreviewResultJson(
-        const AI_TOOL_INVOCATION_RESULT& aResult,
-        const std::optional<AI_SUGGESTION_RECORD>& aStoredSuggestion )
-{
-    nlohmann::json payload = {
-        { "action", toUtf8String( aResult.m_ActionName ) },
-        { "allowed", aResult.m_Allowed },
-        { "executed", aResult.m_Executed },
-        { "dry_run", true },
-        { "status", "preview_ready" },
-        { "preview_required", true },
-        { "error_code", toUtf8String( aResult.m_ErrorCode ) },
-        { "message", toUtf8String( aResult.m_Message ) }
-    };
-
-    if( aStoredSuggestion )
-        payload["suggestion_id"] = aStoredSuggestion->m_Id;
-
-    return fromJson( payload );
 }
 
 
@@ -218,13 +198,10 @@ AI_TOOL_INVOCATION_RESULT AI_ACTION_TOOL_CALL_HANDLER::HandleToolCall(
                              wxS( "malformed_arguments" ), parseError );
     }
 
-    // Model-originated action calls are preview-first. Materialization is handled
-    // through explicit user-accepted edit paths rather than model arguments.
-    if( aToolCall.m_ToolName == wxS( "kisurf_check_action" )
-        || aToolCall.m_ToolName == wxS( "kisurf_run_action" ) )
-    {
+    if( aToolCall.m_ToolName == wxS( "kisurf_check_action" ) )
         dryRun = true;
-    }
+    else if( aToolCall.m_ToolName == wxS( "kisurf_run_action" ) )
+        dryRun = false;
 
     const AI_ACTION_DESCRIPTOR* descriptor = findAction( aRequest, actionName );
 
@@ -248,20 +225,6 @@ AI_TOOL_INVOCATION_RESULT AI_ACTION_TOOL_CALL_HANDLER::HandleToolCall(
 
     AI_TOOL_EXECUTOR executor( m_Policy, m_Runner, m_ActivityLog );
     AI_TOOL_INVOCATION_RESULT result = executor.Invoke( request );
-
-    if( result.m_Allowed && request.m_DryRun && m_SuggestionSink
-        && aToolCall.m_ToolName == wxS( "kisurf_run_action" ) )
-    {
-        std::optional<AI_SUGGESTION_RECORD> stored =
-                m_SuggestionSink( actionPreviewSuggestion(
-                        aRequest, aToolCall, *descriptor, argumentsJson ) );
-
-        if( stored )
-        {
-            result.m_Message = wxS( "Action preview suggestion created." );
-            result.m_ResultJson = actionPreviewResultJson( result, stored );
-        }
-    }
 
     return result;
 }

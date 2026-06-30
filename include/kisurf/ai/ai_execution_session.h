@@ -33,6 +33,7 @@ enum class AI_SESSION_OPERATION_KIND
     QueryBoardSummary,
     QueryItems,
     QueryItem,
+    QueryUnplacedFootprints,
     QuerySelection,
     QueryNets,
     QueryLayers,

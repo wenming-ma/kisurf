@@ -116,7 +116,6 @@ wxString agentPanelSummary( const AI_SEMANTIC_UI_TREE& aTree )
     const AI_SEMANTIC_UI_NODE* background =
             aTree.FindNode( wxS( "agent.background.toggle" ) );
     const AI_SEMANTIC_UI_NODE* send = aTree.FindNode( wxS( "agent.send" ) );
-    const AI_SEMANTIC_UI_NODE* reject = aTree.FindNode( wxS( "agent.reject" ) );
 
     wxString summary;
     summary << wxS( "background=" )
@@ -131,9 +130,7 @@ wxString agentPanelSummary( const AI_SEMANTIC_UI_TREE& aTree )
             << nodeTextValue( aTree, wxS( "agent.composer.status" ) )
             << wxS( "; send=" )
             << ( send && send->m_Enabled ? wxS( "enabled" )
-                                          : wxS( "disabled" ) )
-            << wxS( "; active_suggestion=" )
-            << ( reject && reject->m_Enabled ? wxS( "yes" ) : wxS( "no" ) );
+                                          : wxS( "disabled" ) );
 
     return summary;
 }
@@ -205,17 +202,6 @@ AI_SEMANTIC_UI_TREE AiAgentPanelSemanticTree(
              wxS( "Send" ), aView.m_InputHasText, wxS( "invoke" ) );
     addNode( tree, wxS( "agent.stop" ), wxS( "agent.root" ), wxS( "button" ),
              wxS( "Stop" ), true, wxS( "invoke" ) );
-    addNode( tree, wxS( "agent.preview.invoke" ), wxS( "agent.tabs.chat" ),
-             wxS( "button" ), wxS( "Preview" ),
-             aView.m_HasActiveSuggestion && aView.m_CanPreviewSuggestion,
-             wxS( "invoke" ) );
-    addNode( tree, wxS( "agent.accept" ), wxS( "agent.tabs.chat" ),
-             wxS( "button" ), wxS( "Accept" ),
-             aView.m_HasActiveSuggestion && aView.m_CanAcceptSuggestion,
-             wxS( "invoke" ), AI_SEMANTIC_UI_TEXT_POLICY::None, wxEmptyString, true );
-    addNode( tree, wxS( "agent.reject" ), wxS( "agent.tabs.chat" ),
-             wxS( "button" ), wxS( "Reject" ), aView.m_HasActiveSuggestion,
-             wxS( "invoke" ) );
 
     return tree;
 }

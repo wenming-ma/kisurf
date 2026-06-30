@@ -73,6 +73,9 @@ protected:
     PANEL_SETUP_NETCLASSES*             m_netClasses;
 
 private:
+    void installAiSemanticEventHandlers( wxWindow& aRoot );
+    void notifyAiSemanticStateChanged( const wxString& aReason );
+
     size_t m_currentPage;              // the current page index
     size_t m_layersPage;
     size_t m_physicalStackupPage;
@@ -92,6 +95,7 @@ private:
     size_t m_embeddedFilesPage;
     size_t m_tuningProfilesPage;
     uint64_t m_aiActivePreviewId = 0;
+    std::vector<wxWindow*> m_aiSemanticObservedWindows;
     std::vector<std::unique_ptr<AI_STRUCTURED_SURFACE_WX_GRID_PREVIEW_OVERLAY_IO>>
             m_aiGridPreviewOverlayIos;
 };

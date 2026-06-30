@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <memory>
 #include <deque>
+#include <stdexcept>
 #include <wx/arrstr.h> // for MSVC to see std::vector<wxString> is exported from wx
 #include <wx/filefn.h>
 #include <wx/ffile.h>
@@ -207,6 +208,46 @@ public:
         call.m_ToolName = wxS( "kisurf_run_action" );
         call.m_ArgumentsJson = wxS( "{\"action\":\"common.Control.showAgentPanel\"}" );
         response.m_ToolCalls.push_back( call );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
+class ONE_TOOL_THEN_CAPTURE_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "one tool then capture" );
+
+        if( m_CallCount == 1 )
+        {
+            response.m_Body = wxS( "Initial turn recorded." );
+            return response;
+        }
+
+        if( aRequest.m_ToolResults.empty() )
+        {
+            response.m_Body = wxS( "Tool call requested." );
+
+            AI_TOOL_CALL_RECORD call;
+            call.m_RequestId = aRequest.m_RequestId;
+            call.m_ToolCallId = wxS( "call_capture_context" );
+            call.m_ToolName = wxS( "kisurf_run_action" );
+            call.m_ArgumentsJson = wxS( "{\"action\":\"common.Control.showAgentPanel\"}" );
+            response.m_ToolCalls.push_back( call );
+            return response;
+        }
+
+        response.m_Body = wxS( "Tool result received with chat context." );
         return response;
     }
 
@@ -511,6 +552,126 @@ public:
 };
 
 
+class THROWING_NEXT_ACTION_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        wxUnusedVar( aRequest );
+        throw std::runtime_error( "next action provider exploded" );
+    }
+};
+
+
+class PANEL_SURFACE_PATCH_THEN_RENDER_PROVIDER : public AI_PROVIDER
+{
+public:
+    AI_PROVIDER_RESPONSE Generate( const AI_PROVIDER_REQUEST& aRequest ) override
+    {
+        ++m_CallCount;
+        m_Requests.push_back( aRequest );
+
+        AI_PROVIDER_RESPONSE response;
+        response.m_RequestId = aRequest.m_RequestId;
+        response.m_Title = wxS( "panel surface patch then render" );
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionDecision )
+        {
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"attempt\","
+                         "\"opportunity_type\":\"structured_surface\","
+                         "\"selected_candidate_index\":0,"
+                         "\"target_scope\":{\"kind\":\"column\","
+                         "\"panel_id\":\"board_setup.clearance\","
+                         "\"surface_id\":\"board_setup.clearance\","
+                         "\"table_id\":\"clearance.rules\","
+                         "\"column\":\"class\"},"
+                         "\"reason_code\":\"panel_surface_patch_probe\"}" );
+            return response;
+        }
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+        {
+            if( aRequest.m_ToolResults.empty() )
+            {
+                response.m_Body = wxS( "Need SurfacePatch lowering facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_panel_surface_patch" );
+                call.m_ToolName = wxS( "script_run_bounded_plan" );
+                call.m_ArgumentsJson =
+                        wxS( "{\"plan\":{\"operations\":[{"
+                             "\"kind\":\"surface.apply_patch\","
+                             "\"arguments\":{"
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"expected_surface_revision\":17,"
+                             "\"expected_schema_version\":\"net-class-v1\","
+                             "\"expected_selection_fingerprint\":\"cell:row.power:class\","
+                             "\"expected_overlap_set\":[\"row.power\",\"row.gpio\"],"
+                             "\"target_scope\":{\"kind\":\"column\","
+                             "\"panel_id\":\"board_setup.clearance\","
+                             "\"surface_id\":\"board_setup.clearance\","
+                             "\"table_id\":\"clearance.rules\","
+                             "\"column\":\"class\"},"
+                             "\"patch\":{\"kind\":\"SurfacePatch\","
+                             "\"operations\":["
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.power\","
+                             "\"column_id\":\"class\",\"value\":\"Power\"},"
+                             "{\"op\":\"set_cell\",\"row_id\":\"row.gpio\","
+                             "\"column_id\":\"class\",\"value\":\"GPIO\"}]},"
+                             "\"alias\":\"panel_surface_patch_fill_class\"}}]},"
+                             "\"max_steps\":4}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 1 )
+            {
+                response.m_Body = wxS( "Need structured surface render facts." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_panel_render_surface_patch" );
+                call.m_ToolName = wxS( "render_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            if( aRequest.m_ToolResults.size() == 2 )
+            {
+                response.m_Body = wxS( "Need validation facts after structured surface render." );
+
+                AI_TOOL_CALL_RECORD call;
+                call.m_RequestId = aRequest.m_RequestId;
+                call.m_ToolCallId = wxS( "call_panel_validate_surface_patch" );
+                call.m_ToolName = wxS( "validate_hidden_attempt" );
+                call.m_ArgumentsJson = wxS( "{}" );
+                response.m_ToolCalls.push_back( call );
+                return response;
+            }
+
+            response.m_Body =
+                    wxS( "{\"decision_kind\":\"publish\","
+                         "\"reason_code\":\"acceptable\","
+                         "\"review_basis\":{\"render_valid\":true,"
+                         "\"validation_passed\":true,"
+                         "\"budget_within_limits\":true,"
+                         "\"self_review_passed\":true}}" );
+            return response;
+        }
+
+        response.m_Body = wxS( "{\"decision_kind\":\"abandon\"}" );
+        return response;
+    }
+
+    int                              m_CallCount = 0;
+    std::vector<AI_PROVIDER_REQUEST> m_Requests;
+};
+
+
 class REVIEW_TOOL_ERROR_AFTER_EXECUTED_PANEL_NEXT_ACTION_PROVIDER : public AI_PROVIDER
 {
 public:
@@ -753,6 +914,25 @@ AI_CONTEXT_SNAPSHOT makeViewportDriftedViaNextActionContext()
 }
 
 
+AI_CONTEXT_SNAPSHOT makeRoutingNextActionContext()
+{
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_Version.m_DocumentRevision = 11;
+    snapshot.m_Version.m_ViewRevision = 3;
+    snapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    snapshot.m_ToolState.m_ContextVersion = snapshot.m_Version;
+    snapshot.m_ToolState.m_ModeContextJson =
+            wxS( "{\"net\":\"GND\",\"layer\":\"F.Cu\",\"width\":150000,"
+                 "\"start\":{\"x\":100,\"y\":200},"
+                 "\"cursor\":{\"x\":260,\"y\":200}}" );
+    snapshot.m_ToolState.m_HasCursorBoardPosition = true;
+    snapshot.m_ToolState.m_CursorBoardPosition = VECTOR2I( 240, 220 );
+    return snapshot;
+}
+
+
 wxString panelTableStateJson()
 {
     return wxS( "{\"tables\":[{\"id\":\"clearance.rules\","
@@ -767,6 +947,45 @@ wxString panelTableStateJson()
                 "\"cells\":{\"clearance\":\"\"}},"
                 "{\"id\":\"row.signal\",\"label\":\"Signal\","
                 "\"cells\":{\"clearance\":\"\"}}]}]}" );
+}
+
+
+AI_CONTEXT_SNAPSHOT makePanelFillTargetScopeContext()
+{
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_Version.m_DocumentRevision = 15;
+    snapshot.m_Version.m_ViewRevision = 4;
+    snapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    snapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Unknown;
+    snapshot.m_ToolState.m_ContextVersion = snapshot.m_Version;
+
+    AI_PANEL_STATE_RECORD panel;
+    panel.m_Id = wxS( "board_setup.clearance" );
+    panel.m_Title = wxS( "Board Setup" );
+    panel.m_FocusedControlId = wxS( "clearance.rules.row.default.class" );
+    panel.m_FocusedControlLabel = wxS( "Net class" );
+    panel.m_StateJson =
+            wxS( "{\"schema_version\":\"net-class-v1\","
+                 "\"target_scope\":{\"kind\":\"column\","
+                 "\"panel_id\":\"board_setup.clearance\","
+                 "\"table_id\":\"clearance.rules\","
+                 "\"column\":\"class\"},"
+                 "\"focused_cell\":{\"table_id\":\"clearance.rules\","
+                 "\"row_id\":\"row.default\","
+                 "\"column_id\":\"class\"},"
+                 "\"tables\":[{\"id\":\"clearance.rules\","
+                 "\"title\":\"Clearance rules\","
+                 "\"columns\":[{\"id\":\"class\",\"label\":\"Class\"}],"
+                 "\"rows\":["
+                 "{\"id\":\"row.default\",\"label\":\"Default\","
+                 "\"cells\":{\"class\":\"Signal\"}},"
+                 "{\"id\":\"row.power\",\"label\":\"Power\","
+                 "\"cells\":{\"class\":\"\"}},"
+                 "{\"id\":\"row.gpio\",\"label\":\"GPIO\","
+                 "\"cells\":{\"class\":\"\"}}]}]}" );
+    snapshot.m_PanelStates.push_back( panel );
+    return snapshot;
 }
 
 
@@ -895,7 +1114,8 @@ BOOST_AUTO_TEST_CASE( SendAppendsUserAndAgentMessages )
     BOOST_CHECK_EQUAL( model.Messages().at( 0 ).m_Role, wxString( wxS( "user" ) ) );
     BOOST_CHECK_EQUAL( model.Messages().at( 0 ).m_Text, wxString( wxS( "inspect board" ) ) );
     BOOST_CHECK_EQUAL( model.Messages().at( 1 ).m_Role, wxString( wxS( "assistant" ) ) );
-    BOOST_CHECK( model.Messages().at( 1 ).m_Text.Contains( wxS( "inspect board" ) ) );
+    BOOST_CHECK_EQUAL( model.Messages().at( 1 ).m_Text, response.m_Body );
+    BOOST_CHECK( !model.Messages().at( 1 ).m_Text.IsEmpty() );
 }
 
 
@@ -909,16 +1129,16 @@ BOOST_AUTO_TEST_CASE( PreparedChatRequestAppendsUserBeforeProviderRuns )
     snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
 
     AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
-            wxS( "inspect this board" ), AI_EDITOR_KIND::Pcb, snapshot );
+            wxS( "remember this note" ), AI_EDITOR_KIND::Pcb, snapshot );
 
     BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 0 );
     BOOST_REQUIRE_EQUAL( model.Messages().size(), 1 );
     BOOST_CHECK_EQUAL( model.Messages().front().m_Role, wxString( wxS( "user" ) ) );
     BOOST_CHECK_EQUAL( model.Messages().front().m_Text,
-                       wxString( wxS( "inspect this board" ) ) );
+                       wxString( wxS( "remember this note" ) ) );
     BOOST_CHECK( state.m_DocumentWriteOwned );
     BOOST_CHECK_EQUAL( state.m_Request.m_UserText,
-                       wxString( wxS( "inspect this board" ) ) );
+                       wxString( wxS( "remember this note" ) ) );
 
     AI_PROVIDER_RESPONSE response = model.ExecutePreparedChatRequest( state );
     BOOST_CHECK_EQUAL( providerPtr->m_CallCount, 1 );
@@ -928,6 +1148,22 @@ BOOST_AUTO_TEST_CASE( PreparedChatRequestAppendsUserBeforeProviderRuns )
     BOOST_REQUIRE_EQUAL( model.Messages().size(), 2 );
     BOOST_CHECK_EQUAL( model.Messages().back().m_Role,
                        wxString( wxS( "assistant" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( PreparedChatRequestAllowsLongEnoughToolLoopForCrud )
+{
+    auto provider = std::make_unique<CAPTURING_AI_PROVIDER>();
+    AI_AGENT_PANEL_MODEL model( std::move( provider ) );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "delete all track segments and verify" ), AI_EDITOR_KIND::Pcb,
+            snapshot );
+
+    BOOST_CHECK_GE( state.m_Request.m_MaxToolRounds, 12 );
 }
 
 
@@ -958,6 +1194,42 @@ BOOST_AUTO_TEST_CASE( PreparedChatRequestDoesNotDuplicateCurrentUserInRecentTurn
         sawRecentTurns = true;
         BOOST_CHECK( block.m_Text.Contains( wxS( "prior constraint" ) ) );
         BOOST_CHECK( !block.m_Text.Contains( wxS( "current task" ) ) );
+    }
+
+    BOOST_CHECK( sawRecentTurns );
+}
+
+
+BOOST_AUTO_TEST_CASE( PreparedChatRequestUsesConfiguredModelContextBudgetBeforeProviderRuns )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    model.SetModelContextLengthChars( 100000 );
+
+    AI_CONTEXT_SNAPSHOT snapshot;
+    snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+
+    model.SendUserText( wxS( "remember this placement constraint" ),
+                        AI_EDITOR_KIND::Pcb, snapshot );
+
+    AI_CHAT_REQUEST_STATE state = model.PrepareUserTextRequest(
+            wxS( "continue the same task" ), AI_EDITOR_KIND::Pcb, snapshot );
+
+    BOOST_CHECK_EQUAL( state.m_Request.m_MaxProviderInputChars, 80000 );
+
+    bool sawRecentTurns = false;
+
+    for( const AI_PROVIDER_INPUT_BLOCK& block : state.m_Request.m_ProviderInputBlocks )
+    {
+        if( block.m_Id != wxS( "chat.recent_turns" ) )
+            continue;
+
+        sawRecentTurns = true;
+        nlohmann::json metadata =
+                nlohmann::json::parse( block.m_MetadataJson.ToStdString() );
+        BOOST_CHECK_EQUAL( metadata["max_provider_input_chars"].get<size_t>(),
+                           80000 );
+        BOOST_CHECK_EQUAL( metadata["max_projected_chars"].get<size_t>(),
+                           72000 );
     }
 
     BOOST_CHECK( sawRecentTurns );
@@ -1120,7 +1392,7 @@ BOOST_AUTO_TEST_CASE( StartNewChatCancelsActiveExecutionSessionBoundary )
 }
 
 
-BOOST_AUTO_TEST_CASE( SendUserTextAutoAcceptsCompletedChatExecutionSession )
+BOOST_AUTO_TEST_CASE( SendUserTextDoesNotAutoAcceptCompletedChatExecutionSession )
 {
     auto* provider = new SESSION_MUTATION_CHAT_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
@@ -1141,26 +1413,20 @@ BOOST_AUTO_TEST_CASE( SendUserTextAutoAcceptsCompletedChatExecutionSession )
 
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "Placed the via." ) ) );
     BOOST_CHECK_EQUAL( provider->m_CallCount, 2 );
-    BOOST_CHECK_EQUAL( acceptAdapter.m_BeginCount, 1 );
-    BOOST_CHECK_EQUAL( acceptAdapter.m_CommitCount, 1 );
-    BOOST_REQUIRE_EQUAL( acceptAdapter.m_OperationKinds.size(), 1 );
-    BOOST_CHECK_EQUAL(
-            static_cast<int>( acceptAdapter.m_OperationKinds.front() ),
-            static_cast<int>( AI_SESSION_OPERATION_KIND::CreateVia ) );
-    BOOST_CHECK( !handler.ActiveSession() );
-    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( acceptAdapter.m_CommitCount, 0 );
+    BOOST_CHECK( acceptAdapter.m_OperationKinds.empty() );
 
     const std::vector<AI_ACTIVITY_RECORD> activity = model.ActivityRecords();
     BOOST_CHECK(
-            std::any_of( activity.begin(), activity.end(),
-                         []( const AI_ACTIVITY_RECORD& aRecord )
-                         {
-                             return aRecord.m_ToolCallId
-                                            == wxS( "chat_session_auto_accept" )
-                                    && aRecord.m_ActionName
-                                               == wxS( "kisurf_accept_session" )
-                                    && aRecord.m_Executed;
-                         } ) );
+            std::none_of( activity.begin(), activity.end(),
+                          []( const AI_ACTIVITY_RECORD& aRecord )
+                          {
+                              return aRecord.m_ToolCallId
+                                             == wxS( "chat_session_auto_accept" )
+                                     || aRecord.m_ActionName
+                                                == wxS( "kisurf_accept_session" );
+                          } ) );
 }
 
 
@@ -1704,6 +1970,13 @@ BOOST_AUTO_TEST_CASE( SendUserTextRetrievesLocalTextMemoryForCurrentDocument )
     wrongDocument.m_Sequence = 31;
     index.AddRecord( wrongDocument );
 
+    AI_LOCAL_TEXT_MEMORY_RECORD boardContextOnly = matching;
+    boardContextOnly.m_Id = wxS( "local-file:board-context-only" );
+    boardContextOnly.m_Text =
+            wxS( "LOCAL_TEXT_BOARD_CONTEXT_ONLY_NEEDLE board_context_query_bait" );
+    boardContextOnly.m_Sequence = 32;
+    index.AddRecord( boardContextOnly );
+
     auto* provider = new CAPTURING_AI_PROVIDER();
     AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
     model.SetLocalTextMemoryIndex( &index );
@@ -1712,6 +1985,7 @@ BOOST_AUTO_TEST_CASE( SendUserTextRetrievesLocalTextMemoryForCurrentDocument )
     snapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
     snapshot.m_ProjectId = wxS( "project-a" );
     snapshot.m_DocumentId = wxS( "board-1" );
+    snapshot.m_Summary = wxS( "board_context_query_bait" );
 
     model.SendUserText( wxS( "route USB DP DM escape" ), AI_EDITOR_KIND::Pcb,
                         snapshot );
@@ -1724,6 +1998,8 @@ BOOST_AUTO_TEST_CASE( SendUserTextRetrievesLocalTextMemoryForCurrentDocument )
             wxS( "local_text_file" ) ) );
     BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
             wxS( "LOCAL_TEXT_WRONG_DOCUMENT_NEEDLE" ) ) );
+    BOOST_CHECK( !provider->m_LastRequest.m_CompiledUserMessageText.Contains(
+            wxS( "LOCAL_TEXT_BOARD_CONTEXT_ONLY_NEEDLE" ) ) );
 }
 
 
@@ -2763,6 +3039,14 @@ BOOST_AUTO_TEST_CASE( NextActionRuntimeRetrievesLocalTextMemoryForCurrentDocumen
     wrongDocument.m_Sequence = 41;
     index.AddRecord( wrongDocument );
 
+    AI_LOCAL_TEXT_MEMORY_RECORD boardContextOnly = matching;
+    boardContextOnly.m_Id = wxS( "artifact:board-context-only" );
+    boardContextOnly.m_Text =
+            wxS( "NEXT_ACTION_LOCAL_BOARD_CONTEXT_ONLY_NEEDLE "
+                 "next_action_context_query_bait" );
+    boardContextOnly.m_Sequence = 42;
+    index.AddRecord( boardContextOnly );
+
     AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
     model.SetLocalTextMemoryIndex( &index );
 
@@ -2785,6 +3069,7 @@ BOOST_AUTO_TEST_CASE( NextActionRuntimeRetrievesLocalTextMemoryForCurrentDocumen
     AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
     context.m_ProjectId = wxS( "project-a" );
     context.m_DocumentId = wxS( "board-1" );
+    context.m_Summary = wxS( "next_action_context_query_bait" );
 
     std::optional<AI_SUGGESTION_RECORD> suggestion =
             model.UpdateSuggestionsIfBackgroundEnabled( context,
@@ -2811,6 +3096,8 @@ BOOST_AUTO_TEST_CASE( NextActionRuntimeRetrievesLocalTextMemoryForCurrentDocumen
 
             BOOST_CHECK( !block.m_Text.Contains(
                     wxS( "NEXT_ACTION_LOCAL_WRONG_DOCUMENT_NEEDLE" ) ) );
+            BOOST_CHECK( !block.m_Text.Contains(
+                    wxS( "NEXT_ACTION_LOCAL_BOARD_CONTEXT_ONLY_NEEDLE" ) ) );
         }
 
         BOOST_CHECK( sawLocalText );
@@ -2975,6 +3262,49 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentEnabledWithoutRuntimeDoesNotPublishSuggesti
                     makeSuggestionContext(), makeSuggestionActivity(), wxS( "activity" ) );
 
     BOOST_CHECK( !suggestion.has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeFailureDoesNotCrashOrLeakWriteLease )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    model.SetNextActionProvider(
+            std::make_unique<THROWING_NEXT_ACTION_PROVIDER>() );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeViaNextActionContext();
+    AI_ACTIVITY_RECORD  activity = makeSuggestionActivity( 41 );
+    AI_NEXT_ACTION_CONTEXT_VERSION ownershipContext =
+            AiNextActionContextVersionFromSnapshot( context,
+                                                    activity.m_Sequence );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion;
+    BOOST_CHECK_NO_THROW(
+            suggestion = model.UpdateSuggestionsIfBackgroundEnabled(
+                    context, activity, wxS( "provider failure" ) ) );
+    BOOST_CHECK( !suggestion.has_value() );
+    BOOST_CHECK( !model.ActiveDocumentWriteOwnerNamespace().has_value() );
+    BOOST_CHECK( model.TryAcquireDocumentWriteOwnership( wxS( "chat" ),
+                                                         ownershipContext ) );
+    BOOST_CHECK( model.ReleaseDocumentWriteOwnership( wxS( "chat" ),
+                                                      ownershipContext ) );
+
+    std::vector<AI_ACTIVITY_RECORD> records = model.ActivityRecords();
+    auto failure = std::find_if(
+            records.begin(), records.end(),
+            []( const AI_ACTIVITY_RECORD& aRecord )
+            {
+                return aRecord.m_ActionName
+                       == wxS( "agent.background.next_action_failed" );
+            } );
+
+    BOOST_REQUIRE( failure != records.end() );
+    BOOST_CHECK( failure->m_Kind == AI_ACTIVITY_KIND::PolicyDecision );
+    BOOST_CHECK_EQUAL( failure->m_ErrorCode,
+                       wxString( wxS( "next_action_runtime_exception" ) ) );
+    BOOST_CHECK( failure->m_Message.Contains(
+            wxS( "next action provider exploded" ) ) );
+    BOOST_CHECK( failure->m_ResultJson.Contains( wxS( "\"ok\":false" ) ) );
 }
 
 
@@ -3158,6 +3488,77 @@ BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimeSuggestionsAreTokenGatedAndAcceptabl
     std::optional<AI_SUGGESTION_RECORD> stored = model.FindSuggestion( suggestion->m_Id );
     BOOST_REQUIRE( stored.has_value() );
     BOOST_CHECK( stored->m_Status == AI_SUGGESTION_STATUS::Accepted );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimePublishesRoutingPreviewFromActiveToolState )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"routing\"}" ),
+              wxS( "{\"decision_kind\":\"publish\","
+                   "\"reason_code\":\"acceptable\","
+                   "\"review_basis\":{\"render_valid\":true,"
+                   "\"validation_passed\":true,"
+                   "\"budget_within_limits\":true,"
+                   "\"self_review_passed\":true}}" ) } );
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makeRoutingNextActionContext();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled(
+                    context, makeSuggestionActivity( 2 ),
+                    wxS( "active routing" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 2 );
+    BOOST_CHECK( model.CanPreviewSuggestion( suggestion->m_Id ) );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsRouteSegmentPreview() );
+
+    FAKE_PREVIEW_ADAPTER previewAdapter;
+    AI_PREVIEW_MANAGER   preview( previewAdapter );
+    BOOST_CHECK( model.PreviewSuggestion( suggestion->m_Id, preview ) );
+    BOOST_CHECK( model.FindSuggestion( suggestion->m_Id )->m_Status
+                 == AI_SUGGESTION_STATUS::Previewing );
+}
+
+
+BOOST_AUTO_TEST_CASE( BackgroundAgentRuntimePublishesStructuredSurfacePreviewFromPanelFocus )
+{
+    AI_AGENT_PANEL_MODEL model( std::make_unique<AI_STUB_PROVIDER>() );
+    auto* nextActionProvider = new PANEL_SURFACE_PATCH_THEN_RENDER_PROVIDER();
+    model.SetNextActionProvider( std::unique_ptr<AI_PROVIDER>( nextActionProvider ) );
+    PASSING_SESSION_PREVIEW_SERVICE    previewService;
+    PASSING_SESSION_VALIDATION_SERVICE validationService;
+    model.ConfigureNextActionServices( &previewService, &validationService );
+    model.SetBackgroundAgentEnabled( true );
+
+    AI_CONTEXT_SNAPSHOT context = makePanelFillTargetScopeContext();
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            model.UpdateSuggestionsIfBackgroundEnabled(
+                    context, makeSuggestionActivity( 3 ),
+                    wxS( "panel fill focus" ) );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_CHECK_EQUAL( nextActionProvider->m_CallCount, 5 );
+    BOOST_CHECK( model.CanPreviewSuggestion( suggestion->m_Id ) );
+    BOOST_CHECK( suggestion->m_ContextKind.Contains( wxS( "panel" ) )
+                 || suggestion->m_ContextKind.Contains( wxS( "surface" ) ) );
+
+    FAKE_PREVIEW_ADAPTER previewAdapter;
+    AI_PREVIEW_MANAGER   preview( previewAdapter );
+    BOOST_CHECK( model.PreviewSuggestion( suggestion->m_Id, preview ) );
+    BOOST_CHECK( model.FindSuggestion( suggestion->m_Id )->m_Status
+                 == AI_SUGGESTION_STATUS::Previewing );
 }
 
 
@@ -3481,6 +3882,41 @@ BOOST_AUTO_TEST_CASE( SendUserTextContinuesMultiRoundToolCalls )
     BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
     BOOST_CHECK_EQUAL( provider->m_Requests.at( 1 ).m_ToolResults.size(), 1 );
     BOOST_CHECK_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( SendUserTextContinuationKeepsCurrentChatHistoryBlocks )
+{
+    auto* provider = new ONE_TOOL_THEN_CAPTURE_PROVIDER();
+    AI_AGENT_PANEL_MODEL model{ std::unique_ptr<AI_PROVIDER>( provider ) };
+    FAKE_PANEL_TOOL_CALL_HANDLER handler;
+
+    model.SetToolCallHandler( &handler );
+
+    model.SendUserText( wxS( "remember that preferred color is blue" ),
+                        AI_EDITOR_KIND::Pcb );
+    AI_PROVIDER_RESPONSE response =
+            model.SendUserText( wxS( "use a tool, then answer what I said before" ),
+                                AI_EDITOR_KIND::Pcb );
+
+    BOOST_CHECK_EQUAL( response.m_Body,
+                       wxString( wxS( "Tool result received with chat context." ) ) );
+    BOOST_REQUIRE_EQUAL( provider->m_Requests.size(), 3 );
+    BOOST_CHECK_EQUAL( provider->m_Requests.at( 2 ).m_ToolResults.size(), 1 );
+
+    bool sawRecentTurns = false;
+
+    for( const AI_PROVIDER_INPUT_BLOCK& block :
+         provider->m_Requests.at( 2 ).m_ProviderInputBlocks )
+    {
+        if( block.m_Id == wxS( "chat.recent_turns" )
+            && block.m_Text.Contains( wxS( "remember that preferred color is blue" ) ) )
+        {
+            sawRecentTurns = true;
+        }
+    }
+
+    BOOST_CHECK( sawRecentTurns );
 }
 
 

@@ -94,37 +94,11 @@ std::optional<wxString> latestNonAcceptGradeValidationReason(
 
     return std::nullopt;
 }
-} // namespace
 
 
-AI_ACCEPT_APPLY_RESULT AI_ACCEPT_APPLIER::Apply(
-        AI_EXECUTION_SESSION& aSession, const wxString& aCurrentBaseHash,
-        const AI_CONTEXT_VERSION& aCurrentContextVersion,
-        AI_ACCEPT_APPLY_ADAPTER& aAdapter )
+AI_ACCEPT_APPLY_RESULT replayJournalToAdapter( AI_EXECUTION_SESSION& aSession,
+                                               AI_ACCEPT_APPLY_ADAPTER& aAdapter )
 {
-    if( !aSession.CanAccept( aCurrentBaseHash, aCurrentContextVersion ) )
-    {
-        if( aSession.Status() == AI_EXECUTION_SESSION_STATUS::Open
-            && aSession.BaseHash() == aCurrentBaseHash
-            && aSession.SelectionRevisionConflicts( aCurrentContextVersion ) )
-        {
-            return errorResult( wxS( "selection_conflict" ),
-                                wxS( "Session selection changed after it was opened." ) );
-        }
-
-        return errorResult( wxS( "stale_session" ),
-                            wxS( "Session cannot be accepted against this base hash." ) );
-    }
-
-    if( std::optional<wxString> reason =
-                latestNonAcceptGradeValidationReason( aSession ) )
-    {
-        return errorResult(
-                wxS( "validation_not_accept_grade" ),
-                wxString::Format( wxS( "Latest explicit validation is not sufficient "
-                                       "for Accept: %s" ), *reason ) );
-    }
-
     wxString adapterError;
 
     if( !aAdapter.BeginTransaction( aSession, adapterError ) )
@@ -167,20 +141,97 @@ AI_ACCEPT_APPLY_RESULT AI_ACCEPT_APPLIER::Apply(
         return result;
     }
 
+    AI_ACCEPT_APPLY_RESULT result;
+    result.m_Ok = true;
+    result.m_AppliedOperationCount = applied;
+    result.m_BoardMutated = boardMutated;
+    return result;
+}
+} // namespace
+
+
+AI_ACCEPT_APPLY_RESULT AI_ACCEPT_APPLIER::Apply(
+        AI_EXECUTION_SESSION& aSession, const wxString& aCurrentBaseHash,
+        const AI_CONTEXT_VERSION& aCurrentContextVersion,
+        AI_ACCEPT_APPLY_ADAPTER& aAdapter )
+{
+    if( !aSession.CanAccept( aCurrentBaseHash, aCurrentContextVersion ) )
+    {
+        if( aSession.Status() == AI_EXECUTION_SESSION_STATUS::Open
+            && aSession.BaseHash() == aCurrentBaseHash
+            && aSession.SelectionRevisionConflicts( aCurrentContextVersion ) )
+        {
+            return errorResult( wxS( "selection_conflict" ),
+                                wxS( "Session selection changed after it was opened." ) );
+        }
+
+        return errorResult( wxS( "stale_session" ),
+                            wxS( "Session cannot be accepted against this base hash." ) );
+    }
+
+    if( std::optional<wxString> reason =
+                latestNonAcceptGradeValidationReason( aSession ) )
+    {
+        return errorResult(
+                wxS( "validation_not_accept_grade" ),
+                wxString::Format( wxS( "Latest explicit validation is not sufficient "
+                                       "for Accept: %s" ), *reason ) );
+    }
+
+    AI_ACCEPT_APPLY_RESULT result = replayJournalToAdapter( aSession, aAdapter );
+
+    if( !result.m_Ok )
+        return result;
+
     if( !aSession.AcceptSession( aCurrentBaseHash, aCurrentContextVersion ) )
     {
         aAdapter.AbortTransaction();
-        AI_ACCEPT_APPLY_RESULT result = errorResult(
+        AI_ACCEPT_APPLY_RESULT acceptResult = errorResult(
                 wxS( "accept_failed" ),
                 wxS( "Session became unacceptable after adapter commit." ) );
-        result.m_AppliedOperationCount = applied;
-        return result;
+        acceptResult.m_AppliedOperationCount = result.m_AppliedOperationCount;
+        return acceptResult;
     }
 
-    AI_ACCEPT_APPLY_RESULT result;
-    result.m_Ok = true;
     result.m_Message = wxS( "Session journal replayed and accepted." );
-    result.m_AppliedOperationCount = applied;
-    result.m_BoardMutated = boardMutated;
+    return result;
+}
+
+
+AI_ACCEPT_APPLY_RESULT AI_ACCEPT_APPLIER::ApplyDirectLive(
+        AI_EXECUTION_SESSION& aSession, AI_ACCEPT_APPLY_ADAPTER& aAdapter )
+{
+    if( aSession.Status() != AI_EXECUTION_SESSION_STATUS::Open )
+    {
+        return errorResult( wxS( "session_not_open" ),
+                            wxS( "Current-board apply requires an open internal operation." ) );
+    }
+
+    if( aSession.HasOpenStep() )
+    {
+        return errorResult( wxS( "step_still_open" ),
+                            wxS( "Current-board apply cannot replay while an operation is still open." ) );
+    }
+
+    if( std::optional<wxString> reason =
+                latestNonAcceptGradeValidationReason( aSession ) )
+    {
+        return errorResult(
+                wxS( "validation_not_accept_grade" ),
+                wxString::Format( wxS( "Latest explicit validation is not sufficient "
+                                       "for current-board apply: %s" ), *reason ) );
+    }
+
+    AI_ACCEPT_APPLY_RESULT result = replayJournalToAdapter( aSession, aAdapter );
+
+    if( !result.m_Ok )
+        return result;
+
+    if( !aSession.AcceptSession( aSession.BaseHash(), aSession.ContextVersion() ) )
+    {
+        aSession.CloseSession();
+    }
+
+    result.m_Message = wxS( "Operation batch applied directly to the current board." );
     return result;
 }

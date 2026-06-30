@@ -73,14 +73,88 @@ AI_PROVIDER_REQUEST requestWithRichContext()
 }
 
 
+AI_PROVIDER_REQUEST requestWithSchematicFootprintContext()
+{
+    AI_PROVIDER_REQUEST request = requestWithRichContext();
+    request.m_ContextSnapshot.m_VisibleObjects.push_back(
+            AI_OBJECT_REF( KIID(), SCH_SYMBOL_T, wxS( "U1" ),
+                           wxS( "{\"kind\":\"symbol\",\"reference\":\"U1\","
+                                "\"value\":\"MCU\",\"footprint\":\"Package_QFP:TQFP-48\"}" ) ) );
+    request.m_ContextSnapshot.m_VisibleObjects.push_back(
+            AI_OBJECT_REF( KIID(), SCH_SYMBOL_T, wxS( "U2" ),
+                           wxS( "{\"kind\":\"symbol\",\"reference\":\"U2\","
+                                "\"value\":\"10k\",\"footprint\":\"Resistor_SMD:R_0603\"}" ) ) );
+    request.m_ContextSnapshot.m_VisibleObjects.push_back(
+            AI_OBJECT_REF( KIID(), PCB_FOOTPRINT_T, wxS( "footprint:U1" ),
+                           wxS( "{\"kind\":\"footprint\",\"reference\":\"U1\","
+                                "\"value\":\"MCU\",\"footprint\":\"Package_QFP:TQFP-48\","
+                                "\"position\":{\"x\":100,\"y\":200}}" ) ) );
+    return request;
+}
+
+
 bool schemaRequiresXY( const nlohmann::json& aSchema )
 {
-    return aSchema.is_object() && aSchema.contains( "required" )
-           && aSchema["required"].is_array()
-           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
-                         "x" ) != aSchema["required"].end()
-           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
-                         "y" ) != aSchema["required"].end();
+    auto requiresXY =
+            []( const nlohmann::json& aCandidate )
+            {
+                return aCandidate.is_object() && aCandidate.contains( "required" )
+                       && aCandidate["required"].is_array()
+                       && std::find( aCandidate["required"].begin(),
+                                     aCandidate["required"].end(), "x" )
+                                  != aCandidate["required"].end()
+                       && std::find( aCandidate["required"].begin(),
+                                     aCandidate["required"].end(), "y" )
+                                  != aCandidate["required"].end();
+            };
+
+    if( requiresXY( aSchema ) )
+        return true;
+
+    if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+        || !aSchema["anyOf"].is_array() )
+    {
+        return false;
+    }
+
+    return std::any_of( aSchema["anyOf"].begin(), aSchema["anyOf"].end(),
+                        requiresXY );
+}
+
+
+bool pointSchemaSupportsModelFacingShortcuts( const nlohmann::json& aSchema )
+{
+    if( !schemaRequiresXY( aSchema ) || !aSchema.contains( "anyOf" )
+        || !aSchema["anyOf"].is_array() )
+    {
+        return false;
+    }
+
+    bool sawMmObject = false;
+    bool sawMmArray = false;
+
+    for( const nlohmann::json& variant : aSchema["anyOf"] )
+    {
+        if( variant.value( "type", std::string() ) == "array"
+            && variant.value( "minItems", 0 ) == 2
+            && variant.value( "maxItems", 0 ) == 2 )
+        {
+            sawMmArray = true;
+        }
+
+        if( variant.contains( "required" ) && variant["required"].is_array()
+            && std::find( variant["required"].begin(), variant["required"].end(),
+                          "x_mm" )
+                       != variant["required"].end()
+            && std::find( variant["required"].begin(), variant["required"].end(),
+                          "y_mm" )
+                       != variant["required"].end() )
+        {
+            sawMmObject = true;
+        }
+    }
+
+    return sawMmObject && sawMmArray;
 }
 
 
@@ -553,6 +627,120 @@ public:
 };
 
 
+class RECORDING_CURRENT_BOARD_TOOL_ADAPTER : public RECORDING_SESSION_ACCEPT_ADAPTER,
+                                             public AI_CURRENT_BOARD_TOOL_ADAPTER
+{
+public:
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardSummary() override
+    {
+        ++m_QuerySummaryCount;
+        if( m_QuerySummaryPayload.is_object() )
+            return result( false, m_QuerySummaryPayload );
+
+        return result( false, { { "status", "board_summary" },
+                                { "summary", nlohmann::json::object() },
+                                { "board_mutated", false } } );
+    }
+
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardItems(
+            const wxString& aFilterJson ) override
+    {
+        ++m_QueryItemsCount;
+        m_LastFilterJson = aFilterJson;
+
+        if( !m_QueryItemsPayloads.empty() )
+        {
+            nlohmann::json payload = m_QueryItemsPayloads.front();
+            m_QueryItemsPayloads.pop_front();
+            return result( false, std::move( payload ) );
+        }
+
+        return result( false, { { "status", "items" },
+                                { "items", nlohmann::json::array() },
+                                { "total_count", 0 },
+                                { "returned_count", 0 },
+                                { "truncated", false },
+                                { "board_mutated", false } } );
+    }
+
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardNets() override
+    {
+        ++m_QueryNetsCount;
+        return result( false, { { "status", "nets" },
+                                { "nets", nlohmann::json::array() },
+                                { "board_mutated", false } } );
+    }
+
+    AI_CURRENT_BOARD_TOOL_RESULT RunCurrentBoardAtomicOperation(
+            AI_SESSION_OPERATION_KIND aKind, const wxString& aArgumentsJson ) override
+    {
+        ++m_RunOperationCount;
+        m_OperationKinds.push_back( aKind );
+        m_OperationArguments.push_back( aArgumentsJson );
+        const nlohmann::json arguments = parseJsonObject( aArgumentsJson );
+        nlohmann::json aliases = nlohmann::json::array();
+
+        if( arguments.contains( "alias" ) && arguments["alias"].is_string() )
+            aliases.push_back( arguments["alias"] );
+
+        return result( true, { { "status", "atomic_operation_executed" },
+                               { "kind", toUtf8( AiSessionOperationKindId( aKind ) ) },
+                               { "arguments", arguments },
+                               { "aliases", aliases },
+                               { "created_items", nlohmann::json::array() },
+                               { "resolved_items", nlohmann::json::array() },
+                               { "board_mutated", true },
+                               { "current_board_apply",
+                                 { { "status", "applied" },
+                                   { "applied_operation_count", 1 } } } } );
+    }
+
+    int      m_QuerySummaryCount = 0;
+    int      m_QueryItemsCount = 0;
+    int      m_QueryNetsCount = 0;
+    int      m_RunOperationCount = 0;
+    wxString m_LastFilterJson;
+    nlohmann::json m_QuerySummaryPayload;
+    std::deque<nlohmann::json> m_QueryItemsPayloads;
+    std::vector<AI_SESSION_OPERATION_KIND> m_OperationKinds;
+    std::vector<wxString> m_OperationArguments;
+
+private:
+    static std::string toUtf8( const wxString& aText )
+    {
+        wxScopedCharBuffer buffer = aText.ToUTF8();
+        return buffer.data() ? std::string( buffer.data(), buffer.length() )
+                             : std::string();
+    }
+
+    static nlohmann::json parseJsonObject( const wxString& aText )
+    {
+        try
+        {
+            nlohmann::json parsed =
+                    nlohmann::json::parse( aText.ToStdString() );
+            return parsed.is_object() ? parsed : nlohmann::json::object();
+        }
+        catch( const std::exception& )
+        {
+            return nlohmann::json::object();
+        }
+    }
+
+    static AI_CURRENT_BOARD_TOOL_RESULT result( bool aExecuted,
+                                                nlohmann::json aPayload )
+    {
+        AI_CURRENT_BOARD_TOOL_RESULT output;
+        output.m_Ok = true;
+        output.m_Executed = aExecuted;
+        output.m_Message = aExecuted ? wxS( "Applied." ) : wxS( "Queried." );
+        output.m_ResultJson =
+                wxString::FromUTF8( aPayload.dump().c_str() );
+        return output;
+    }
+};
+
+
 class RECORDING_SESSION_PREVIEW_SERVICE : public AI_SESSION_PREVIEW_SERVICE
 {
 public:
@@ -676,6 +864,75 @@ public:
 
     int      m_SeedCount = 0;
     uint64_t m_LastSessionId = 0;
+};
+
+
+class SEEDED_SESSION_SHADOW_BOARD_SEEDER : public AI_SESSION_SHADOW_BOARD_SEEDER
+{
+public:
+    explicit SEEDED_SESSION_SHADOW_BOARD_SEEDER( size_t aTrackCount ) :
+            m_TrackCount( aTrackCount )
+    {
+    }
+
+    void Seed( AI_EXECUTION_SESSION& aSession ) override
+    {
+        ++m_SeedCount;
+
+        for( size_t i = 0; i < m_TrackCount; ++i )
+        {
+            AI_SESSION_HANDLE handle = aSession.CreateHandle(
+                    wxString::Format( wxS( "live:track-%zu" ), i ) );
+
+            AI_SHADOW_ITEM item;
+            item.m_Handle = handle;
+            item.m_Type = wxS( "track_segment" );
+            item.m_Alias = handle.m_Alias;
+            item.m_Net = wxS( "GND" );
+            item.m_Layer = wxS( "F.Cu" );
+            item.m_Layers = { wxS( "F.Cu" ) };
+            item.m_GeometryJson = jsonText(
+                    { { "start", { { "x", static_cast<int>( i * 100 ) },
+                                   { "y", 0 } } },
+                      { "end", { { "x", static_cast<int>( i * 100 + 50 ) },
+                                 { "y", 0 } } },
+                      { "width", 100000 } } );
+            item.m_CreatedEpoch = aSession.Epoch();
+            item.m_UpdatedEpoch = aSession.Epoch();
+            item.m_Metadata[wxS( "seed_source" )] = wxS( "live_board" );
+            aSession.ShadowBoard().UpsertItem( std::move( item ) );
+        }
+    }
+
+    size_t m_TrackCount = 0;
+    int    m_SeedCount = 0;
+};
+
+
+class SEEDED_VIA_SHADOW_BOARD_SEEDER : public AI_SESSION_SHADOW_BOARD_SEEDER
+{
+public:
+    void Seed( AI_EXECUTION_SESSION& aSession ) override
+    {
+        ++m_SeedCount;
+
+        AI_SESSION_HANDLE handle = aSession.CreateHandle( wxS( "live:via-0" ) );
+
+        AI_SHADOW_ITEM item;
+        item.m_Handle = handle;
+        item.m_Type = wxS( "via" );
+        item.m_Alias = handle.m_Alias;
+        item.m_Net = wxS( "GND" );
+        item.m_Layers = { wxS( "F.Cu" ), wxS( "B.Cu" ) };
+        item.m_GeometryJson = jsonText(
+                { { "position", { { "x", 11000000 }, { "y", 11000000 } } } } );
+        item.m_CreatedEpoch = aSession.Epoch();
+        item.m_UpdatedEpoch = aSession.Epoch();
+        item.m_Metadata[wxS( "seed_source" )] = wxS( "live_board" );
+        aSession.ShadowBoard().UpsertItem( std::move( item ) );
+    }
+
+    int m_SeedCount = 0;
 };
 
 
@@ -807,6 +1064,9 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
                          .contains( "width" ) );
     BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
                          .contains( "parallel_to" ) );
+    BOOST_REQUIRE( operationContracts.contains( "pcb.delete_items" ) );
+    BOOST_CHECK( operationContracts["pcb.delete_items"]["properties"]
+                         .contains( "filter" ) );
     BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
                          .contains( "offset" ) );
     BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
@@ -822,15 +1082,8 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             zoneOutlineContract["properties"]["points"];
     BOOST_CHECK_EQUAL( zoneOutlinePointsContract.value( "minItems", 0 ), 3 );
     BOOST_REQUIRE( zoneOutlinePointsContract.contains( "items" ) );
-    BOOST_REQUIRE( zoneOutlinePointsContract["items"].contains( "required" ) );
-    BOOST_CHECK( std::find( zoneOutlinePointsContract["items"]["required"].begin(),
-                            zoneOutlinePointsContract["items"]["required"].end(),
-                            "x" )
-                 != zoneOutlinePointsContract["items"]["required"].end() );
-    BOOST_CHECK( std::find( zoneOutlinePointsContract["items"]["required"].begin(),
-                            zoneOutlinePointsContract["items"]["required"].end(),
-                            "y" )
-                 != zoneOutlinePointsContract["items"]["required"].end() );
+    BOOST_CHECK( pointSchemaSupportsModelFacingShortcuts(
+            zoneOutlinePointsContract["items"] ) );
     BOOST_CHECK( operationContracts["surface.apply_patch"]["required"].dump().find(
                          "surface_id" ) != std::string::npos );
     BOOST_REQUIRE( operationContracts["surface.apply_patch"]["properties"].contains(
@@ -862,13 +1115,7 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             geometryContract["properties"]["points"];
     BOOST_CHECK_EQUAL( pointsContract.value( "minItems", 0 ), 3 );
     BOOST_REQUIRE( pointsContract.contains( "items" ) );
-    BOOST_REQUIRE( pointsContract["items"].contains( "required" ) );
-    BOOST_CHECK( std::find( pointsContract["items"]["required"].begin(),
-                            pointsContract["items"]["required"].end(), "x" )
-                 != pointsContract["items"]["required"].end() );
-    BOOST_CHECK( std::find( pointsContract["items"]["required"].begin(),
-                            pointsContract["items"]["required"].end(), "y" )
-                 != pointsContract["items"]["required"].end() );
+    BOOST_CHECK( pointSchemaSupportsModelFacingShortcuts( pointsContract["items"] ) );
 
     BOOST_REQUIRE( operationContracts.contains( "pcb.update_item_geometry" ) );
     const nlohmann::json& updateGeometryContract =
@@ -888,13 +1135,8 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             geometryPatchContract["properties"]["points"];
     BOOST_CHECK_EQUAL( patchPointsContract.value( "minItems", 0 ), 3 );
     BOOST_REQUIRE( patchPointsContract.contains( "items" ) );
-    BOOST_REQUIRE( patchPointsContract["items"].contains( "required" ) );
-    BOOST_CHECK( std::find( patchPointsContract["items"]["required"].begin(),
-                            patchPointsContract["items"]["required"].end(), "x" )
-                 != patchPointsContract["items"]["required"].end() );
-    BOOST_CHECK( std::find( patchPointsContract["items"]["required"].begin(),
-                            patchPointsContract["items"]["required"].end(), "y" )
-                 != patchPointsContract["items"]["required"].end() );
+    BOOST_CHECK( pointSchemaSupportsModelFacingShortcuts(
+            patchPointsContract["items"] ) );
 
     BOOST_REQUIRE( operationContracts.contains( "pcb.set_item_properties" ) );
     BOOST_REQUIRE( operationContracts["pcb.set_item_properties"]["properties"].contains(
@@ -955,6 +1197,15 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
             "handle_contract" ) );
     BOOST_CHECK( queryHandleSchemaSupportsTypedReferences(
             ( *catalogTool( "kisurf_query_item" ) )["handle_contract"] ) );
+    BOOST_REQUIRE( catalogTool( "kisurf_query_unplaced_footprints" ) );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "kisurf_query_unplaced_footprints" )->value(
+                    "side_effect", std::string() ),
+            "read_only" );
+    BOOST_CHECK_EQUAL(
+            catalogTool( "kisurf_query_unplaced_footprints" )->value(
+                    "task", std::string() ),
+            "placement_inventory" );
     BOOST_REQUIRE( catalogTool( "kisurf_render_preview" ) );
     BOOST_CHECK_EQUAL( catalogTool( "kisurf_render_preview" )->value( "side_effect",
                                                                      std::string() ),
@@ -1017,16 +1268,316 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
 }
 
 
-BOOST_AUTO_TEST_CASE( LiveBoardQuerySeedsFromRequestSnapshotBeforeLiveBoardSeeder )
+BOOST_AUTO_TEST_CASE( ChatDirectToolCatalogUsesCurrentBoardSurfaceOnly )
 {
-    FAILING_SHADOW_BOARD_SEEDER seeder;
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    const nlohmann::json catalog =
+            nlohmann::json::parse( handler.ToolCatalogJson().ToStdString() );
+
+    BOOST_REQUIRE( catalog.is_array() );
+
+    std::vector<std::string> toolNames;
+    nlohmann::json           toolByName;
+
+    for( const nlohmann::json& tool : catalog )
+    {
+        const std::string name = tool.value( "name", std::string() );
+        toolNames.push_back( name );
+        toolByName[name] = tool;
+        BOOST_CHECK_EQUAL( tool.value( "mode", std::string() ),
+                           "chat_direct" );
+        BOOST_CHECK( !tool.contains( "uses_shadow_board" ) );
+        BOOST_CHECK( !tool.contains( "model_visible_session_control" ) );
+        BOOST_CHECK( !tool.contains( "can_publish" ) );
+        BOOST_CHECK( !tool.contains( "cannot_publish" ) );
+        BOOST_CHECK( !tool.contains( "direct_publish" ) );
+    }
+
+    const std::string catalogText = catalog.dump();
+    BOOST_CHECK_EQUAL( catalogText.find( "session_only" ), std::string::npos );
+    BOOST_CHECK_EQUAL( catalogText.find( "session_id" ), std::string::npos );
+    BOOST_CHECK_EQUAL( catalogText.find( "session handles" ), std::string::npos );
+    BOOST_CHECK_EQUAL( catalogText.find( "shadow_board" ), std::string::npos );
+    BOOST_CHECK_EQUAL( catalogText.find( "shadow-board" ), std::string::npos );
+
+    for( const std::string& removedTool :
+         { "kisurf_open_session",
+           "kisurf_close_session",
+           "kisurf_begin_step",
+           "kisurf_end_step",
+           "kisurf_checkpoint",
+           "kisurf_rollback_to",
+           "kisurf_cancel_session",
+           "kisurf_reject_session",
+           "kisurf_accept_session",
+           "kisurf_observe_step",
+           "kisurf_render_preview" } )
+    {
+        BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(), removedTool )
+                     == toolNames.end() );
+    }
+
+    BOOST_REQUIRE( toolByName.contains( "kisurf_run_atomic_operation" ) );
+    BOOST_CHECK_EQUAL(
+            toolByName["kisurf_run_atomic_operation"].value( "side_effect",
+                                                             std::string() ),
+            "live_mutation" );
+    BOOST_CHECK_EQUAL(
+            toolByName["kisurf_run_atomic_operation"].value( "mutation_target",
+                                                             std::string() ),
+            "current_board" );
+
+    BOOST_REQUIRE( toolByName.contains( "kisurf_run_cell" ) );
+    BOOST_CHECK_EQUAL( toolByName["kisurf_run_cell"].value( "side_effect",
+                                                            std::string() ),
+                       "live_mutation" );
+
+    BOOST_REQUIRE( toolByName.contains( "kisurf_query_items" ) );
+    BOOST_CHECK_EQUAL( toolByName["kisurf_query_items"].value(
+                               "observation_target", std::string() ),
+                       "current_board" );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectModeRejectsSessionPreviewAndAcceptTools )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    for( const wxString& toolName :
+         { wxS( "kisurf_open_session" ),
+           wxS( "kisurf_checkpoint" ),
+           wxS( "kisurf_rollback_to" ),
+           wxS( "kisurf_render_preview" ),
+           wxS( "kisurf_accept_session" ) } )
+    {
+        AI_TOOL_INVOCATION_RESULT result =
+                handler.HandleToolCall( requestWithContext(),
+                                        toolCall( toolName, wxS( "{}" ) ) );
+
+        BOOST_CHECK_MESSAGE( !result.m_Allowed,
+                             "direct chat unexpectedly allowed " << toolName );
+        BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                           wxString( wxS( "tool_not_available_in_chat_direct_mode" ) ) );
+
+        nlohmann::json payload =
+                nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+        BOOST_CHECK_EQUAL( payload["mode"].get<std::string>(),
+                           "chat_direct" );
+        BOOST_CHECK( payload["retry_hint"].get<std::string>().find(
+                             "Do not open" )
+                     != std::string::npos );
+        BOOST_CHECK( std::find( payload["valid_tools"].begin(),
+                                payload["valid_tools"].end(),
+                                "kisurf_accept_session" )
+                     == payload["valid_tools"].end() );
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectQuerySummaryDoesNotExposeSessionOrShadow )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    adapter.m_QuerySummaryPayload =
+            { { "status", "board_summary" },
+              { "summary", { { "track_segments", 3 }, { "vias", 1 } } },
+              { "board_mutated", false } };
+
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithRichContext(),
+            toolCall( wxS( "kisurf_query_board_summary" ), wxS( "{}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "board_summary" );
+    BOOST_REQUIRE( payload.contains( "summary" ) );
+    BOOST_CHECK( !payload.contains( "session" ) );
+    BOOST_CHECK( !payload.contains( "shadow_board_mutated" ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    const std::string payloadText = payload.dump();
+    BOOST_CHECK_EQUAL( payloadText.find( "session_id" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "shadow" ), std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectModeRejectsSessionBoundaryArguments )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    const std::vector<AI_TOOL_CALL_RECORD> calls = {
+        toolCall( wxS( "kisurf_query_board_summary" ),
+                  wxS( "{\"live_board\":true}" ) ),
+        toolCall( wxS( "kisurf_query_items" ),
+                  wxS( "{\"session_only\":true,\"filter\":{\"type\":\"routing\"}}" ) ),
+        toolCall( wxS( "kisurf_query_items" ),
+                  wxS( "{\"filter\":{\"type\":\"routing\",\"session_only\":true}}" ) ),
+        toolCall( wxS( "kisurf_query_nets" ),
+                  wxS( "{\"live_board_seed\":true}" ) )
+    };
+
+    for( const AI_TOOL_CALL_RECORD& call : calls )
+    {
+        AI_TOOL_INVOCATION_RESULT result =
+                handler.HandleToolCall( requestWithRichContext(), call );
+
+        BOOST_CHECK_MESSAGE( !result.m_Allowed,
+                             "Chat direct unexpectedly allowed " << call.m_ToolName );
+        BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                           wxString( wxS( "chat_direct_boundary_argument" ) ) );
+        BOOST_CHECK( !handler.ActiveSession() );
+
+        nlohmann::json payload =
+                nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+        BOOST_CHECK_EQUAL( payload["mode"].get<std::string>(), "chat_direct" );
+        BOOST_CHECK( payload["retry_hint"].get<std::string>().find(
+                             "current board is implicit" )
+                     != std::string::npos );
+
+        const std::string payloadText = payload.dump();
+        BOOST_CHECK_EQUAL( payloadText.find( "session_only" ), std::string::npos );
+        BOOST_CHECK_EQUAL( payloadText.find( "live_board_seed" ), std::string::npos );
+        BOOST_CHECK_EQUAL( payloadText.find( "shadow" ), std::string::npos );
+    }
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectRunCellWithoutWorkerFailsWithoutSessionPayload )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"create via\"}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "python_worker_unavailable" ) ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(),
+                       "python_worker_unavailable" );
+    BOOST_CHECK( payload["retry_hint"].get<std::string>().find(
+                         "kisurf_run_atomic_operation" )
+                 != std::string::npos );
+    BOOST_CHECK( !payload.contains( "session" ) );
+    BOOST_CHECK_EQUAL( payload.dump().find( "shadow" ), std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectModeUsesChatFailureContractForUnknownAndMalformedCalls )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT unknown = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "pcb_create_via" ), wxS( "{}" ) ) );
+
+    BOOST_CHECK( !unknown.m_Allowed );
+    BOOST_CHECK( !unknown.m_Executed );
+    BOOST_CHECK_EQUAL( unknown.m_ErrorCode, wxString( wxS( "unknown_tool" ) ) );
+
+    nlohmann::json unknownPayload =
+            nlohmann::json::parse( unknown.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( unknownPayload["mode"].get<std::string>(),
+                       "chat_direct" );
+    BOOST_CHECK( unknownPayload["retry_hint"].get<std::string>().find(
+                         "Chat current-board tools" )
+                 != std::string::npos );
+    BOOST_CHECK( std::find( unknownPayload["valid_tools"].begin(),
+                            unknownPayload["valid_tools"].end(),
+                            "kisurf_open_session" )
+                 == unknownPayload["valid_tools"].end() );
+
+    AI_TOOL_INVOCATION_RESULT malformed = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ), wxS( "not-json" ) ) );
+
+    BOOST_CHECK( !malformed.m_Allowed );
+    BOOST_CHECK( !malformed.m_Executed );
+    BOOST_CHECK_EQUAL( malformed.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+
+    nlohmann::json malformedPayload =
+            nlohmann::json::parse( malformed.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( malformedPayload["mode"].get<std::string>(),
+                       "chat_direct" );
+    BOOST_CHECK( malformedPayload["retryable"].get<bool>() );
+    BOOST_CHECK( malformedPayload["retry_hint"].get<std::string>().find(
+                         "Do not open or accept a review workflow in Chat mode" )
+                 != std::string::npos );
+    BOOST_CHECK( std::find( malformedPayload["valid_tools"].begin(),
+                            malformedPayload["valid_tools"].end(),
+                            "kisurf_accept_session" )
+                 == malformedPayload["valid_tools"].end() );
+
+    AI_TOOL_INVOCATION_RESULT missingCellText = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "kisurf_run_cell" ), wxS( "{}" ) ) );
+
+    BOOST_CHECK( !missingCellText.m_Allowed );
+    BOOST_CHECK_EQUAL( missingCellText.m_ErrorCode,
+                       wxString( wxS( "malformed_arguments" ) ) );
+
+    nlohmann::json missingCellPayload =
+            nlohmann::json::parse( missingCellText.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( missingCellPayload["mode"].get<std::string>(),
+                       "chat_direct" );
+    BOOST_CHECK( missingCellPayload["retry_hint"].get<std::string>().find(
+                         "Do not open or accept a review workflow in Chat mode" )
+                 != std::string::npos );
+
+    AI_TOOL_INVOCATION_RESULT unsupported = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.teleport_footprint\","
+                           "\"arguments\":{}}" ) ) );
+
+    BOOST_CHECK( !unsupported.m_Allowed );
+    BOOST_CHECK( !unsupported.m_Executed );
+    BOOST_CHECK_EQUAL( unsupported.m_ErrorCode,
+                       wxString( wxS( "unsupported_operation_kind" ) ) );
+
+    nlohmann::json unsupportedPayload =
+            nlohmann::json::parse( unsupported.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( unsupportedPayload["mode"].get<std::string>(),
+                       "chat_direct" );
+    BOOST_CHECK( unsupportedPayload["retry_hint"].get<std::string>().find(
+                         "Chat current-board" )
+                 != std::string::npos );
+    BOOST_CHECK( std::find( unsupportedPayload["valid_tools"].begin(),
+                            unsupportedPayload["valid_tools"].end(),
+                            "kisurf_open_session" )
+                 == unsupportedPayload["valid_tools"].end() );
+    BOOST_CHECK( std::find( unsupportedPayload["valid_tools"].begin(),
+                            unsupportedPayload["valid_tools"].end(),
+                            "kisurf_accept_session" )
+                 == unsupportedPayload["valid_tools"].end() );
+}
+
+
+BOOST_AUTO_TEST_CASE( LiveBoardQueryPrefersLiveBoardSeederOverContextSnapshot )
+{
+    SEEDED_SESSION_SHADOW_BOARD_SEEDER seeder( 3 );
     AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, nullptr, nullptr, &seeder );
     AI_PROVIDER_REQUEST request = requestWithContext();
     request.m_ContextSnapshot.m_VisibleObjects.push_back(
-            AI_OBJECT_REF( KIID(), PCB_VIA_T, wxS( "via:GND" ),
-                           wxS( "{\"kind\":\"via\",\"position\":{\"x\":100,\"y\":200},"
-                                "\"diameter\":600000,\"net_name\":\"GND\","
-                                "\"layers\":[\"F.Cu\",\"B.Cu\"]}" ) ) );
+            AI_OBJECT_REF( KIID(), PCB_TRACE_T, wxS( "track:/visible-only" ),
+                           wxS( "{\"kind\":\"track\",\"start\":{\"x\":0,\"y\":0},"
+                                "\"end\":{\"x\":100,\"y\":0},\"net\":\"GND\","
+                                "\"layer\":\"F.Cu\"}" ) ) );
 
     AI_TOOL_CALL_RECORD openCall;
     openCall.m_ToolCallId = wxS( "open_session" );
@@ -1038,19 +1589,103 @@ BOOST_AUTO_TEST_CASE( LiveBoardQuerySeedsFromRequestSnapshotBeforeLiveBoardSeede
     queryCall.m_ToolCallId = wxS( "query_live" );
     queryCall.m_ToolName = wxS( "kisurf_query_items" );
     queryCall.m_ArgumentsJson =
-            wxS( "{\"filter\":{\"live_board\":true,\"type\":\"via\"}}" );
+            wxS( "{\"filter\":{\"type\":\"track_segment\"}}" );
 
     AI_TOOL_INVOCATION_RESULT result =
             handler.HandleToolCall( request, queryCall );
 
-    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 1 );
     BOOST_REQUIRE( result.m_Allowed );
     nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
     BOOST_REQUIRE( payload.contains( "items" ) );
-    BOOST_REQUIRE_EQUAL( payload["items"].size(), 1 );
-    BOOST_CHECK_EQUAL( payload["items"][0]["type"].get<std::string>(), "via" );
+    BOOST_CHECK_EQUAL( payload["total_count"].get<size_t>(), 3 );
+    BOOST_CHECK_EQUAL( payload["returned_count"].get<size_t>(), 3 );
+    BOOST_CHECK( !payload["truncated"].get<bool>() );
+    BOOST_REQUIRE_EQUAL( payload["items"].size(), 3 );
+    BOOST_CHECK_EQUAL( payload["items"][0]["type"].get<std::string>(),
+                       "track_segment" );
     BOOST_CHECK_EQUAL( payload["items"][0]["metadata"]["seed_source"].get<std::string>(),
-                       "context_snapshot" );
+                       "live_board" );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveQueryRefreshesLiveBoardBetweenRequests )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    adapter.m_QueryItemsPayloads.push_back(
+            { { "status", "items" },
+              { "total_count", 1 },
+              { "returned_count", 1 },
+              { "truncated", false },
+              { "items", nlohmann::json::array(
+                                   { { { "type", "track_segment" },
+                                       { "handle", { { "uuid", "track-1" } } } } } ) },
+              { "board_mutated", false } } );
+    adapter.m_QueryItemsPayloads.push_back(
+            { { "status", "items" },
+              { "total_count", 3 },
+              { "returned_count", 3 },
+              { "truncated", false },
+              { "items", nlohmann::json::array(
+                                   { { { "type", "track_segment" },
+                                       { "handle", { { "uuid", "track-1" } } } },
+                                     { { "type", "track_segment" },
+                                       { "handle", { { "uuid", "track-2" } } } },
+                                     { { "type", "track_segment" },
+                                       { "handle", { { "uuid", "track-3" } } } } } ) },
+              { "board_mutated", false } } );
+
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+    AI_PROVIDER_REQUEST request = requestWithContext();
+
+    AI_TOOL_INVOCATION_RESULT firstResult = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_items" ),
+                               wxS( "{\"filter\":{\"type\":\"track_segment\"}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( firstResult.m_Allowed,
+                           firstResult.m_ResultJson.ToStdString() );
+    nlohmann::json firstPayload =
+            nlohmann::json::parse( firstResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( firstPayload["total_count"].get<size_t>(), 1 );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    AI_TOOL_INVOCATION_RESULT secondResult = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_items" ),
+                               wxS( "{\"filter\":{\"type\":\"track_segment\"}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( secondResult.m_Allowed,
+                           secondResult.m_ResultJson.ToStdString() );
+    nlohmann::json secondPayload =
+            nlohmann::json::parse( secondResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( adapter.m_QueryItemsCount, 2 );
+    BOOST_CHECK_EQUAL( secondPayload["total_count"].get<size_t>(), 3 );
+    BOOST_CHECK_EQUAL( secondPayload["returned_count"].get<size_t>(), 3 );
+    BOOST_CHECK( !handler.ActiveSession() );
+}
+
+
+BOOST_AUTO_TEST_CASE( QueryItemsImplicitlyOpensCurrentBoardSession )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    AI_PROVIDER_REQUEST request = requestWithContext();
+    request.m_ContextSnapshot.m_VisibleObjects.push_back(
+            AI_OBJECT_REF( KIID(), PCB_TRACE_T, wxS( "track:/GND" ),
+                           wxS( "{\"kind\":\"track\",\"start\":{\"x\":0,\"y\":0},"
+                                "\"end\":{\"x\":100,\"y\":0},\"net\":\"GND\","
+                                "\"layer\":\"F.Cu\"}" ) ) );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_items" ),
+                               wxS( "{\"filter\":{\"type\":\"track_segment\"}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( payload["items"].size(), 1 );
+    BOOST_CHECK_EQUAL( payload["items"][0]["type"].get<std::string>(),
+                       "track_segment" );
+    BOOST_CHECK( handler.ActiveSession() );
 }
 
 
@@ -1064,6 +1699,13 @@ BOOST_AUTO_TEST_CASE( UnknownToolFallsThroughDispatcherContract )
     BOOST_CHECK( !result.m_Allowed );
     BOOST_CHECK( !result.m_Executed );
     BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "unknown_tool" ) ) );
+
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !payload["ok"].get<bool>() );
+    BOOST_CHECK( payload["retryable"].get<bool>() );
+    BOOST_CHECK( payload["retry_hint"].get<std::string>().find( "kisurf_open_session" )
+                 != std::string::npos );
+    BOOST_CHECK( payload["valid_tools"].is_array() );
 }
 
 
@@ -1117,7 +1759,7 @@ BOOST_AUTO_TEST_CASE( HandlerReportsPendingSessionAfterAtomicMutation )
 }
 
 
-BOOST_AUTO_TEST_CASE( SessionQueriesDoNotUseUnsafeLiveBoardSeeder )
+BOOST_AUTO_TEST_CASE( SessionQueriesDefaultToCurrentBoardUnlessSessionOnly )
 {
     RECORDING_SESSION_SHADOW_BOARD_SEEDER seeder;
     RECORDING_SESSION_VALIDATION_SERVICE validationService;
@@ -1143,7 +1785,7 @@ BOOST_AUTO_TEST_CASE( SessionQueriesDoNotUseUnsafeLiveBoardSeeder )
             toolCall( wxS( "kisurf_query_board_summary" ), wxS( "{}" ) ) )
                            .m_Allowed );
 
-    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 1 );
 
     BOOST_REQUIRE( handler.ActiveSession() );
 
@@ -1151,20 +1793,20 @@ BOOST_AUTO_TEST_CASE( SessionQueriesDoNotUseUnsafeLiveBoardSeeder )
             requestWithContext(),
             toolCall( wxS( "kisurf_query_items" ), wxS( "{}" ) ) ).m_Allowed );
 
-    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 1 );
 
     BOOST_REQUIRE( handler.HandleToolCall(
             requestWithContext(),
             toolCall( wxS( "kisurf_query_items" ),
-                      wxS( "{\"live_board\":true}" ) ) ).m_Allowed );
+                      wxS( "{\"session_only\":true}" ) ) ).m_Allowed );
 
-    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 1 );
 
     BOOST_REQUIRE( handler.HandleToolCall(
             requestWithContext(),
             toolCall( wxS( "kisurf_query_items" ), wxS( "{}" ) ) ).m_Allowed );
 
-    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 1 );
 }
 
 
@@ -1295,6 +1937,11 @@ BOOST_AUTO_TEST_CASE( RunCellRejectsCallerOperationLimitAboveRuntimeCap )
     BOOST_CHECK( !result.m_Allowed );
     BOOST_CHECK( !result.m_Executed );
     BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "malformed_arguments" ) ) );
+    nlohmann::json payload = nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !payload["ok"].get<bool>() );
+    BOOST_CHECK( payload["retryable"].get<bool>() );
+    BOOST_CHECK( payload["retry_hint"].get<std::string>().find( "max_operation_count" )
+                 != std::string::npos );
     BOOST_CHECK( !handler.ActiveSession() );
 }
 
@@ -1329,6 +1976,38 @@ BOOST_AUTO_TEST_CASE( DirectAtomicOperationAppliesToShadowSessionOnly )
                  == AI_SESSION_OPERATION_KIND::CreateVia );
     BOOST_CHECK_EQUAL( handler.ActiveSession()->ShadowBoard().LiveItemCount(), 1 );
     BOOST_REQUIRE( handler.ActiveSession()->ResolveAlias( wxS( "direct-via" ) ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectAtomicOperationAcceptsMillimeterPointAndLengthShortcuts )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\",\"arguments\":{"
+                           "\"alias\":\"mm-via\",\"position\":[100,100],"
+                           "\"diameter\":0.3,\"drill\":0.2}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_REQUIRE( handler.ActiveSession() );
+
+    std::optional<AI_SESSION_HANDLE> handle =
+            handler.ActiveSession()->ResolveAlias( wxS( "mm-via" ) );
+    BOOST_REQUIRE( handle.has_value() );
+
+    const AI_SHADOW_ITEM* item =
+            handler.ActiveSession()->ShadowBoard().FindItem( *handle );
+    BOOST_REQUIRE( item != nullptr );
+
+    nlohmann::json geometry =
+            nlohmann::json::parse( item->m_GeometryJson.ToStdString() );
+    BOOST_CHECK_EQUAL( geometry["position"]["x"].get<long long>(), 100000000 );
+    BOOST_CHECK_EQUAL( geometry["position"]["y"].get<long long>(), 100000000 );
+    BOOST_CHECK_EQUAL( geometry["diameter"].get<long long>(), 300000 );
+    BOOST_CHECK_EQUAL( geometry["drill"].get<long long>(), 200000 );
 }
 
 
@@ -2815,6 +3494,38 @@ BOOST_AUTO_TEST_CASE( QueryToolsExposeCurrentEditorObservationContext )
 }
 
 
+BOOST_AUTO_TEST_CASE( QueryUnplacedFootprintsComparesSchematicSymbolsToBoardFootprints )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    AI_PROVIDER_REQUEST request = requestWithSchematicFootprintContext();
+
+    BOOST_CHECK( handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_open_session" ), wxS( "{}" ) ) )
+                         .m_Allowed );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_unplaced_footprints" ),
+                               wxS( "{}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !result.m_Executed );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(),
+                       "unplaced_footprints" );
+    BOOST_CHECK_EQUAL( payload["expected_count"].get<int>(), 2 );
+    BOOST_CHECK_EQUAL( payload["placed_count"].get<int>(), 1 );
+    BOOST_CHECK_EQUAL( payload["unplaced_count"].get<int>(), 1 );
+    BOOST_REQUIRE_EQUAL( payload["unplaced"].size(), 1 );
+    BOOST_CHECK_EQUAL( payload["unplaced"][0]["reference"].get<std::string>(),
+                       "U2" );
+    BOOST_CHECK_EQUAL( payload["unplaced"][0]["footprint"].get<std::string>(),
+                       "Resistor_SMD:R_0603" );
+    BOOST_CHECK( !payload["board_mutated"].get<bool>() );
+}
+
+
 BOOST_AUTO_TEST_CASE( RunValidationToolRecordsSessionValidationResult )
 {
     AI_SESSION_TOOL_CALL_HANDLER handler;
@@ -3544,6 +4255,350 @@ BOOST_AUTO_TEST_CASE( AcceptWithAdapterReplaysJournalBeforeClosingSession )
     BOOST_CHECK_EQUAL( payload["accept_replay"].get<std::string>(), "applied" );
     BOOST_CHECK_EQUAL( payload["applied_operation_count"].get<size_t>(), 1 );
     BOOST_CHECK( payload["board_mutated"].get<bool>() );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveApplyCommitsAtomicOperationImmediately )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    AI_SESSION_TOOL_CALL_HANDLER     handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\","
+                           "\"arguments\":{\"alias\":\"direct-current-via\","
+                           "\"net\":\"GND\",\"position\":{\"x\":11,\"y\":12}}}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_RunOperationCount, 1 );
+    BOOST_REQUIRE_EQUAL( adapter.m_OperationKinds.size(), 1 );
+    BOOST_CHECK( adapter.m_OperationKinds.front()
+                 == AI_SESSION_OPERATION_KIND::CreateVia );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(),
+                       "atomic_operation_executed" );
+    BOOST_CHECK( payload["board_mutated"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "applied" );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["applied_operation_count"].get<size_t>(),
+                       1 );
+    BOOST_CHECK( !payload.contains( "handle_lifecycle" ) );
+    BOOST_CHECK( !payload.contains( "shadow_board_mutated" ) );
+    BOOST_CHECK( !payload.contains( "step_id" ) );
+    BOOST_CHECK( !payload.contains( "observation" ) );
+    BOOST_CHECK( !payload.contains( "journaled" ) );
+    BOOST_CHECK( !payload.contains( "created_handles" ) );
+    BOOST_CHECK( !payload.contains( "resolved_handles" ) );
+    BOOST_REQUIRE( payload["created_items"].is_array() );
+    BOOST_REQUIRE( payload["resolved_items"].is_array() );
+    BOOST_REQUIRE( payload.contains( "aliases" ) );
+    BOOST_REQUIRE( payload["aliases"].is_array() );
+    BOOST_CHECK_EQUAL( payload["aliases"][0].get<std::string>(),
+                       "direct-current-via" );
+    BOOST_REQUIRE( payload.contains( "current_board_reference_policy" ) );
+    BOOST_CHECK( payload["current_board_reference_policy"]
+                        ["handles_in_this_result_reusable"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["current_board_reference_policy"]
+                              ["preferred_followup_reference"]["alias"].get<std::string>(),
+                       "direct-current-via" );
+    BOOST_CHECK_EQUAL( payload["current_board_reference_policy"]
+                              ["fallback_query_tool"].get<std::string>(),
+                       "kisurf_query_items" );
+
+    const std::string payloadText = payload.dump();
+    BOOST_CHECK_EQUAL( payloadText.find( "session" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "shadow" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "step" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "journal" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "direct-live" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "live-board" ), std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveMutationFailsWhenCurrentBoardToolAdapterIsUnavailable )
+{
+    AI_SESSION_TOOL_CALL_HANDLER handler;
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.create_via\","
+                           "\"arguments\":{\"alias\":\"missing-adapter-via\","
+                           "\"position\":{\"x\":11,\"y\":12}}}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "current_board_tool_unavailable" ) ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK( !handler.HasPendingSessionPreview() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(),
+                       "current_board_tool_unavailable" );
+    BOOST_CHECK( !payload["board_mutated"].get<bool>() );
+    BOOST_CHECK( !payload.contains( "shadow_board_mutated" ) );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "unavailable" );
+    BOOST_CHECK_EQUAL( payload["mode"].get<std::string>(),
+                       "chat_direct" );
+    BOOST_CHECK( payload["retry_hint"].get<std::string>().find(
+                         "current-board tool adapter" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveMutationRejectsLegacyAcceptAdapterFallback )
+{
+    RECORDING_SESSION_ACCEPT_ADAPTER adapter;
+    SEEDED_SESSION_SHADOW_BOARD_SEEDER seeder( 2 );
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &adapter, nullptr, &seeder );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_atomic_operation" ),
+                      wxS( "{\"kind\":\"pcb.delete_items\","
+                           "\"arguments\":{\"filter\":{\"type\":\"routing\"}}}" ) ) );
+
+    BOOST_CHECK( !result.m_Allowed );
+    BOOST_CHECK( !result.m_Executed );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode,
+                       wxString( wxS( "current_board_tool_unavailable" ) ) );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(),
+                       "current_board_tool_unavailable" );
+    BOOST_CHECK( !payload["board_mutated"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["mode"].get<std::string>(), "chat_direct" );
+    BOOST_CHECK( payload["retry_hint"].get<std::string>().find(
+                         "current-board tool adapter" ) != std::string::npos );
+    const std::string payloadText = payload.dump();
+    BOOST_CHECK_EQUAL( payloadText.find( "session" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "shadow" ), std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveRunCellDoesNotAutoRenderPreview )
+{
+    AI_PYTHON_CELL_RESULT workerResult;
+    workerResult.m_Ok = true;
+    workerResult.m_StepLabel = wxS( "direct script via" );
+    workerResult.m_Operations.push_back(
+            { AI_SESSION_OPERATION_KIND::CreateVia,
+              wxS( "{\"alias\":\"direct-script-via\",\"net\":\"GND\","
+                   "\"position\":{\"x\":11,\"y\":12}}" ) } );
+
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    RECORDING_SESSION_PREVIEW_SERVICE preview;
+    AI_SESSION_TOOL_CALL_HANDLER handler(
+            std::make_unique<SCRIPTED_PYTHON_WORKER>( workerResult ), &adapter,
+            &preview );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_run_cell" ),
+                      wxS( "{\"cell_text\":\"session.create_via(...)\"}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_REQUIRE_EQUAL( adapter.m_RunOperationCount, 1 );
+    BOOST_CHECK( adapter.m_OperationKinds.front()
+                 == AI_SESSION_OPERATION_KIND::CreateVia );
+    BOOST_CHECK_EQUAL( preview.m_RenderCount, 0 );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( payload["board_mutated"].get<bool>() );
+    BOOST_CHECK( !payload.contains( "session" ) );
+    BOOST_CHECK( !payload.contains( "shadow_board_mutated" ) );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "applied" );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveQueryDeleteAndMoveUseCurrentBoardHandles )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    adapter.m_QueryItemsPayloads.push_back(
+            { { "status", "items" },
+              { "total_count", 1 },
+              { "returned_count", 1 },
+              { "truncated", false },
+              { "items", nlohmann::json::array(
+                                   { { { "type", "track_segment" },
+                                       { "handle", { { "uuid", "track:/GND" } } },
+                                       { "net", "GND" },
+                                       { "layer", "F.Cu" } } } ) },
+              { "board_mutated", false } } );
+    adapter.m_QueryItemsPayloads.push_back(
+            { { "status", "items" },
+              { "total_count", 1 },
+              { "returned_count", 1 },
+              { "truncated", false },
+              { "items", nlohmann::json::array(
+                                   { { { "type", "via" },
+                                       { "handle", { { "uuid", "via:/GND" } } },
+                                       { "net", "GND" },
+                                       { "layer", "F.Cu" } } } ) },
+              { "board_mutated", false } } );
+    AI_SESSION_TOOL_CALL_HANDLER     handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_PROVIDER_REQUEST request = requestWithContext();
+
+    AI_TOOL_INVOCATION_RESULT trackQuery = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_items" ),
+                               wxS( "{\"filter\":{\"type\":\"track_segment\"}}" ) ) );
+    BOOST_REQUIRE_MESSAGE( trackQuery.m_Allowed,
+                           trackQuery.m_ResultJson.ToStdString() );
+    nlohmann::json trackPayload =
+            nlohmann::json::parse( trackQuery.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( trackPayload["items"].size(), 1 );
+    BOOST_CHECK( !trackPayload.contains( "session" ) );
+    BOOST_CHECK( !trackPayload.contains( "journaled" ) );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( adapter.m_QueryItemsCount, 1 );
+
+    nlohmann::json deleteArgs = {
+        { "kind", "pcb.delete_items" },
+        { "arguments",
+          { { "handles", nlohmann::json::array(
+                                { trackPayload["items"][0]["handle"] } ) } } }
+    };
+
+    AI_TOOL_INVOCATION_RESULT deleteResult = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_run_atomic_operation" ),
+                               wxString::FromUTF8( deleteArgs.dump().c_str() ) ) );
+    BOOST_REQUIRE_MESSAGE( deleteResult.m_Allowed,
+                           deleteResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    AI_TOOL_INVOCATION_RESULT viaQuery = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_query_items" ),
+                               wxS( "{\"filter\":{\"type\":\"via\"}}" ) ) );
+    BOOST_REQUIRE_MESSAGE( viaQuery.m_Allowed, viaQuery.m_ResultJson.ToStdString() );
+    nlohmann::json viaPayload =
+            nlohmann::json::parse( viaQuery.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( viaPayload["items"].size(), 1 );
+
+    nlohmann::json moveArgs = {
+        { "kind", "pcb.move_items" },
+        { "arguments",
+          { { "handles", nlohmann::json::array(
+                                { viaPayload["items"][0]["handle"] } ) },
+            { "delta", { { "x", 10 }, { "y", -5 } } } } }
+    };
+
+    AI_TOOL_INVOCATION_RESULT moveResult = handler.HandleToolCall(
+            request, toolCall( wxS( "kisurf_run_atomic_operation" ),
+                               wxString::FromUTF8( moveArgs.dump().c_str() ) ) );
+    BOOST_REQUIRE_MESSAGE( moveResult.m_Allowed,
+                           moveResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !handler.ActiveSession() );
+
+    BOOST_CHECK_EQUAL( adapter.m_QueryItemsCount, 2 );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_RunOperationCount, 2 );
+    BOOST_REQUIRE_EQUAL( adapter.m_OperationKinds.size(), 2 );
+    BOOST_CHECK( adapter.m_OperationKinds[0]
+                 == AI_SESSION_OPERATION_KIND::DeleteItems );
+    BOOST_CHECK( adapter.m_OperationKinds[1]
+                 == AI_SESSION_OPERATION_KIND::MoveItems );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveDeleteItemsCanResolveFilterWithoutQueryRoundTrip )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    SEEDED_SESSION_SHADOW_BOARD_SEEDER seeder( 2 );
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &adapter, nullptr, &seeder );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    nlohmann::json deleteArgs = {
+        { "kind", "pcb.delete_items" },
+        { "arguments", { { "filter", { { "type", "routing" } } } } }
+    };
+
+    AI_TOOL_INVOCATION_RESULT deleteResult = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "kisurf_run_atomic_operation" ),
+                                            wxString::FromUTF8( deleteArgs.dump().c_str() ) ) );
+
+    BOOST_REQUIRE_MESSAGE( deleteResult.m_Allowed,
+                           deleteResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_RunOperationCount, 1 );
+    BOOST_REQUIRE_EQUAL( adapter.m_OperationKinds.size(), 1 );
+    BOOST_CHECK( adapter.m_OperationKinds.front()
+                 == AI_SESSION_OPERATION_KIND::DeleteItems );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( deleteResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "applied" );
+    const std::string payloadText = payload.dump();
+    BOOST_CHECK_EQUAL( payloadText.find( "session" ), std::string::npos );
+    BOOST_CHECK_EQUAL( payloadText.find( "shadow" ), std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectMoveItemsAcceptsAliasItemsAndPositionShortcut )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    SEEDED_VIA_SHADOW_BOARD_SEEDER   seeder;
+    AI_SESSION_TOOL_CALL_HANDLER     handler( nullptr, &adapter, nullptr, &seeder );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    nlohmann::json moveArgs = {
+        { "kind", "pcb.move_items" },
+        { "arguments",
+          { { "items", { { "alias", "live:via-0" } } },
+            { "position", nlohmann::json::array( { 12, 12 } ) } } }
+    };
+
+    AI_TOOL_INVOCATION_RESULT moveResult = handler.HandleToolCall(
+            requestWithContext(), toolCall( wxS( "kisurf_run_atomic_operation" ),
+                                            wxString::FromUTF8( moveArgs.dump().c_str() ) ) );
+
+    BOOST_REQUIRE_MESSAGE( moveResult.m_Allowed,
+                           moveResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( moveResult.m_Executed );
+    BOOST_CHECK_EQUAL( seeder.m_SeedCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 0 );
+    BOOST_CHECK_EQUAL( adapter.m_RunOperationCount, 1 );
+    BOOST_REQUIRE_EQUAL( adapter.m_OperationKinds.size(), 1 );
+    BOOST_CHECK( adapter.m_OperationKinds.front()
+                 == AI_SESSION_OPERATION_KIND::MoveItems );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( moveResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "applied" );
 }
 
 

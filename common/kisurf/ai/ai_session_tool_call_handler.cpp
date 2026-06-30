@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <optional>
 #include <set>
@@ -26,6 +27,24 @@
 namespace
 {
 constexpr uint64_t DEFAULT_SCRIPT_OPERATION_LIMIT = 256;
+
+class SCOPE_EXIT
+{
+public:
+    explicit SCOPE_EXIT( std::function<void()> aFn ) :
+            m_Fn( std::move( aFn ) )
+    {
+    }
+
+    ~SCOPE_EXIT()
+    {
+        if( m_Fn )
+            m_Fn();
+    }
+
+private:
+    std::function<void()> m_Fn;
+};
 
 std::string toUtf8String( const wxString& aText )
 {
@@ -92,6 +111,7 @@ bool isSessionTool( const wxString& aToolName )
            || aToolName == wxS( "kisurf_query_board_summary" )
            || aToolName == wxS( "kisurf_query_items" )
            || aToolName == wxS( "kisurf_query_item" )
+           || aToolName == wxS( "kisurf_query_unplaced_footprints" )
            || aToolName == wxS( "kisurf_query_selection" )
            || aToolName == wxS( "kisurf_query_nets" )
            || aToolName == wxS( "kisurf_query_layers" )
@@ -100,6 +120,82 @@ bool isSessionTool( const wxString& aToolName )
            || aToolName == wxS( "kisurf_query_activity_timeline" )
            || aToolName == wxS( "kisurf_render_preview" )
            || aToolName == wxS( "kisurf_run_validation" );
+}
+
+
+nlohmann::json sessionToolNamesJson()
+{
+    return nlohmann::json::array(
+            { "kisurf_open_session",
+              "kisurf_close_session",
+              "kisurf_run_cell",
+              "kisurf_run_atomic_operation",
+              "kisurf_begin_step",
+              "kisurf_end_step",
+              "kisurf_checkpoint",
+              "kisurf_rollback_to",
+              "kisurf_cancel_session",
+              "kisurf_reject_session",
+              "kisurf_accept_session",
+              "kisurf_observe_step",
+              "kisurf_query_board_summary",
+              "kisurf_query_items",
+              "kisurf_query_item",
+              "kisurf_query_unplaced_footprints",
+              "kisurf_query_selection",
+              "kisurf_query_nets",
+              "kisurf_query_layers",
+              "kisurf_query_design_rules",
+              "kisurf_query_viewport",
+              "kisurf_query_activity_timeline",
+              "kisurf_render_preview",
+              "kisurf_run_validation" } );
+}
+
+
+nlohmann::json chatDirectToolNamesJson()
+{
+    return nlohmann::json::array(
+            { "kisurf_run_cell",
+              "kisurf_run_atomic_operation",
+              "kisurf_query_board_summary",
+              "kisurf_query_items",
+              "kisurf_query_item",
+              "kisurf_query_unplaced_footprints",
+              "kisurf_query_selection",
+              "kisurf_query_nets",
+              "kisurf_query_layers",
+              "kisurf_query_design_rules",
+              "kisurf_query_viewport",
+              "kisurf_query_activity_timeline",
+              "kisurf_run_validation" } );
+}
+
+
+bool isChatDirectTool( const wxString& aToolName )
+{
+    return aToolName == wxS( "kisurf_run_cell" )
+           || aToolName == wxS( "kisurf_run_atomic_operation" )
+           || aToolName == wxS( "kisurf_query_board_summary" )
+           || aToolName == wxS( "kisurf_query_items" )
+           || aToolName == wxS( "kisurf_query_item" )
+           || aToolName == wxS( "kisurf_query_unplaced_footprints" )
+           || aToolName == wxS( "kisurf_query_selection" )
+           || aToolName == wxS( "kisurf_query_nets" )
+           || aToolName == wxS( "kisurf_query_layers" )
+           || aToolName == wxS( "kisurf_query_design_rules" )
+           || aToolName == wxS( "kisurf_query_viewport" )
+           || aToolName == wxS( "kisurf_query_activity_timeline" )
+           || aToolName == wxS( "kisurf_run_validation" );
+}
+
+
+bool chatDirectToolRequiresCurrentBoardAdapter( const wxString& aToolName )
+{
+    return aToolName == wxS( "kisurf_query_board_summary" )
+           || aToolName == wxS( "kisurf_query_items" )
+           || aToolName == wxS( "kisurf_query_item" )
+           || aToolName == wxS( "kisurf_query_nets" );
 }
 
 
@@ -127,13 +223,59 @@ nlohmann::json sessionAtomicOperationSetJson()
 
 nlohmann::json catalogPointSchema( const char* aDescription )
 {
-    return { { "type", "object" },
-             { "description", aDescription },
-             { "additionalProperties", false },
-             { "properties",
-               { { "x", { { "type", "integer" } } },
-                 { "y", { { "type", "integer" } } } } },
-             { "required", nlohmann::json::array( { "x", "y" } ) } };
+    return { { "description", aDescription },
+             { "anyOf",
+               nlohmann::json::array(
+                       { { { "type", "object" },
+                           { "description",
+                             "Model-facing point shortcut. Small numeric x/y values "
+                             "are millimeters; large integer values are KiCad "
+                             "internal units." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x", { { "type", "number" } } },
+                               { "y", { { "type", "number" } } } } },
+                           { "required", nlohmann::json::array( { "x", "y" } ) } },
+                         { { "type", "object" },
+                           { "description", "Explicit millimeter point shortcut." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x_mm", { { "type", "number" } } },
+                               { "y_mm", { { "type", "number" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "x_mm", "y_mm" } ) } },
+                         { { "type", "object" },
+                           { "description", "Millimeter point with explicit units." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "x", { { "type", "number" } } },
+                               { "y", { { "type", "number" } } },
+                               { "units",
+                                 { { "type", "string" },
+                                   { "enum",
+                                     nlohmann::json::array(
+                                             { "mm", "millimeter", "millimeters" } ) } } } } },
+                           { "required",
+                             nlohmann::json::array( { "x", "y", "units" } ) } },
+                         { { "type", "array" },
+                           { "description",
+                             "Two-number millimeter shortcut: [x_mm, y_mm]." },
+                           { "items", { { "type", "number" } } },
+                           { "minItems", 2 },
+                           { "maxItems", 2 } } } ) } };
+}
+
+
+nlohmann::json catalogLengthSchema( const char* aDescription, double aMinimum )
+{
+    const std::string description =
+            std::string( aDescription )
+            + " Accepts internal integer units, or a positive number below "
+              "1000 as millimeters.";
+
+    return { { "type", "number" },
+             { "minimum", aMinimum },
+             { "description", description } };
 }
 
 
@@ -141,8 +283,14 @@ nlohmann::json catalogCoordinateContractJson()
 {
     return {
         { "direct_point",
-          { { "description", "Absolute internal board coordinate." },
-            { "shape", { { "x", "integer" }, { "y", "integer" } } } } },
+          { { "description",
+              "Absolute board coordinate. Prefer {x_mm,y_mm} or [x_mm,y_mm] "
+              "when working from human-visible millimeter values; canonical "
+              "{x,y} stays in internal units." },
+            { "shape",
+              { { "x/y", "canonical internal integers" },
+                { "x_mm/y_mm", "explicit millimeter numbers" },
+                { "[x_mm,y_mm]", "two-number millimeter shortcut" } } } } },
         { "relative_point",
           { { "description",
               "Point resolved from a live session handle before journaling." },
@@ -182,6 +330,20 @@ nlohmann::json catalogHandleSchema( const char* aDescription )
                          { { "type", "object" },
                            { "additionalProperties", false },
                            { "properties",
+                             { { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "alias" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "uuid", { { "type", "string" } } },
+                               { "type", { { "type", "string" } } },
+                               { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "uuid" } ) } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
                              { { "session_id",
                                  { { "type", "integer" }, { "minimum", 1 } } },
                                { "handle_id",
@@ -212,6 +374,14 @@ nlohmann::json catalogQueryHandleFilterSchema()
                        { { { "type", "string" },
                            { "description", "Session handle alias." } },
                          { { "type", "integer" }, { "minimum", 1 } },
+                         { { "type", "object" },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "uuid", { { "type", "string" } } },
+                               { "type", { { "type", "string" } } },
+                               { "alias", { { "type", "string" } } } } },
+                           { "required",
+                             nlohmann::json::array( { "uuid" } ) } },
                          { { "type", "object" },
                            { "additionalProperties", false },
                            { "properties",
@@ -368,19 +538,26 @@ nlohmann::json catalogQueryItemsFilterSchema()
 {
     return { { "type", "object" },
              { "description",
-               "Optional semantic shadow-board filter aligned with AI_SHADOW_BOARD::QueryItems." },
+               "Optional current-board item filter. KiSurf refreshes current-board "
+               "items into the session first unless session_only is true." },
              { "additionalProperties", false },
              { "properties",
                { { "type", { { "type", "string" } } },
                  { "net", { { "type", "string" } } },
-                  { "layer", { { "type", "string" } } },
-                  { "alias", { { "type", "string" } } },
-                  { "selection", { { "type", "boolean" } } },
-                  { "live_board",
-                    { { "type", "boolean" },
-                      { "description",
-                        "Opt in to seeding live-board items into the session shadow board." } } },
-                  { "bbox",
+                   { "layer", { { "type", "string" } } },
+                   { "alias", { { "type", "string" } } },
+                   { "selection", { { "type", "boolean" } } },
+                   { "session_only",
+                     { { "type", "boolean" },
+                       { "description",
+                         "When true, query only existing session items instead of "
+                         "refreshing the current board." } } },
+                   { "live_board",
+                     { { "type", "boolean" },
+                       { "description",
+                         "Compatibility alias; current-board refresh is already "
+                         "the default unless session_only is true." } } },
+                   { "bbox",
                     catalogBoxSchema(
                             "Bounding box intersection filter in internal coordinates." ) },
                   { "handle", catalogQueryHandleFilterSchema() } } } };
@@ -531,8 +708,8 @@ nlohmann::json sessionAtomicOperationContractsJson()
             { "properties",
               { { "position", catalogPointSchema( "Via center position." ) },
                 { "net", { { "type", "string" } } },
-                { "diameter", { { "type", "integer" }, { "minimum", 1 } } },
-                { "drill", { { "type", "integer" }, { "minimum", 1 } } },
+                { "diameter", catalogLengthSchema( "Via diameter.", 1 ) },
+                { "drill", catalogLengthSchema( "Via drill.", 1 ) },
                 { "layer_pair",
                   { { "description", "Via layer pair, usually [start, end]." },
                     { "anyOf",
@@ -552,7 +729,7 @@ nlohmann::json sessionAtomicOperationContractsJson()
                 { "end", catalogPointSchema( "Track segment end point." ) },
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 1 } } },
+                { "width", catalogLengthSchema( "Track width.", 1 ) },
                 { "parallel_to",
                   { { "description",
                       "Optional reference track segment. When start/end are omitted, "
@@ -578,7 +755,7 @@ nlohmann::json sessionAtomicOperationContractsJson()
                           2 ) },
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 1 } } },
+                { "width", catalogLengthSchema( "Track width.", 1 ) },
                 { "alias", { { "type", "string" } } } } },
             { "required", nlohmann::json::array( { "points" } ) } } },
         { "pcb.create_zone",
@@ -588,7 +765,7 @@ nlohmann::json sessionAtomicOperationContractsJson()
               { { "outline", catalogZoneOutlineSchema() },
                 { "layer_set", catalogStringArraySchema( "Copper layers." ) },
                 { "net", { { "type", "string" } } },
-                { "clearance", { { "type", "number" }, { "minimum", 0 } } },
+                { "clearance", catalogLengthSchema( "Zone clearance.", 0 ) },
                 { "priority", { { "type", "number" }, { "minimum", 0 } } },
                 { "fill_mode",
                   { { "type", "string" },
@@ -622,13 +799,13 @@ nlohmann::json sessionAtomicOperationContractsJson()
                         { "end", catalogPointSchema( "Shape end point." ) },
                         { "center", catalogPointSchema( "Circle center point." ) },
                         { "mid", catalogPointSchema( "Arc midpoint." ) },
-                        { "radius", { { "type", "integer" }, { "minimum", 1 } } },
+                        { "radius", catalogLengthSchema( "Circle radius.", 1 ) },
                         { "points",
                           catalogPointArraySchema(
                                   "Polygon outline points using internal coordinates.",
                                   3 ) } } } } },
                 { "layer", { { "type", "string" } } },
-                { "width", { { "type", "integer" }, { "minimum", 0 } } },
+                { "width", catalogLengthSchema( "Shape stroke width.", 0 ) },
                 { "fill", { { "type", "boolean" } } },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
@@ -639,7 +816,34 @@ nlohmann::json sessionAtomicOperationContractsJson()
             { "additionalProperties", true },
             { "properties",
               { { "handles", catalogHandleArraySchema( "Items to move." ) },
+                { "handle", catalogHandleSchema( "Single item to move." ) },
+                { "items",
+                  { { "description",
+                      "Alias, handle object, array of aliases/handles, or "
+                      "per-item objects such as "
+                      "[{\"handle\":items[0].handle,\"position\":{\"x\":25.5,\"y\":19.75}}]. "
+                      "Small numeric coordinates are millimeters; large integers are "
+                      "KiCad internal units." } } },
+                { "item", catalogHandleSchema( "Single item to move." ) },
+                { "alias",
+                  { { "type", "string" },
+                    { "description",
+                      "Shortcut for moving a single item by alias." } } },
                 { "delta", catalogPointSchema( "Movement delta." ) },
+                { "position",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
+                { "target",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
+                { "target_point",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
+                { "target_position",
+                  catalogPointSchema( "Single target point shortcut." ) },
+                { "destination",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
+                { "to",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
+                { "move_to",
+                  catalogPointSchema( "Single absolute target point shortcut." ) },
                 { "target_positions",
                   { { "description",
                       "Single target point, ordered target array, or keyed target map." },
@@ -650,14 +854,29 @@ nlohmann::json sessionAtomicOperationContractsJson()
                                   { "items",
                                     catalogPointSchema( "Ordered target point." ) } },
                                 { { "type", "object" },
-                                  { "additionalProperties", true } } } ) } } } } },
-            { "required", nlohmann::json::array( { "handles" } ) } } },
+                                  { "additionalProperties", true } } } ) } } } } } } },
         { "pcb.delete_items",
           { { "type", "object" },
-            { "additionalProperties", false },
+            { "additionalProperties", true },
             { "properties",
-              { { "handles", catalogHandleArraySchema( "Items to delete." ) } } },
-            { "required", nlohmann::json::array( { "handles" } ) } } },
+              { { "handles", catalogHandleArraySchema( "Items to delete." ) },
+                { "handle", catalogHandleSchema( "Single item to delete." ) },
+                { "items",
+                  { { "description",
+                      "Alias, handle object, or array of aliases/handles to delete." } } },
+                { "item", catalogHandleSchema( "Single item to delete." ) },
+                { "alias",
+                  { { "type", "string" },
+                    { "description",
+                      "Shortcut for deleting a single item by alias." } } },
+                { "filter",
+                  { { "description",
+                      "Bulk delete matching current-board items. Prefer "
+                      "{\"type\":\"tracks\"} for deleting all track segments "
+                      "instead of enumerating every handle." },
+                    { "allOf", nlohmann::json::array(
+                                       { catalogQueryItemsFilterSchema() } ) } } } } },
+            { "required", nlohmann::json::array() } } },
         { "pcb.update_item_geometry",
           { { "type", "object" },
             { "additionalProperties", true },
@@ -795,6 +1014,8 @@ nlohmann::json sessionToolCatalogJson()
                                      "observation", "read_only" ),
               sessionToolDescriptor( "kisurf_query_item", "atomic",
                                      "observation", "read_only" ),
+              sessionToolDescriptor( "kisurf_query_unplaced_footprints", "atomic",
+                                     "placement_inventory", "read_only" ),
               sessionToolDescriptor( "kisurf_query_selection", "atomic",
                                      "observation", "read_only" ),
               sessionToolDescriptor( "kisurf_query_nets", "atomic",
@@ -860,6 +1081,10 @@ nlohmann::json sessionToolCatalogJson()
         {
             tool["handle_contract"] = catalogQueryHandleFilterSchema();
         }
+        else if( name == "kisurf_query_unplaced_footprints" )
+        {
+            tool["task"] = "placement_inventory";
+        }
         else if( name == "kisurf_render_preview" )
         {
             tool["argument_contract"] = catalogRenderPreviewArgumentsSchema();
@@ -873,6 +1098,135 @@ nlohmann::json sessionToolCatalogJson()
             tool["requires_accept_gate"] = true;
             tool["requires_exact_journal_replay"] = true;
         }
+    }
+
+    return tools;
+}
+
+
+void replaceAll( std::string& aText, const std::string& aNeedle,
+                 const std::string& aReplacement )
+{
+    if( aNeedle.empty() )
+        return;
+
+    size_t pos = 0;
+
+    while( ( pos = aText.find( aNeedle, pos ) ) != std::string::npos )
+    {
+        aText.replace( pos, aNeedle.length(), aReplacement );
+        pos += aReplacement.length();
+    }
+}
+
+
+void sanitizeChatLiveJson( nlohmann::json& aValue )
+{
+    if( aValue.is_object() )
+    {
+        for( const char* key :
+             { "uses_shadow_board",
+               "model_visible_session_control",
+               "session",
+               "session_only",
+               "session_id",
+               "live_board",
+               "step_id",
+               "observation",
+               "journaled" } )
+        {
+            aValue.erase( key );
+        }
+
+        for( auto it = aValue.begin(); it != aValue.end(); ++it )
+            sanitizeChatLiveJson( it.value() );
+
+        return;
+    }
+
+    if( aValue.is_array() )
+    {
+        for( auto it = aValue.begin(); it != aValue.end(); )
+        {
+            if( it->is_string() && it->get<std::string>() == "session" )
+                it = aValue.erase( it );
+            else
+            {
+                sanitizeChatLiveJson( *it );
+                ++it;
+            }
+        }
+
+        return;
+    }
+
+    if( !aValue.is_string() )
+        return;
+
+    std::string text = aValue.get<std::string>();
+    replaceAll( text, "Session handle", "Current-board handle" );
+    replaceAll( text, "session handle", "current-board handle" );
+    replaceAll( text, "session-local", "current-board" );
+    replaceAll( text, "Direct live", "Current-board direct" );
+    replaceAll( text, "direct-live", "current-board" );
+    replaceAll( text, "live session handle", "current-board handle" );
+    replaceAll( text, "session journal", "current-board operation log" );
+    replaceAll( text, "session", "current-board operation" );
+    replaceAll( text, "current live board", "current board" );
+    replaceAll( text, "current-live-board", "current-board" );
+    replaceAll( text, "Live-board", "Current-board" );
+    replaceAll( text, "live-board", "current-board" );
+    replaceAll( text, "live board", "current board" );
+    replaceAll( text, "shadow-board", "current-board" );
+    replaceAll( text, "shadow board", "current board" );
+    aValue = text;
+}
+
+
+nlohmann::json chatDirectToolCatalogJson()
+{
+    nlohmann::json tools = nlohmann::json::array();
+
+    for( nlohmann::json tool : sessionToolCatalogJson() )
+    {
+        if( !tool.is_object() )
+            continue;
+
+        const wxString name = wxString::FromUTF8(
+                tool.value( "name", std::string() ).c_str() );
+
+        if( !isChatDirectTool( name ) )
+            continue;
+
+        tool["mode"] = "chat_direct";
+        tool["requires_accept_gate"] = false;
+        tool.erase( "cannot_publish" );
+        tool.erase( "can_publish" );
+        tool.erase( "direct_publish" );
+
+        if( name == wxS( "kisurf_run_atomic_operation" ) )
+        {
+            tool["side_effect"] = "live_mutation";
+            tool["mutation_target"] = "current_board";
+            tool["undo_policy"] = "normal_board_undo";
+            tool["requires_journal"] = false;
+        }
+        else if( name == wxS( "kisurf_run_cell" ) )
+        {
+            tool["side_effect"] = "live_mutation";
+            tool["mutation_target"] = "current_board";
+            tool["undo_policy"] = "normal_board_undo";
+            tool["requires_journal"] = false;
+            tool["execution_runtime"] = "python_subprocess_live_board_sdk";
+        }
+        else if( name.StartsWith( wxS( "kisurf_query_" ) ) )
+        {
+            tool["side_effect"] = "read_only";
+            tool["observation_target"] = "current_board";
+        }
+
+        sanitizeChatLiveJson( tool );
+        tools.push_back( std::move( tool ) );
     }
 
     return tools;
@@ -897,9 +1251,214 @@ wxString resultJson( const AI_TOOL_INVOCATION_RESULT& aResult,
     aPayload["action"] = toUtf8String( aResult.m_ActionName );
     aPayload["allowed"] = aResult.m_Allowed;
     aPayload["executed"] = aResult.m_Executed;
+    aPayload["ok"] = aResult.m_Allowed && aResult.m_ErrorCode.IsEmpty();
     aPayload["error_code"] = toUtf8String( aResult.m_ErrorCode );
     aPayload["message"] = toUtf8String( aResult.m_Message );
     return fromJson( aPayload );
+}
+
+
+std::string sessionRetryHint( const AI_TOOL_CALL_RECORD& aToolCall,
+                              const wxString& aErrorCode,
+                              const wxString& aMessage )
+{
+    const std::string tool = toUtf8String( aToolCall.m_ToolName );
+    const std::string code = toUtf8String( aErrorCode );
+    const std::string message = toUtf8String( aMessage );
+
+    if( code == "unknown_tool" )
+    {
+        return "Use a supported KiSurf session tool such as kisurf_open_session, "
+               "kisurf_run_cell, kisurf_run_atomic_operation, query tools, "
+               "kisurf_render_preview, or kisurf_run_validation.";
+    }
+
+    if( code == "malformed_arguments" )
+    {
+        if( tool == "kisurf_run_cell" )
+            return "Retry kisurf_run_cell with {\"cell_text\":\"...\"} and "
+                   "optional cell_id and max_operation_count <= 256. Error: "
+                   + message;
+
+        if( tool == "kisurf_run_atomic_operation" )
+            return "Retry kisurf_run_atomic_operation with "
+                   "{\"kind\":\"pcb.create_via\",\"arguments\":{...}} using one "
+                   "of the valid operation kinds. Error: " + message;
+
+        return "Retry with a JSON object that matches the tool schema. Error: "
+               + message;
+    }
+
+    if( code == "unsupported_operation" || code == "unsupported_operation_kind" )
+    {
+        return "Choose one of the valid atomic operation kinds, or express the "
+               "task as Python using kisurf_run_cell. The unsupported operation "
+               "was not applied.";
+    }
+
+    if( code == "no_active_session" || code == "step_not_started" )
+    {
+        return "Open a session and begin a step before this call, or use "
+               "kisurf_run_cell which can open and group work automatically.";
+    }
+
+    if( code == "invalid_handle" )
+    {
+        return "The referenced handle did not resolve. If a previous Chat "
+               "current-board edit succeeded, do not reuse created_handles or "
+               "resolved_handles from that result because its temporary "
+               "operation context was closed after applying. "
+               "Retry by passing a stable alias, or call kisurf_query_items "
+               "against the current board and pass the full items[i].handle object.";
+    }
+
+    if( code == "selection_conflict" || code == "stale_session" )
+    {
+        return "The editor context changed. Query the current workspace, reject "
+               "or rollback the session, then retry from the fresh context.";
+    }
+
+    if( code.find( "validation" ) != std::string::npos )
+    {
+        return "Inspect validation facts, adjust the attempted operations, "
+               "rollback if needed, then render and validate again.";
+    }
+
+    return "Use error_code and message to correct the arguments or session state, "
+           "then retry only if the current board context is still valid.";
+}
+
+
+std::string chatDirectRetryHint( const AI_TOOL_CALL_RECORD& aToolCall,
+                                 const wxString& aErrorCode,
+                                 const wxString& aMessage )
+{
+    const std::string tool = toUtf8String( aToolCall.m_ToolName );
+    const std::string code = toUtf8String( aErrorCode );
+    const std::string message = toUtf8String( aMessage );
+
+    if( code == "tool_not_available_in_chat_direct_mode" )
+    {
+        return "Chat Agent writes directly to the current board. Do not open, "
+               "preview, accept, reject, checkpoint, or rollback a review workflow. "
+               "Use kisurf_run_atomic_operation, kisurf_run_cell, query tools, "
+               "or kisurf_run_validation. Re-query the current board after edits.";
+    }
+
+    if( code == "chat_direct_boundary_argument" )
+    {
+        return "Remove board-boundary selector arguments. In Chat mode the "
+               "current board is implicit: query tools always observe the "
+               "current board, and mutation tools apply to the current board "
+               "directly.";
+    }
+
+    if( code == "unknown_tool" )
+    {
+        return "Use one of the Chat current-board tools: kisurf_run_atomic_operation, "
+               "kisurf_run_cell, query tools, or kisurf_run_validation.";
+    }
+
+    if( code == "malformed_arguments" )
+    {
+        if( tool == "kisurf_run_atomic_operation" )
+        {
+            return "Retry kisurf_run_atomic_operation with a top-level JSON object "
+                   "like {\"kind\":\"pcb.move_items\",\"arguments\":{\"items\":[{\"handle\":"
+                   "<items[0].handle>,\"position\":{\"x\":25.5,\"y\":19.75}}]}}. "
+                   "Do not wrap kind inside arguments. Do not open or accept a review "
+                   "workflow in Chat mode. Error: " + message;
+        }
+
+        return "Retry with a JSON object that matches this Chat current-board tool "
+               "schema. Do not open or accept a review workflow in Chat mode. Error: "
+               + message;
+    }
+
+    if( code == "python_worker_unavailable" )
+    {
+        return "Retry this edit with kisurf_run_atomic_operation when it can be "
+               "expressed as one atomic current-board edit, or retry kisurf_run_cell "
+               "after the Python worker is available. Error: " + message;
+    }
+
+    if( code == "unsupported_operation" || code == "unsupported_operation_kind" )
+    {
+        return "Chat current-board edits must use one of the supported atomic "
+               "operation kinds, or use kisurf_run_cell to compose supported "
+               "current-board operations. The unsupported operation was not "
+               "applied. Error: " + message;
+    }
+
+    if( code == "no_active_session" || code == "step_not_started" )
+    {
+        return "Do not call review lifecycle tools in Chat mode. Use "
+               "kisurf_run_cell for grouped work or kisurf_run_atomic_operation "
+               "for one atomic current-board edit.";
+    }
+
+    if( code == "invalid_handle" )
+    {
+        return "Chat current-board handles are scoped to the current board "
+               "observation. Do not reuse created_handles or resolved_handles "
+               "from a previous current-board edit result. Retry with the item's "
+               "alias, or call kisurf_query_items with a type/alias/metadata "
+               "filter and pass the returned handle in the operation arguments. "
+               "For move, use {\"kind\":\"pcb.move_items\",\"arguments\":{\"items\":"
+               "[{\"handle\":items[0].handle,\"position\":{\"x\":25.5,\"y\":19.75}}]}}. "
+               "Error: "
+               + message;
+    }
+
+    std::string hint = sessionRetryHint( aToolCall, aErrorCode, aMessage );
+
+    if( hint.find( "kisurf_open_session" ) != std::string::npos )
+        return "Correct the arguments and retry with Chat current-board tools. "
+               "Do not open or accept a review workflow in Chat mode. Error: "
+               + message;
+
+    return hint;
+}
+
+
+nlohmann::json expectedSessionArgumentsJson( const wxString& aToolName )
+{
+    if( aToolName == wxS( "kisurf_run_cell" ) )
+    {
+        return { { "type", "object" },
+                 { "required", nlohmann::json::array( { "cell_text" } ) },
+                 { "properties",
+                   { { "cell_text", { { "type", "string" } } },
+                     { "cell_id", { { "type", "string" } } },
+                     { "max_operation_count",
+                       { { "type", "integer" }, { "minimum", 1 },
+                         { "maximum", DEFAULT_SCRIPT_OPERATION_LIMIT } } } } } };
+    }
+
+    if( aToolName == wxS( "kisurf_run_atomic_operation" ) )
+    {
+        return { { "type", "object" },
+                 { "required", nlohmann::json::array( { "kind", "arguments" } ) },
+                 { "properties",
+                   { { "kind",
+                       { { "type", "string" },
+                         { "enum", sessionAtomicOperationSetJson() } } },
+                     { "arguments", { { "type", "object" } } } } } };
+    }
+
+    if( aToolName == wxS( "kisurf_render_preview" ) )
+        return catalogRenderPreviewArgumentsSchema();
+
+    if( aToolName == wxS( "kisurf_run_validation" ) )
+        return catalogValidationArgumentsSchema();
+
+    return { { "type", "object" } };
+}
+
+
+bool sessionFailureRetryable( const wxString& aErrorCode )
+{
+    return aErrorCode != wxS( "confirmation_required" );
 }
 
 
@@ -913,7 +1472,77 @@ AI_TOOL_INVOCATION_RESULT deniedResult( const AI_PROVIDER_REQUEST& aRequest,
     result.m_Executed = false;
     result.m_ErrorCode = aErrorCode;
     result.m_Message = aMessage;
-    result.m_ResultJson = resultJson( result, { { "status", "denied" } } );
+    result.m_ResultJson =
+            resultJson( result,
+                        { { "status", "denied" },
+                          { "retryable", sessionFailureRetryable( aErrorCode ) },
+                          { "retry_hint",
+                            sessionRetryHint( aToolCall, aErrorCode, aMessage ) },
+                          { "valid_tools", sessionToolNamesJson() },
+                          { "expected_arguments",
+                            expectedSessionArgumentsJson( aToolCall.m_ToolName ) },
+                          { "valid_operations", sessionAtomicOperationSetJson() } } );
+    return result;
+}
+
+
+AI_TOOL_INVOCATION_RESULT deniedChatDirectResult(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const AI_TOOL_CALL_RECORD& aToolCall,
+        const wxString& aErrorCode,
+        const wxString& aMessage )
+{
+    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
+    result.m_Allowed = false;
+    result.m_Executed = false;
+    result.m_ErrorCode = aErrorCode;
+    result.m_Message = aMessage;
+    nlohmann::json payload = {
+        { "status", toUtf8String( aErrorCode ) },
+        { "mode", "chat_direct" },
+        { "retryable", sessionFailureRetryable( aErrorCode ) },
+        { "retry_hint", chatDirectRetryHint( aToolCall, aErrorCode, aMessage ) },
+        { "valid_tools", chatDirectToolNamesJson() },
+        { "expected_arguments", expectedSessionArgumentsJson( aToolCall.m_ToolName ) },
+        { "valid_operations", sessionAtomicOperationSetJson() }
+    };
+    sanitizeChatLiveJson( payload );
+    result.m_ResultJson = resultJson( result, std::move( payload ) );
+    return result;
+}
+
+
+AI_TOOL_INVOCATION_RESULT deniedChatDirectResult(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const AI_TOOL_CALL_RECORD& aToolCall,
+        const wxString& aErrorCode,
+        const wxString& aMessage,
+        nlohmann::json aPayload )
+{
+    AI_TOOL_INVOCATION_RESULT result = makeResult( aRequest, aToolCall );
+    result.m_Allowed = false;
+    result.m_Executed = false;
+    result.m_ErrorCode = aErrorCode;
+    result.m_Message = aMessage;
+
+    if( !aPayload.contains( "status" ) )
+        aPayload["status"] = toUtf8String( aErrorCode );
+
+    aPayload["mode"] = "chat_direct";
+
+    if( !aPayload.contains( "retryable" ) )
+        aPayload["retryable"] = sessionFailureRetryable( aErrorCode );
+
+    if( !aPayload.contains( "retry_hint" ) )
+        aPayload["retry_hint"] = chatDirectRetryHint( aToolCall, aErrorCode, aMessage );
+
+    aPayload["valid_tools"] = chatDirectToolNamesJson();
+    aPayload["expected_arguments"] =
+            expectedSessionArgumentsJson( aToolCall.m_ToolName );
+    aPayload["valid_operations"] = sessionAtomicOperationSetJson();
+    sanitizeChatLiveJson( aPayload );
+
+    result.m_ResultJson = resultJson( result, std::move( aPayload ) );
     return result;
 }
 
@@ -932,6 +1561,13 @@ AI_TOOL_INVOCATION_RESULT deniedResult( const AI_PROVIDER_REQUEST& aRequest,
 
     if( !aPayload.contains( "status" ) )
         aPayload["status"] = "denied";
+
+    aPayload["retryable"] = sessionFailureRetryable( aErrorCode );
+    aPayload["retry_hint"] = sessionRetryHint( aToolCall, aErrorCode, aMessage );
+    aPayload["valid_tools"] = sessionToolNamesJson();
+    aPayload["expected_arguments"] =
+            expectedSessionArgumentsJson( aToolCall.m_ToolName );
+    aPayload["valid_operations"] = sessionAtomicOperationSetJson();
 
     result.m_ResultJson = resultJson( result, std::move( aPayload ) );
     return result;
@@ -1233,25 +1869,30 @@ bool validateFlexibleHandleRef( const nlohmann::json& aValue )
         return false;
     }
 
-    if( !aValue.contains( "handle_id" )
-        || !jsonIntegerToUint64( aValue["handle_id"], ignoredHandleId ) )
+    const bool hasHandleId = aValue.contains( "handle_id" )
+                             && jsonIntegerToUint64( aValue["handle_id"],
+                                                     ignoredHandleId );
+    const bool hasAlias = aValue.contains( "alias" ) && aValue["alias"].is_string()
+                          && !aValue["alias"].get<std::string>().empty();
+
+    if( !hasHandleId && !hasAlias )
     {
         return false;
     }
 
-    if( aValue.contains( "session_id" )
+    if( aValue.contains( "session_id" ) && hasHandleId
         && !jsonIntegerToUint64( aValue["session_id"], ignoredHandleId ) )
     {
         return false;
     }
 
-    if( aValue.contains( "generation" )
+    if( aValue.contains( "generation" ) && hasHandleId
         && !jsonIntegerToUint64( aValue["generation"], ignoredHandleId ) )
     {
         return false;
     }
 
-    return !aValue.contains( "alias" ) || aValue["alias"].is_string();
+    return !aValue.contains( "alias" ) || hasAlias;
 }
 
 
@@ -1793,9 +2434,25 @@ bool boolFieldRequested( const nlohmann::json& aObject, const char* aName )
 }
 
 
-bool liveBoardSeedRequested( const nlohmann::json& aArguments )
+bool sessionOnlyRequested( const nlohmann::json& aArguments )
 {
-    if( boolFieldRequested( aArguments, "live_board" )
+    if( boolFieldRequested( aArguments, "session_only" ) )
+        return true;
+
+    if( aArguments.is_object() && aArguments.contains( "filter" )
+        && aArguments["filter"].is_object() )
+    {
+        return boolFieldRequested( aArguments["filter"], "session_only" );
+    }
+
+    return false;
+}
+
+
+bool chatDirectBoundaryArgumentRequested( const nlohmann::json& aArguments )
+{
+    if( boolFieldRequested( aArguments, "session_only" )
+        || boolFieldRequested( aArguments, "live_board" )
         || boolFieldRequested( aArguments, "live_board_seed" ) )
     {
         return true;
@@ -1804,11 +2461,29 @@ bool liveBoardSeedRequested( const nlohmann::json& aArguments )
     if( aArguments.is_object() && aArguments.contains( "filter" )
         && aArguments["filter"].is_object() )
     {
-        return boolFieldRequested( aArguments["filter"], "live_board" )
-               || boolFieldRequested( aArguments["filter"], "live_board_seed" );
+        const nlohmann::json& filter = aArguments["filter"];
+
+        return boolFieldRequested( filter, "session_only" )
+               || boolFieldRequested( filter, "live_board" )
+               || boolFieldRequested( filter, "live_board_seed" );
     }
 
     return false;
+}
+
+
+bool liveBoardSeedRequested( const nlohmann::json& aArguments )
+{
+    if( sessionOnlyRequested( aArguments ) )
+        return false;
+
+    if( boolFieldRequested( aArguments, "live_board" )
+        || boolFieldRequested( aArguments, "live_board_seed" ) )
+    {
+        return true;
+    }
+
+    return true;
 }
 
 
@@ -1819,6 +2494,7 @@ bool sessionOperationNeedsShadowSeed( AI_SESSION_OPERATION_KIND aKind,
     {
     case AI_SESSION_OPERATION_KIND::QueryItems:
     case AI_SESSION_OPERATION_KIND::QueryItem:
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
     case AI_SESSION_OPERATION_KIND::QuerySelection:
     case AI_SESSION_OPERATION_KIND::QueryNets:
     case AI_SESSION_OPERATION_KIND::QueryLayers:
@@ -1836,6 +2512,25 @@ bool sessionOperationNeedsShadowSeed( AI_SESSION_OPERATION_KIND aKind,
     default:
         return false;
     }
+}
+
+
+bool directLiveObservationRefreshRequested( const wxString& aToolName,
+                                            const nlohmann::json& aArguments )
+{
+    if( sessionOnlyRequested( aArguments ) )
+        return false;
+
+    if( aToolName == wxS( "kisurf_query_board_summary" )
+        || aToolName == wxS( "kisurf_query_items" )
+        || aToolName == wxS( "kisurf_query_unplaced_footprints" )
+        || aToolName == wxS( "kisurf_query_nets" )
+        || aToolName == wxS( "kisurf_query_layers" ) )
+    {
+        return true;
+    }
+
+    return false;
 }
 
 
@@ -2024,8 +2719,8 @@ bool seedShadowBoardFromContextSnapshot(
             item.m_Metadata[wxS( "selected" )] = wxS( "true" );
 
         for( const char* key : { "reference", "value", "footprint_reference",
-                                 "footprint_value", "number", "pad_number",
-                                 "footprint_id" } )
+                                 "footprint_value", "footprint", "number",
+                                 "pad_number", "footprint_id" } )
         {
             wxString value = stringField( details, key );
 
@@ -2099,6 +2794,158 @@ void collectNetAndLayerHintsFromContextObject(
 }
 
 
+std::string jsonStringFieldUtf8( const nlohmann::json& aObject, const char* aName )
+{
+    if( aObject.is_object() && aObject.contains( aName )
+        && aObject[aName].is_string() )
+    {
+        return aObject[aName].get_ref<const std::string&>();
+    }
+
+    return std::string();
+}
+
+
+nlohmann::json contextObjectDetails( const nlohmann::json& aObject )
+{
+    if( aObject.is_object() && aObject.contains( "details" )
+        && aObject["details"].is_object() )
+    {
+        return aObject["details"];
+    }
+
+    return nlohmann::json::object();
+}
+
+
+bool contextObjectIsSchematicSymbol( const nlohmann::json& aObject,
+                                     const nlohmann::json& aDetails )
+{
+    if( jsonStringFieldUtf8( aDetails, "kind" ) == "symbol" )
+        return true;
+
+    if( aObject.is_object() && aObject.contains( "type" )
+        && aObject["type"].is_number_integer() )
+    {
+        return BaseType( static_cast<KICAD_T>( aObject["type"].get<int>() ) )
+               == SCH_SYMBOL_T;
+    }
+
+    return false;
+}
+
+
+nlohmann::json expectedFootprintRecordJson( const nlohmann::json& aObject,
+                                            const nlohmann::json& aDetails )
+{
+    std::string reference = jsonStringFieldUtf8( aDetails, "reference" );
+
+    if( reference.empty() )
+        reference = jsonStringFieldUtf8( aObject, "label" );
+
+    std::string footprint = jsonStringFieldUtf8( aDetails, "footprint" );
+
+    if( footprint.empty() )
+        footprint = jsonStringFieldUtf8( aDetails, "footprint_id" );
+
+    return {
+        { "reference", reference },
+        { "value", jsonStringFieldUtf8( aDetails, "value" ) },
+        { "footprint", footprint },
+        { "source", "schematic_context" }
+    };
+}
+
+
+void collectExpectedFootprintsFromContextArray(
+        const nlohmann::json& aObjects,
+        std::map<std::string, nlohmann::json>& aExpectedByReference )
+{
+    if( !aObjects.is_array() )
+        return;
+
+    for( const nlohmann::json& object : aObjects )
+    {
+        const nlohmann::json details = contextObjectDetails( object );
+
+        if( !contextObjectIsSchematicSymbol( object, details ) )
+            continue;
+
+        nlohmann::json record = expectedFootprintRecordJson( object, details );
+        const std::string reference = jsonStringFieldUtf8( record, "reference" );
+        const std::string footprint = jsonStringFieldUtf8( record, "footprint" );
+
+        if( reference.empty() || footprint.empty() )
+            continue;
+
+        aExpectedByReference[reference] = std::move( record );
+    }
+}
+
+
+std::string shadowMetadataString( const AI_SHADOW_ITEM& aItem, const char* aName )
+{
+    const auto it = aItem.m_Metadata.find( wxString::FromUTF8( aName ) );
+
+    if( it == aItem.m_Metadata.end() )
+        return std::string();
+
+    return toUtf8String( it->second );
+}
+
+
+std::string shadowGeometryString( const AI_SHADOW_ITEM& aItem, const char* aName )
+{
+    const nlohmann::json geometry =
+            nlohmann::json::parse( toUtf8String( aItem.m_GeometryJson ), nullptr, false );
+
+    if( geometry.is_discarded() || !geometry.is_object() )
+        return std::string();
+
+    return jsonStringFieldUtf8( geometry, aName );
+}
+
+
+std::optional<nlohmann::json> placedFootprintRecordFromShadowItem(
+        const AI_SHADOW_ITEM& aItem )
+{
+    if( aItem.m_Type != wxS( "footprint" ) )
+        return std::nullopt;
+
+    std::string reference = shadowMetadataString( aItem, "reference" );
+
+    if( reference.empty() )
+        reference = shadowGeometryString( aItem, "reference" );
+
+    if( reference.empty() )
+        return std::nullopt;
+
+    std::string footprint = shadowMetadataString( aItem, "footprint" );
+
+    if( footprint.empty() )
+        footprint = shadowGeometryString( aItem, "footprint" );
+
+    return nlohmann::json{
+        { "reference", reference },
+        { "value", shadowMetadataString( aItem, "value" ) },
+        { "footprint", footprint },
+        { "handle", handleJson( aItem.m_Handle ) },
+        { "source", "pcb_context" }
+    };
+}
+
+
+nlohmann::json mapValuesJson( const std::map<std::string, nlohmann::json>& aValues )
+{
+    nlohmann::json values = nlohmann::json::array();
+
+    for( const auto& [key, value] : aValues )
+        values.push_back( value );
+
+    return values;
+}
+
+
 nlohmann::json stringSetJson( const std::set<std::string>& aValues )
 {
     nlohmann::json values = nlohmann::json::array();
@@ -2142,6 +2989,9 @@ AI_SESSION_OPERATION_KIND operationKindForSessionQueryTool( const wxString& aToo
     if( aToolName == wxS( "kisurf_query_item" ) )
         return AI_SESSION_OPERATION_KIND::QueryItem;
 
+    if( aToolName == wxS( "kisurf_query_unplaced_footprints" ) )
+        return AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints;
+
     if( aToolName == wxS( "kisurf_query_selection" ) )
         return AI_SESSION_OPERATION_KIND::QuerySelection;
 
@@ -2161,6 +3011,15 @@ AI_SESSION_OPERATION_KIND operationKindForSessionQueryTool( const wxString& aToo
         return AI_SESSION_OPERATION_KIND::QueryActivityTimeline;
 
     return AI_SESSION_OPERATION_KIND::Unknown;
+}
+
+
+bool isSessionObservationToolName( const wxString& aToolName )
+{
+    return aToolName == wxS( "kisurf_query_board_summary" )
+           || aToolName == wxS( "kisurf_query_items" )
+           || operationKindForSessionQueryTool( aToolName )
+                      != AI_SESSION_OPERATION_KIND::Unknown;
 }
 
 
@@ -2296,6 +3155,7 @@ nlohmann::json maintenanceOperationResult(
         case AI_SESSION_OPERATION_KIND::QueryBoardSummary:
         case AI_SESSION_OPERATION_KIND::QueryItems:
         case AI_SESSION_OPERATION_KIND::QueryItem:
+        case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
         case AI_SESSION_OPERATION_KIND::QuerySelection:
         case AI_SESSION_OPERATION_KIND::QueryNets:
         case AI_SESSION_OPERATION_KIND::QueryLayers:
@@ -2424,7 +3284,12 @@ std::optional<AI_SESSION_HANDLE> resolveQueryHandle(
     }
 
     if( aSession.ResolveHandle( handle ) != AI_SESSION_HANDLE_STATUS::Live )
+    {
+        if( !handle.m_Alias.IsEmpty() )
+            return aSession.ResolveAlias( handle.m_Alias );
+
         return std::nullopt;
+    }
 
     if( handle.m_Alias.IsEmpty() )
     {
@@ -2433,6 +3298,48 @@ std::optional<AI_SESSION_HANDLE> resolveQueryHandle(
     }
 
     return handle;
+}
+
+
+bool hasAtomicHandleReference( const nlohmann::json& aArguments )
+{
+    return aArguments.is_object()
+           && ( aArguments.contains( "handle" )
+                || aArguments.contains( "handles" )
+                || aArguments.contains( "alias" )
+                || aArguments.contains( "items" )
+                || aArguments.contains( "item" ) );
+}
+
+
+void normalizeAtomicToolEnvelope( nlohmann::json& aArguments )
+{
+    if( !aArguments.is_object() || !aArguments.contains( "arguments" )
+        || !aArguments["arguments"].is_object() )
+    {
+        return;
+    }
+
+    nlohmann::json& operationArgs = aArguments["arguments"];
+
+    if( !hasAtomicHandleReference( operationArgs ) )
+    {
+        for( const char* key : { "items", "item", "handle", "handles", "alias" } )
+        {
+            if( aArguments.contains( key ) )
+            {
+                operationArgs[key] = aArguments[key];
+                break;
+            }
+        }
+    }
+
+    for( const char* key :
+         { "delta_x", "delta_y", "dx", "dy", "deltaX", "deltaY" } )
+    {
+        if( !operationArgs.contains( key ) && aArguments.contains( key ) )
+            operationArgs[key] = aArguments[key];
+    }
 }
 
 
@@ -2768,6 +3675,54 @@ SESSION_OPERATION_QUERY_RESULT runSessionObservationOperation(
         return finish( std::move( result ) );
     }
 
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
+    {
+        std::map<std::string, nlohmann::json> expectedByReference;
+        std::map<std::string, nlohmann::json> placedByReference;
+        nlohmann::json unplaced = nlohmann::json::array();
+
+        if( context.contains( "visible_objects" ) )
+        {
+            collectExpectedFootprintsFromContextArray( context["visible_objects"],
+                                                       expectedByReference );
+        }
+
+        if( context.contains( "selected_objects" ) )
+        {
+            collectExpectedFootprintsFromContextArray( context["selected_objects"],
+                                                       expectedByReference );
+        }
+
+        for( const AI_SHADOW_ITEM& item :
+             aSession.ShadowBoard().QueryItems( wxS( "{\"type\":\"footprint\"}" ) ) )
+        {
+            if( std::optional<nlohmann::json> record =
+                        placedFootprintRecordFromShadowItem( item ) )
+            {
+                const std::string reference =
+                        jsonStringFieldUtf8( *record, "reference" );
+
+                if( !reference.empty() )
+                    placedByReference[reference] = std::move( *record );
+            }
+        }
+
+        for( const auto& [reference, record] : expectedByReference )
+        {
+            if( placedByReference.find( reference ) == placedByReference.end() )
+                unplaced.push_back( record );
+        }
+
+        result.m_Payload["status"] = "unplaced_footprints";
+        result.m_Payload["expected_count"] = expectedByReference.size();
+        result.m_Payload["placed_count"] = placedByReference.size();
+        result.m_Payload["unplaced_count"] = unplaced.size();
+        result.m_Payload["expected"] = mapValuesJson( expectedByReference );
+        result.m_Payload["placed"] = mapValuesJson( placedByReference );
+        result.m_Payload["unplaced"] = std::move( unplaced );
+        return finish( std::move( result ) );
+    }
+
     case AI_SESSION_OPERATION_KIND::QuerySelection:
     {
         nlohmann::json selectedObjects =
@@ -2783,20 +3738,31 @@ SESSION_OPERATION_QUERY_RESULT runSessionObservationOperation(
 
         nlohmann::json selectedShadowItems = nlohmann::json::array();
         nlohmann::json selectedHandles = nlohmann::json::array();
+        size_t selectedGeneratedShadowCount = 0;
 
         for( const AI_SHADOW_ITEM& item :
              aSession.ShadowBoard().QueryItems( wxS( "{\"selection\":true}" ) ) )
         {
             selectedShadowItems.push_back( shadowItemJson( item ) );
             selectedHandles.push_back( handleJson( item.m_Handle ) );
+
+            const auto seedSourceIt = item.m_Metadata.find( wxS( "seed_source" ) );
+
+            if( seedSourceIt == item.m_Metadata.end()
+                || seedSourceIt->second != wxS( "context_snapshot" ) )
+            {
+                ++selectedGeneratedShadowCount;
+            }
         }
 
         const size_t selectedShadowCount = selectedShadowItems.size();
         result.m_Payload["status"] = "selection";
         result.m_Payload["selected_count"] =
-                contextSelectedCount + selectedShadowCount;
+                contextSelectedCount + selectedGeneratedShadowCount;
         result.m_Payload["selected_context_count"] = contextSelectedCount;
         result.m_Payload["selected_shadow_count"] = selectedShadowCount;
+        result.m_Payload["selected_generated_shadow_count"] =
+                selectedGeneratedShadowCount;
         result.m_Payload["selection_revision"] =
                 selectionRevisionJson( aSession, aRequest );
         result.m_Payload["selected_objects"] = std::move( selectedObjects );
@@ -2822,11 +3788,8 @@ SESSION_OPERATION_QUERY_RESULT runSessionObservationOperation(
                 collectNetAndLayerHintsFromContextObject( object, nets, layers );
         }
 
-        for( const AI_SHADOW_ITEM& item : aSession.ShadowBoard().QueryItems( wxS( "{}" ) ) )
-        {
-            if( !item.m_Net.IsEmpty() )
-                nets.insert( toUtf8String( item.m_Net ) );
-        }
+        for( const wxString& net : aSession.ShadowBoard().QueryNets() )
+            nets.insert( toUtf8String( net ) );
 
         result.m_Payload["status"] = "nets";
         result.m_Payload["nets"] = stringSetJson( nets );
@@ -2978,6 +3941,39 @@ SESSION_OPERATION_QUERY_RESULT runSessionObservationOperation(
         return finish( std::move( result ) );
     }
 }
+
+
+bool invocationResultHasPendingSessionMutation( const AI_TOOL_INVOCATION_RESULT& aResult )
+{
+    if( !aResult.m_Allowed || !aResult.m_Executed || aResult.m_ResultJson.IsEmpty() )
+        return false;
+
+    const nlohmann::json payload = parseObjectJson( aResult.m_ResultJson );
+
+    if( payload.value( "shadow_board_mutated", false )
+        && !payload.value( "board_mutated", false ) )
+    {
+        return true;
+    }
+
+    if( !payload.contains( "operation_results" )
+        || !payload["operation_results"].is_array() )
+    {
+        return false;
+    }
+
+    for( const nlohmann::json& operation : payload["operation_results"] )
+    {
+        if( operation.is_object()
+            && operation.value( "shadow_board_mutated", false )
+            && !operation.value( "board_mutated", false ) )
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 } // namespace
 
 
@@ -3033,6 +4029,207 @@ AI_SESSION_TOOL_CALL_HANDLER::AI_SESSION_TOOL_CALL_HANDLER(
         m_ShadowBoardSeeder( aShadowBoardSeeder ),
         m_ValidationService( aValidationService )
 {
+}
+
+
+void AI_SESSION_TOOL_CALL_HANDLER::clearActiveSessionState( bool aStopPythonWorker )
+{
+    if( m_Session )
+        clearSessionPreview( m_PreviewService, m_Session->SessionId() );
+
+    clearPreviewState();
+
+    if( aStopPythonWorker )
+        stopSessionPythonWorker( m_PythonWorker.get() );
+
+    m_Session.reset();
+    m_ShadowBoardSeeded = false;
+    m_SessionOpenContextSnapshot = AI_CONTEXT_SNAPSHOT();
+}
+
+
+AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::maybeApplyDirectLiveMutation(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const AI_TOOL_CALL_RECORD& aToolCall,
+        AI_TOOL_INVOCATION_RESULT aResult )
+{
+    if( !m_DirectLiveApplyAfterMutation || !m_Session )
+    {
+        return aResult;
+    }
+
+    if( !invocationResultHasPendingSessionMutation( aResult ) )
+    {
+        nlohmann::json payload = parseObjectJson( aResult.m_ResultJson );
+        sanitizeChatLiveJson( payload );
+        clearActiveSessionState( true );
+        aResult.m_ResultJson = resultJson( aResult, std::move( payload ) );
+        return aResult;
+    }
+
+    if( !m_AcceptAdapter )
+    {
+        nlohmann::json payload = parseObjectJson( aResult.m_ResultJson );
+
+        clearActiveSessionState( true );
+
+        aResult.m_Allowed = false;
+        aResult.m_Executed = false;
+        aResult.m_ErrorCode = wxS( "current_board_apply_unavailable" );
+        aResult.m_Message =
+                wxS( "Chat current-board mutation cannot be applied because no "
+                     "current-board apply adapter is configured." );
+
+        payload.erase( "session" );
+        payload.erase( "shadow_board_mutated" );
+        payload["status"] = "current_board_apply_unavailable";
+        payload["mode"] = "chat_direct";
+        payload["board_mutated"] = false;
+        payload["current_board_apply"] = {
+            { "status", "unavailable" },
+            { "error_code", "current_board_apply_unavailable" },
+            { "message",
+              "No current-board apply adapter is configured for this editor." }
+        };
+        payload["retryable"] = false;
+        payload["retry_hint"] =
+                "This Chat Agent is in current-board direct mode, but no "
+                "current-board apply adapter is configured. Do not treat the "
+                "mutation as applied; use read-only query tools or run the edit "
+                "in an editor that exposes a current-board apply adapter.";
+        payload["valid_tools"] = chatDirectToolNamesJson();
+        payload["expected_arguments"] =
+                expectedSessionArgumentsJson( aToolCall.m_ToolName );
+        payload["created_handles"] = nlohmann::json::array();
+        payload["resolved_handles"] = nlohmann::json::array();
+
+        sanitizeChatLiveJson( payload );
+        aResult.m_ResultJson = resultJson( aResult, std::move( payload ) );
+        return aResult;
+    }
+
+    AI_ACCEPT_APPLY_RESULT applyResult =
+            AI_ACCEPT_APPLIER::ApplyDirectLive( *m_Session, *m_AcceptAdapter );
+
+    nlohmann::json payload = parseObjectJson( aResult.m_ResultJson );
+    payload.erase( "session" );
+    payload.erase( "shadow_board_mutated" );
+    payload["current_board_apply"] = {
+        { "applied_operation_count", applyResult.m_AppliedOperationCount }
+    };
+
+    if( !applyResult.m_Ok )
+    {
+        aResult.m_Allowed = false;
+        aResult.m_Executed = false;
+        aResult.m_ErrorCode = applyResult.m_ErrorCode;
+        aResult.m_Message = applyResult.m_Message.IsEmpty()
+                                     ? wxString( wxS( "Current-board apply failed." ) )
+                                     : applyResult.m_Message;
+        payload["status"] = "current_board_apply_failed";
+        payload["board_mutated"] = false;
+        payload["current_board_apply"]["status"] = "failed";
+        payload["current_board_apply"]["error_code"] =
+                toUtf8String( applyResult.m_ErrorCode );
+        payload["current_board_apply"]["message"] =
+                toUtf8String( applyResult.m_Message );
+        payload["retryable"] = true;
+        payload["retry_hint"] = chatDirectRetryHint( aToolCall, aResult.m_ErrorCode,
+                                                     aResult.m_Message );
+        sanitizeChatLiveJson( payload );
+        aResult.m_ResultJson = resultJson( aResult, std::move( payload ) );
+        return aResult;
+    }
+
+    nlohmann::json staleHandles = nlohmann::json::object();
+
+    if( payload.contains( "created_handles" ) )
+        staleHandles["created_handles"] = payload["created_handles"];
+
+    if( payload.contains( "resolved_handles" ) )
+        staleHandles["resolved_handles"] = payload["resolved_handles"];
+
+    nlohmann::json aliases = nlohmann::json::array();
+
+    if( payload.contains( "arguments" ) && payload["arguments"].is_object()
+        && payload["arguments"].contains( "alias" )
+        && payload["arguments"]["alias"].is_string() )
+    {
+        aliases.push_back( payload["arguments"]["alias"] );
+    }
+
+    auto collectAliases = [&aliases]( const nlohmann::json& aHandles )
+    {
+        if( !aHandles.is_array() )
+            return;
+
+        for( const nlohmann::json& handle : aHandles )
+        {
+            if( handle.is_object() && handle.contains( "alias" )
+                && handle["alias"].is_string()
+                && !handle["alias"].get<std::string>().empty() )
+            {
+                const std::string alias = handle["alias"].get<std::string>();
+
+                if( std::find( aliases.begin(), aliases.end(), alias )
+                    == aliases.end() )
+                {
+                    aliases.push_back( alias );
+                }
+            }
+        }
+    };
+
+    collectAliases( staleHandles.value( "created_handles",
+                                        nlohmann::json::array() ) );
+    collectAliases( staleHandles.value( "resolved_handles",
+                                        nlohmann::json::array() ) );
+
+    clearActiveSessionState( true );
+
+    size_t resolvedItemCount = 0;
+
+    if( staleHandles.contains( "resolved_handles" )
+        && staleHandles["resolved_handles"].is_array() )
+    {
+        resolvedItemCount = staleHandles["resolved_handles"].size();
+    }
+
+    payload["board_mutated"] = applyResult.m_BoardMutated;
+    payload["current_board_apply"]["status"] = "applied";
+    payload["current_board_apply"]["board_mutated"] = applyResult.m_BoardMutated;
+    payload["aliases"] = aliases;
+    payload["resolved_item_count"] = resolvedItemCount;
+    payload["current_board_reference_policy"] = {
+        { "handles_in_this_result_reusable", false },
+        { "cleared_handle_fields",
+          nlohmann::json::array( { "created_handles", "resolved_handles" } ) },
+        { "preferred_followup_reference", nlohmann::json::object() },
+        { "fallback_query_tool", "kisurf_query_items" },
+        { "fallback_query_arguments",
+          { { "filter",
+              { { "alias", aliases.empty() ? nlohmann::json() : aliases.front() } } } } },
+        { "instruction",
+          "For any later edit of an item touched by this tool call, use aliases "
+          "or re-query the current board first; do not reuse created_handles or "
+          "resolved_handles from this result." }
+    };
+
+    if( !aliases.empty() )
+        payload["current_board_reference_policy"]["preferred_followup_reference"] =
+                { { "alias", aliases.front() } };
+
+    payload["created_handles"] = nlohmann::json::array();
+    payload["resolved_handles"] = nlohmann::json::array();
+    payload.erase( "handle_lifecycle" );
+    payload.erase( "session" );
+    payload.erase( "shadow_board_mutated" );
+    aResult.m_Message = applyResult.m_Message.IsEmpty()
+                                ? wxString( wxS( "Applied directly to the current board." ) )
+                                : applyResult.m_Message;
+    sanitizeChatLiveJson( payload );
+    aResult.m_ResultJson = resultJson( aResult, std::move( payload ) );
+    return aResult;
 }
 
 
@@ -3206,10 +4403,41 @@ nlohmann::json AI_SESSION_TOOL_CALL_HANDLER::pythonEventTimelineJson() const
 AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         const AI_PROVIDER_REQUEST& aRequest, const AI_TOOL_CALL_RECORD& aToolCall )
 {
+    SCOPE_EXIT directLiveCleanup(
+            [this]()
+            {
+                if( m_DirectLiveApplyAfterMutation )
+                    clearActiveSessionState( false );
+            } );
+
+    auto deniedForMode =
+            [this, &aRequest, &aToolCall]( const wxString& aErrorCode,
+                                           const wxString& aMessage )
+                    -> AI_TOOL_INVOCATION_RESULT
+            {
+                if( m_DirectLiveApplyAfterMutation )
+                {
+                    return deniedChatDirectResult( aRequest, aToolCall,
+                                                   aErrorCode, aMessage );
+                }
+
+                return deniedResult( aRequest, aToolCall, aErrorCode,
+                                     aMessage );
+            };
+
     if( !isSessionTool( aToolCall.m_ToolName ) )
     {
-        return deniedResult( aRequest, aToolCall, wxS( "unknown_tool" ),
-                             wxS( "Tool is not an AI execution session tool." ) );
+        return deniedForMode( wxS( "unknown_tool" ),
+                              wxS( "Tool is not an AI execution session tool." ) );
+    }
+
+    if( m_DirectLiveApplyAfterMutation && !isChatDirectTool( aToolCall.m_ToolName ) )
+    {
+        return deniedChatDirectResult(
+                aRequest, aToolCall, wxS( "tool_not_available_in_chat_direct_mode" ),
+                wxS( "Chat Agent uses current-board tools directly. Session lifecycle, "
+                     "preview, accept, reject, checkpoint, and rollback tools are "
+                     "reserved for Next Action or explicit session runtimes." ) );
     }
 
     nlohmann::json arguments;
@@ -3221,21 +4449,284 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
     }
     catch( const std::exception& e )
     {
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
-                             wxString::FromUTF8( e.what() ) );
+        return deniedForMode( wxS( "malformed_arguments" ),
+                              wxString::FromUTF8( e.what() ) );
     }
 
     if( !arguments.is_object() )
     {
-        return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
-                             wxS( "Tool call arguments must be an object." ) );
+        return deniedForMode( wxS( "malformed_arguments" ),
+                              wxS( "Tool call arguments must be an object." ) );
+    }
+
+    if( m_DirectLiveApplyAfterMutation
+        && chatDirectBoundaryArgumentRequested( arguments ) )
+    {
+        return deniedChatDirectResult(
+                aRequest, aToolCall, wxS( "chat_direct_boundary_argument" ),
+                wxS( "Chat current-board tools do not accept session/live-board "
+                     "boundary arguments. The current board is implicit." ) );
+    }
+
+    AI_CURRENT_BOARD_TOOL_ADAPTER* currentBoardAdapter =
+            m_DirectLiveApplyAfterMutation && m_AcceptAdapter
+                    ? dynamic_cast<AI_CURRENT_BOARD_TOOL_ADAPTER*>( m_AcceptAdapter )
+                    : nullptr;
+
+    auto currentBoardInvocationResult =
+            [&]( AI_CURRENT_BOARD_TOOL_RESULT aCurrentBoardResult )
+                    -> AI_TOOL_INVOCATION_RESULT
+            {
+                nlohmann::json payload =
+                        parseObjectJson( aCurrentBoardResult.m_ResultJson );
+                sanitizeChatLiveJson( payload );
+
+                if( !aCurrentBoardResult.m_Ok )
+                {
+                    return deniedChatDirectResult(
+                            aRequest, aToolCall,
+                            aCurrentBoardResult.m_ErrorCode.IsEmpty()
+                                    ? wxString( wxS( "current_board_tool_failed" ) )
+                                    : aCurrentBoardResult.m_ErrorCode,
+                            aCurrentBoardResult.m_Message, std::move( payload ) );
+                }
+
+                if( aToolCall.m_ToolName == wxS( "kisurf_run_atomic_operation" ) )
+                {
+                    if( !payload.contains( "created_items" )
+                        || !payload["created_items"].is_array() )
+                    {
+                        payload["created_items"] = nlohmann::json::array();
+                    }
+
+                    if( !payload.contains( "resolved_items" )
+                        || !payload["resolved_items"].is_array() )
+                    {
+                        payload["resolved_items"] = nlohmann::json::array();
+                    }
+
+                    if( !payload.contains( "current_board_apply" )
+                        || !payload["current_board_apply"].is_object() )
+                    {
+                        payload["current_board_apply"] = {
+                            { "status", aCurrentBoardResult.m_Executed
+                                                ? "applied"
+                                                : "not_executed" },
+                            { "applied_operation_count",
+                              aCurrentBoardResult.m_Executed ? 1 : 0 }
+                        };
+                    }
+
+                    nlohmann::json aliases = payload.value(
+                            "aliases", nlohmann::json::array() );
+
+                    if( !aliases.is_array() )
+                        aliases = nlohmann::json::array();
+
+                    auto addAlias =
+                            [&aliases]( const nlohmann::json& aAlias )
+                            {
+                                if( !aAlias.is_string()
+                                    || aAlias.get_ref<const std::string&>().empty() )
+                                {
+                                    return;
+                                }
+
+                                const std::string alias =
+                                        aAlias.get_ref<const std::string&>();
+
+                                if( std::find( aliases.begin(), aliases.end(),
+                                               alias ) == aliases.end() )
+                                {
+                                    aliases.push_back( alias );
+                                }
+                            };
+
+                    if( payload.contains( "arguments" )
+                        && payload["arguments"].is_object()
+                        && payload["arguments"].contains( "alias" ) )
+                    {
+                        addAlias( payload["arguments"]["alias"] );
+                    }
+
+                    auto collectItemAliases =
+                            [&addAlias]( const nlohmann::json& aItems )
+                            {
+                                if( !aItems.is_array() )
+                                    return;
+
+                                for( const nlohmann::json& item : aItems )
+                                {
+                                    if( item.is_object()
+                                        && item.contains( "alias" ) )
+                                    {
+                                        addAlias( item["alias"] );
+                                    }
+                                }
+                            };
+
+                    collectItemAliases( payload["created_items"] );
+                    collectItemAliases( payload["resolved_items"] );
+                    payload["aliases"] = aliases;
+
+                    if( !payload.contains( "current_board_reference_policy" ) )
+                    {
+                        payload["current_board_reference_policy"] = {
+                            { "handles_in_this_result_reusable", true },
+                            { "preferred_followup_reference",
+                              aliases.empty() ? nlohmann::json::object()
+                                              : nlohmann::json(
+                                                        { { "alias",
+                                                            aliases.front() } } ) },
+                            { "fallback_query_tool", "kisurf_query_items" },
+                            { "instruction",
+                              "For later edits, prefer the current-board item "
+                              "handle or alias returned in created_items or "
+                              "resolved_items. Re-query if the board has changed." }
+                        };
+                    }
+                }
+
+                return allowedResult( aRequest, aToolCall,
+                                      aCurrentBoardResult.m_Executed,
+                                      aCurrentBoardResult.m_Message,
+                                      std::move( payload ) );
+            };
+
+    if( m_DirectLiveApplyAfterMutation && !currentBoardAdapter
+        && chatDirectToolRequiresCurrentBoardAdapter( aToolCall.m_ToolName ) )
+    {
+        return deniedChatDirectResult(
+                aRequest, aToolCall, wxS( "current_board_tool_unavailable" ),
+                wxS( "Chat current-board tools require an editor adapter that "
+                     "exposes current-board query and mutation operations." ),
+                { { "status", "current_board_tool_unavailable" },
+                  { "mode", "chat_direct" },
+                  { "board_mutated", false },
+                  { "current_board_apply",
+                    { { "status", "unavailable" },
+                      { "error_code", "current_board_tool_unavailable" },
+                      { "message",
+                        "No current-board tool adapter is configured for this "
+                        "editor." } } },
+                  { "retryable", false },
+                  { "retry_hint",
+                    "This Chat Agent can only edit/query the current board through "
+                    "a current-board tool adapter. Do not retry with session, "
+                    "preview, accept, rollback, or shadow-board arguments; use an "
+                    "editor that provides current-board tools." },
+                  { "valid_tools", chatDirectToolNamesJson() },
+                  { "expected_arguments",
+                    expectedSessionArgumentsJson( aToolCall.m_ToolName ) } } );
+    }
+
+    if( currentBoardAdapter )
+    {
+        if( aToolCall.m_ToolName == wxS( "kisurf_query_board_summary" ) )
+            return currentBoardInvocationResult(
+                    currentBoardAdapter->QueryCurrentBoardSummary() );
+
+        if( aToolCall.m_ToolName == wxS( "kisurf_query_items" ) )
+        {
+            nlohmann::json filter = nlohmann::json::object();
+
+            if( arguments.contains( "filter" ) && arguments["filter"].is_object() )
+                filter = arguments["filter"];
+
+            return currentBoardInvocationResult(
+                    currentBoardAdapter->QueryCurrentBoardItems( fromJson( filter ) ) );
+        }
+
+        if( aToolCall.m_ToolName == wxS( "kisurf_query_item" ) )
+        {
+            nlohmann::json filter = nlohmann::json::object();
+
+            if( arguments.contains( "alias" ) && arguments["alias"].is_string() )
+                filter["alias"] = arguments["alias"];
+
+            if( arguments.contains( "handle" ) )
+                filter["handle"] = arguments["handle"];
+
+            AI_CURRENT_BOARD_TOOL_RESULT queryResult =
+                    currentBoardAdapter->QueryCurrentBoardItems( fromJson( filter ) );
+            nlohmann::json payload = parseObjectJson( queryResult.m_ResultJson );
+
+            if( queryResult.m_Ok )
+            {
+                const bool found = payload.contains( "items" )
+                                   && payload["items"].is_array()
+                                   && !payload["items"].empty();
+                payload["status"] = found ? "item" : "item_not_found";
+                payload["item"] = found ? payload["items"].front()
+                                         : nlohmann::json::object();
+                payload["board_mutated"] = false;
+
+                if( !found )
+                {
+                    queryResult.m_Ok = false;
+                    queryResult.m_ErrorCode = wxS( "invalid_handle" );
+                    queryResult.m_Message =
+                            wxS( "No current-board item matched the handle or alias." );
+                }
+
+                queryResult.m_ResultJson = fromJson( payload );
+            }
+
+            return currentBoardInvocationResult( std::move( queryResult ) );
+        }
+
+        if( aToolCall.m_ToolName == wxS( "kisurf_query_nets" ) )
+            return currentBoardInvocationResult(
+                    currentBoardAdapter->QueryCurrentBoardNets() );
+
+        if( aToolCall.m_ToolName == wxS( "kisurf_run_atomic_operation" ) )
+        {
+            if( !arguments.contains( "kind" ) || !arguments["kind"].is_string()
+                || !arguments.contains( "arguments" )
+                || !arguments["arguments"].is_object() )
+            {
+                return deniedChatDirectResult(
+                        aRequest, aToolCall, wxS( "malformed_arguments" ),
+                        wxS( "kisurf_run_atomic_operation requires kind and "
+                             "arguments object." ) );
+            }
+
+            const std::string kindName =
+                    arguments["kind"].get_ref<const std::string&>();
+            const AI_SESSION_OPERATION_KIND operationKind =
+                    operationKindForAtomicOperationId( kindName );
+
+            if( operationKind == AI_SESSION_OPERATION_KIND::Unknown )
+            {
+                return deniedChatDirectResult(
+                        aRequest, aToolCall, wxS( "unsupported_operation_kind" ),
+                        wxString::Format( wxS( "Unsupported atomic operation kind '%s'." ),
+                                          wxString::FromUTF8( kindName.c_str() ) ) );
+            }
+
+            nlohmann::json operationArguments = arguments["arguments"];
+
+            for( const char* selectorKey :
+                 { "handles", "handle", "items", "item", "alias", "filter" } )
+            {
+                if( arguments.contains( selectorKey )
+                    && !operationArguments.contains( selectorKey ) )
+                {
+                    operationArguments[selectorKey] = arguments[selectorKey];
+                }
+            }
+
+            return currentBoardInvocationResult(
+                    currentBoardAdapter->RunCurrentBoardAtomicOperation(
+                            operationKind, fromJson( operationArguments ) ) );
+        }
     }
 
     if( aToolCall.m_ToolName == wxS( "kisurf_open_session" ) )
     {
         if( m_Session && m_Session->Status() == AI_EXECUTION_SESSION_STATUS::Open )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "session_already_open" ),
+            return deniedForMode( wxS( "session_already_open" ),
                                  wxS( "Only one active AI execution session is allowed." ) );
         }
 
@@ -3256,7 +4747,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         if( !arguments.contains( "cell_text" ) || !arguments["cell_text"].is_string()
             || arguments["cell_text"].get_ref<const std::string&>().empty() )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  wxS( "kisurf_run_cell requires non-empty cell_text." ) );
         }
 
@@ -3266,14 +4757,14 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             && !jsonIntegerToUint64( arguments["max_operation_count"],
                                      maxOperationCount ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  wxS( "max_operation_count must be a positive integer." ) );
         }
 
         if( maxOperationCount > DEFAULT_SCRIPT_OPERATION_LIMIT )
         {
-            return deniedResult(
-                    aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode(
+                    wxS( "malformed_arguments" ),
                     wxString::Format(
                             wxS( "max_operation_count cannot exceed the runtime cap of %llu." ),
                             static_cast<unsigned long long>(
@@ -3287,7 +4778,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( m_Session->SelectionRevisionConflicts( effectiveContextVersion( aRequest ) ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "selection_conflict" ),
+            return deniedForMode( wxS( "selection_conflict" ),
                                  wxS( "Session selection changed after it was opened. "
                                       "Query the current selection, roll back, or reject "
                                       "the session before running another cell." ) );
@@ -3322,6 +4813,222 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                 workerResult.m_Message = sessionContextMessage;
                 workerResult.m_RollbackOnError = true;
                 workerResult.m_Operations.clear();
+            }
+
+            if( m_DirectLiveApplyAfterMutation )
+            {
+                if( !currentBoardAdapter )
+                {
+                    clearActiveSessionState( true );
+                    return deniedChatDirectResult(
+                            aRequest, aToolCall, wxS( "current_board_apply_unavailable" ),
+                            wxS( "Chat current-board script execution requires an "
+                                 "adapter that exposes current-board tools." ) );
+                }
+
+                nlohmann::json operationResults = nlohmann::json::array();
+                size_t         appliedOperationCount = 0;
+                wxString       operationErrorCode;
+                wxString       operationMessage;
+                const size_t   operationCount = workerResult.m_Operations.size();
+
+                if( operationCount > static_cast<size_t>( maxOperationCount ) )
+                {
+                    operationErrorCode = wxS( "script_operation_budget_exceeded" );
+                    operationMessage = wxString::Format(
+                            wxS( "Python cell produced %llu operations, exceeding the "
+                                 "max_operation_count limit of %llu." ),
+                            static_cast<unsigned long long>( operationCount ),
+                            static_cast<unsigned long long>( maxOperationCount ) );
+                    operationResults.push_back(
+                            { { "status", "script_operation_budget_exceeded" },
+                              { "operation_count", operationCount },
+                              { "max_operation_count", maxOperationCount },
+                              { "board_mutated", false } } );
+                }
+
+                for( size_t operationIndex = 0;
+                     operationIndex < workerResult.m_Operations.size();
+                     ++operationIndex )
+                {
+                    const AI_PYTHON_OPERATION_REQUEST& operation =
+                            workerResult.m_Operations[operationIndex];
+
+                    if( !operationErrorCode.IsEmpty() )
+                        break;
+
+                    nlohmann::json operationArguments = nlohmann::json::object();
+
+                    if( !parsePythonOperationArguments( operation.m_ArgumentsJson,
+                                                        operationArguments,
+                                                        operationMessage ) )
+                    {
+                        operationErrorCode = wxS( "malformed_operation_arguments" );
+                        break;
+                    }
+
+                    std::string forbiddenPath;
+                    const std::string operationPath =
+                            "operation[" + std::to_string( operationIndex )
+                            + "].arguments";
+
+                    if( findForbiddenSessionRuntimeCapability(
+                                operationArguments, operationPath, forbiddenPath ) )
+                    {
+                        operationErrorCode = wxS( "forbidden_runtime_capability" );
+                        operationMessage = wxString::Format(
+                                wxS( "Python operation requested forbidden runtime "
+                                     "capability: %s." ),
+                                wxString::FromUTF8( forbiddenPath.c_str() ) );
+                        operationResults.push_back(
+                                { { "kind", toUtf8String( AiSessionOperationKindId(
+                                                  operation.m_Kind ) ) },
+                                  { "status", "forbidden_runtime_capability" },
+                                  { "forbidden_field", forbiddenPath },
+                                  { "board_mutated", false } } );
+                        break;
+                    }
+
+                    AI_CURRENT_BOARD_TOOL_RESULT currentBoardResult;
+
+                    if( operation.m_Kind == AI_SESSION_OPERATION_KIND::QueryBoardSummary )
+                    {
+                        currentBoardResult =
+                                currentBoardAdapter->QueryCurrentBoardSummary();
+                    }
+                    else if( operation.m_Kind == AI_SESSION_OPERATION_KIND::QueryItems
+                             || operation.m_Kind == AI_SESSION_OPERATION_KIND::QueryItem )
+                    {
+                        nlohmann::json filter = operationArguments;
+
+                        if( operationArguments.contains( "filter" )
+                            && operationArguments["filter"].is_object() )
+                        {
+                            filter = operationArguments["filter"];
+                        }
+
+                        currentBoardResult =
+                                currentBoardAdapter->QueryCurrentBoardItems(
+                                        fromJson( filter ) );
+                    }
+                    else if( operation.m_Kind == AI_SESSION_OPERATION_KIND::QueryNets )
+                    {
+                        currentBoardResult = currentBoardAdapter->QueryCurrentBoardNets();
+                    }
+                    else if( isMutationOperation( operation.m_Kind )
+                             || isMaintenanceOperation( operation.m_Kind ) )
+                    {
+                        currentBoardResult =
+                                currentBoardAdapter->RunCurrentBoardAtomicOperation(
+                                        operation.m_Kind,
+                                        fromJson( operationArguments ) );
+                    }
+                    else
+                    {
+                        currentBoardResult.m_Ok = false;
+                        currentBoardResult.m_ErrorCode =
+                                wxS( "unsupported_chat_direct_script_operation" );
+                        currentBoardResult.m_Message = wxString::Format(
+                                wxS( "Operation '%s' is not supported inside Chat "
+                                     "current-board scripts." ),
+                                AiSessionOperationKindId( operation.m_Kind ) );
+                        currentBoardResult.m_ResultJson = fromJson(
+                                { { "status",
+                                    "unsupported_chat_direct_script_operation" },
+                                  { "kind",
+                                    toUtf8String( AiSessionOperationKindId(
+                                            operation.m_Kind ) ) },
+                                  { "board_mutated", false } } );
+                    }
+
+                    nlohmann::json operationPayload =
+                            parseObjectJson( currentBoardResult.m_ResultJson );
+                    operationPayload["kind"] =
+                            toUtf8String( AiSessionOperationKindId( operation.m_Kind ) );
+                    operationResults.push_back( operationPayload );
+
+                    if( !currentBoardResult.m_Ok )
+                    {
+                        operationErrorCode =
+                                currentBoardResult.m_ErrorCode.IsEmpty()
+                                        ? wxString( wxS( "current_board_tool_failed" ) )
+                                        : currentBoardResult.m_ErrorCode;
+                        operationMessage = currentBoardResult.m_Message;
+                        break;
+                    }
+
+                    if( currentBoardResult.m_Executed )
+                    {
+                        ++appliedOperationCount;
+                    }
+                }
+
+                nlohmann::json recordedPythonEvents = currentPythonEventsJson();
+                finishPythonEventCapture();
+
+                const bool failed =
+                        !workerResult.m_Ok || !operationErrorCode.IsEmpty();
+                wxString message = failed ? operationMessage
+                                          : wxString( wxS( "Python cell executed." ) );
+
+                if( failed && message.IsEmpty() )
+                    message = workerResult.m_Message.IsEmpty()
+                                      ? wxString( wxS( "Python worker failed while "
+                                                       "running the cell." ) )
+                                      : workerResult.m_Message;
+
+                nlohmann::json payload = {
+                    { "status", failed ? "cell_failed" : "cell_executed" },
+                    { "mode", "chat_direct" },
+                    { "cell_id", toUtf8String( cellId ) },
+                    { "python_worker", "connected" },
+                    { "sdk", pythonSdkJson( workerResult ) },
+                    { "applied_operation_count", appliedOperationCount },
+                    { "operation_count", operationCount },
+                    { "max_operation_count", maxOperationCount },
+                    { "operation_results", operationResults },
+                    { "events", pythonEventsJson( workerResult.m_Events ) },
+                    { "recorded_events", recordedPythonEvents },
+                    { "stdout", toUtf8String( workerResult.m_Stdout ) },
+                    { "stderr", toUtf8String( workerResult.m_Stderr ) },
+                    { "current_board_apply",
+                      { { "status", failed ? "failed" : "applied" },
+                        { "applied_operation_count", appliedOperationCount } } },
+                    { "board_mutated", !failed && appliedOperationCount > 0 }
+                };
+
+                if( failed )
+                {
+                    wxString errorCode = !operationErrorCode.IsEmpty()
+                                                 ? operationErrorCode
+                                                 : workerResult.m_ErrorCode;
+
+                    if( errorCode.IsEmpty() )
+                        errorCode = wxS( "python_cell_failed" );
+
+                    payload["error_code"] = toUtf8String( errorCode );
+                    payload["retryable"] = true;
+                    payload["retry_hint"] =
+                            chatDirectRetryHint( aToolCall, errorCode, message );
+                    payload["current_board_apply"]["error_code"] =
+                            toUtf8String( errorCode );
+                    payload["current_board_apply"]["message"] =
+                            toUtf8String( message );
+
+                    sanitizeChatLiveJson( payload );
+                    clearActiveSessionState( true );
+
+                    AI_TOOL_INVOCATION_RESULT result = deniedChatDirectResult(
+                            aRequest, aToolCall, errorCode, message,
+                            std::move( payload ) );
+                    return result;
+                }
+
+                sanitizeChatLiveJson( payload );
+                clearActiveSessionState( true );
+                return allowedResult( aRequest, aToolCall,
+                                      appliedOperationCount > 0, message,
+                                      std::move( payload ) );
             }
 
             const bool hadOpenStep = m_Session->HasOpenStep();
@@ -3418,7 +5125,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                 if( sessionOperationNeedsShadowSeed( operation.m_Kind,
                                                      &operationArguments ) )
                 {
-                    if( !ensureShadowBoardSeeded( operationErrorCode,
+                    if( !ensureShadowBoardSeeded( aRequest, operationErrorCode,
                                                   operationMessage ) )
                     {
                         break;
@@ -3602,7 +5309,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                     }
                 }
 
-                if( operationErrorCode.IsEmpty() && !hasExplicitPreview && m_PreviewService )
+                if( operationErrorCode.IsEmpty() && !hasExplicitPreview
+                    && !m_DirectLiveApplyAfterMutation && m_PreviewService )
                 {
                     AI_PYTHON_OPERATION_REQUEST previewOperation;
                     previewOperation.m_Kind = AI_SESSION_OPERATION_KIND::RenderPreview;
@@ -3722,6 +5430,18 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                           { "session", sessionJson( *m_Session ) },
                           { "shadow_board_mutated", false },
                           { "board_mutated", false } } );
+                if( m_DirectLiveApplyAfterMutation )
+                {
+                    nlohmann::json payload = parseObjectJson( result.m_ResultJson );
+                    sanitizeChatLiveJson( payload );
+                    clearSessionPreview( m_PreviewService, m_Session->SessionId() );
+                    clearPreviewState();
+                    stopSessionPythonWorker( m_PythonWorker.get() );
+                    m_Session.reset();
+                    m_ShadowBoardSeeded = false;
+                    m_SessionOpenContextSnapshot = AI_CONTEXT_SNAPSHOT();
+                    result.m_ResultJson = resultJson( result, std::move( payload ) );
+                }
                 return result;
             }
 
@@ -3730,7 +5450,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             if( stepId != 0 )
                 observationJson = nlohmann::json::parse( toUtf8String( observation.AsJsonText() ) );
 
-            return allowedResult(
+            AI_TOOL_INVOCATION_RESULT result = allowedResult(
                     aRequest, aToolCall, true, wxS( "Python cell executed." ),
                     { { "status", "cell_executed" },
                       { "cell_id", toUtf8String( cellId ) },
@@ -3747,6 +5467,27 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                       { "session", sessionJson( *m_Session ) },
                       { "shadow_board_mutated", appliedOperationCount > 0 },
                       { "board_mutated", false } } );
+            return maybeApplyDirectLiveMutation( aRequest, aToolCall,
+                                                 std::move( result ) );
+        }
+
+        if( m_DirectLiveApplyAfterMutation )
+        {
+            if( m_Session )
+            {
+                clearSessionPreview( m_PreviewService, m_Session->SessionId() );
+                clearPreviewState();
+                m_Session.reset();
+                m_ShadowBoardSeeded = false;
+                m_SessionOpenContextSnapshot = AI_CONTEXT_SNAPSHOT();
+            }
+
+            return deniedChatDirectResult(
+                    aRequest, aToolCall, wxS( "python_worker_unavailable" ),
+                    wxS( "Chat current-board script execution requires a connected "
+                         "Python worker. Retry with kisurf_run_atomic_operation "
+                         "for a single atomic edit, or try the script again after "
+                         "the Python worker is available." ) );
         }
 
         return allowedResult(
@@ -3765,10 +5506,12 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             || arguments["kind"].get_ref<const std::string&>().empty()
             || !arguments.contains( "arguments" ) || !arguments["arguments"].is_object() )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  wxS( "kisurf_run_atomic_operation requires kind and "
                                       "object arguments." ) );
         }
+
+        normalizeAtomicToolEnvelope( arguments );
 
         const std::string kindName = arguments["kind"].get_ref<const std::string&>();
         const AI_SESSION_OPERATION_KIND operationKind =
@@ -3776,8 +5519,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( operationKind == AI_SESSION_OPERATION_KIND::Unknown )
         {
-            return deniedResult(
-                    aRequest, aToolCall, wxS( "unsupported_operation_kind" ),
+            return deniedForMode(
+                    wxS( "unsupported_operation_kind" ),
                     wxString::Format( wxS( "Unsupported KiSurf atomic operation '%s'." ),
                                       wxString::FromUTF8( kindName.c_str() ) ) );
         }
@@ -3786,16 +5529,50 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         if( findForbiddenSessionRuntimeCapability( arguments, std::string(),
                                                    forbiddenPath ) )
         {
+            nlohmann::json payload = {
+                { "status", "forbidden_runtime_capability" },
+                { "kind", kindName },
+                { "forbidden_field", forbiddenPath },
+                { "board_mutated", false }
+            };
+            const wxString message = wxString::Format(
+                    wxS( "Atomic operation requested forbidden runtime "
+                         "capability: %s." ),
+                    wxString::FromUTF8( forbiddenPath.c_str() ) );
+
+            if( m_DirectLiveApplyAfterMutation )
+            {
+                return deniedChatDirectResult(
+                        aRequest, aToolCall, wxS( "forbidden_runtime_capability" ),
+                        message, std::move( payload ) );
+            }
+
             return deniedResult(
                     aRequest, aToolCall, wxS( "forbidden_runtime_capability" ),
-                    wxString::Format(
-                            wxS( "Atomic operation requested forbidden runtime "
-                                 "capability: %s." ),
-                            wxString::FromUTF8( forbiddenPath.c_str() ) ),
-                    { { "status", "forbidden_runtime_capability" },
-                      { "kind", kindName },
-                      { "forbidden_field", forbiddenPath },
-                      { "board_mutated", false } } );
+                    message, std::move( payload ) );
+        }
+
+        if( m_DirectLiveApplyAfterMutation && !currentBoardAdapter )
+        {
+            return deniedChatDirectResult(
+                    aRequest, aToolCall, wxS( "current_board_tool_unavailable" ),
+                    wxS( "Chat current-board atomic operations require an editor "
+                         "adapter that exposes current-board mutation tools." ),
+                    { { "status", "current_board_tool_unavailable" },
+                      { "mode", "chat_direct" },
+                      { "board_mutated", false },
+                      { "current_board_apply",
+                        { { "status", "unavailable" },
+                          { "error_code", "current_board_tool_unavailable" },
+                          { "message",
+                            "No current-board tool adapter is configured for this "
+                            "editor." } } },
+                      { "retryable", false },
+                      { "retry_hint",
+                        "This Chat Agent can only edit the current board through "
+                        "a current-board tool adapter. Do not retry by opening a "
+                        "session or using preview/accept tools; use an editor "
+                        "that provides current-board tools." } } );
         }
 
         if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
@@ -3803,7 +5580,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( m_Session->SelectionRevisionConflicts( effectiveContextVersion( aRequest ) ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "selection_conflict" ),
+            return deniedForMode( wxS( "selection_conflict" ),
                                  wxS( "Session selection changed after it was opened. "
                                       "Query the current selection, roll back, or reject "
                                       "the session before running another atomic operation." ) );
@@ -3818,8 +5595,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             wxString seedErrorCode;
             wxString seedMessage;
 
-            if( !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
-                return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+            if( !ensureShadowBoardSeeded( aRequest, seedErrorCode, seedMessage ) )
+                return deniedForMode( seedErrorCode, seedMessage );
         }
 
         const bool hadOpenStep = m_Session->HasOpenStep();
@@ -3833,7 +5610,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
             if( stepId == 0 )
             {
-                return deniedResult( aRequest, aToolCall, wxS( "step_not_started" ),
+                return deniedForMode( wxS( "step_not_started" ),
                                      wxS( "Unable to start an AI execution step for the "
                                           "atomic operation." ) );
             }
@@ -3848,7 +5625,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             if( stepId != 0 )
                 m_Session->FailStep( stepId, execution.m_Message );
 
-            return deniedResult( aRequest, aToolCall, execution.m_ErrorCode,
+            return deniedForMode( execution.m_ErrorCode,
                                  execution.m_Message );
         }
 
@@ -3863,7 +5640,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             if( stepId != 0 )
                 m_Session->FailStep( stepId, validationMessage );
 
-            return deniedResult( aRequest, aToolCall, validationErrorCode,
+            return deniedForMode( validationErrorCode,
                                  validationMessage );
         }
 
@@ -3895,14 +5672,35 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             { "board_mutated", false }
         };
 
-        return allowedResult( aRequest, aToolCall, true,
-                              wxS( "KiSurf atomic operation executed in the session." ),
-                              std::move( payload ) );
+        AI_TOOL_INVOCATION_RESULT result = allowedResult(
+                aRequest, aToolCall, true,
+                wxS( "KiSurf atomic operation executed in the session." ),
+                std::move( payload ) );
+        return maybeApplyDirectLiveMutation( aRequest, aToolCall,
+                                             std::move( result ) );
+    }
+
+    if( m_DirectLiveApplyAfterMutation
+        && directLiveObservationRefreshRequested( aToolCall.m_ToolName, arguments )
+        && m_Session && m_Session->Status() == AI_EXECUTION_SESSION_STATUS::Open )
+    {
+        clearSessionPreview( m_PreviewService, m_Session->SessionId() );
+        clearPreviewState();
+        stopSessionPythonWorker( m_PythonWorker.get() );
+        m_Session.reset();
+        m_ShadowBoardSeeded = false;
+        m_SessionOpenContextSnapshot = AI_CONTEXT_SNAPSHOT();
+    }
+
+    if( ( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
+        && isSessionObservationToolName( aToolCall.m_ToolName ) )
+    {
+        openSessionFromRequest( aRequest, wxEmptyString, contextBaseHash( aRequest ) );
     }
 
     if( !m_Session || m_Session->Status() != AI_EXECUTION_SESSION_STATUS::Open )
     {
-        return deniedResult( aRequest, aToolCall, wxS( "no_active_session" ),
+        return deniedForMode( wxS( "no_active_session" ),
                              wxS( "Open a KiSurf AI execution session first." ) );
     }
 
@@ -3912,7 +5710,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( label.IsEmpty() )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  wxS( "kisurf_begin_step requires label." ) );
         }
 
@@ -3925,7 +5723,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( stepId == 0 )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "step_not_started" ),
+            return deniedForMode( wxS( "step_not_started" ),
                                  wxS( "The session already has an open step." ) );
         }
 
@@ -3943,7 +5741,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         wxString error;
 
         if( !getRequiredUint64( arguments, "step_id", stepId, error ) )
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
+            return deniedForMode( wxS( "malformed_arguments" ), error );
 
         const bool endStep = aToolCall.m_ToolName == wxS( "kisurf_end_step" );
         AI_SESSION_OBSERVATION observation = endStep ? m_Session->EndStep( stepId )
@@ -3960,14 +5758,27 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
     if( aToolCall.m_ToolName == wxS( "kisurf_query_board_summary" ) )
     {
+        wxString seedErrorCode;
+        wxString seedMessage;
+
+        if( !ensureShadowBoardSeeded( aRequest, seedErrorCode, seedMessage ) )
+            return deniedForMode( seedErrorCode, seedMessage );
+
+        nlohmann::json payload = {
+            { "status", "board_summary" },
+            { "summary",
+              nlohmann::json::parse(
+                      toUtf8String( m_Session->ShadowBoard().QueryBoardSummary() ) ) },
+            { "session", sessionJson( *m_Session ) },
+            { "board_mutated", false }
+        };
+
+        if( m_DirectLiveApplyAfterMutation )
+            sanitizeChatLiveJson( payload );
+
         return allowedResult(
-                aRequest, aToolCall, false, wxS( "Shadow board summary returned." ),
-                { { "status", "board_summary" },
-                  { "summary",
-                    nlohmann::json::parse(
-                            toUtf8String( m_Session->ShadowBoard().QueryBoardSummary() ) ) },
-                  { "session", sessionJson( *m_Session ) },
-                  { "board_mutated", false } } );
+                aRequest, aToolCall, false, wxS( "Current board summary returned." ),
+                std::move( payload ) );
     }
 
     if( aToolCall.m_ToolName == wxS( "kisurf_query_items" ) )
@@ -3976,9 +5787,9 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         wxString seedMessage;
 
         if( liveBoardSeedRequested( arguments )
-            && !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
+            && !ensureShadowBoardSeeded( aRequest, seedErrorCode, seedMessage ) )
         {
-            return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+            return deniedForMode( seedErrorCode, seedMessage );
         }
 
         wxString filterJson = wxS( "{}" );
@@ -3986,14 +5797,20 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         if( arguments.contains( "filter" ) && arguments["filter"].is_object() )
             filterJson = fromJson( arguments["filter"] );
 
+        std::vector<AI_SHADOW_ITEM> queriedItems =
+                m_Session->ShadowBoard().QueryItems( filterJson );
+
         nlohmann::json items = nlohmann::json::array();
 
-        for( const AI_SHADOW_ITEM& item : m_Session->ShadowBoard().QueryItems( filterJson ) )
+        for( const AI_SHADOW_ITEM& item : queriedItems )
             items.push_back( shadowItemJson( item ) );
 
         nlohmann::json filter = nlohmann::json::parse( toUtf8String( filterJson ) );
         nlohmann::json payload = {
             { "status", "items" },
+            { "total_count", queriedItems.size() },
+            { "returned_count", items.size() },
+            { "truncated", false },
             { "filter", filter },
             { "items", std::move( items ) },
             { "session", sessionJson( *m_Session ) },
@@ -4004,8 +5821,11 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             payload["selection_revision"] =
                     selectionRevisionJson( *m_Session, aRequest );
 
+        if( m_DirectLiveApplyAfterMutation )
+            sanitizeChatLiveJson( payload );
+
         return allowedResult( aRequest, aToolCall, false,
-                              wxS( "Shadow board items returned." ),
+                              wxS( "Current board items returned." ),
                               std::move( payload ) );
     }
 
@@ -4019,8 +5839,8 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             wxString seedErrorCode;
             wxString seedMessage;
 
-            if( !ensureShadowBoardSeeded( seedErrorCode, seedMessage ) )
-                return deniedResult( aRequest, aToolCall, seedErrorCode, seedMessage );
+            if( !ensureShadowBoardSeeded( aRequest, seedErrorCode, seedMessage ) )
+                return deniedForMode( seedErrorCode, seedMessage );
         }
 
         AI_PYTHON_OPERATION_REQUEST operation;
@@ -4032,18 +5852,29 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                                 aRequest, &pythonEvents );
         nlohmann::json payload = queryResult.m_Payload;
         payload["session"] = sessionJson( *m_Session );
+        if( m_DirectLiveApplyAfterMutation )
+            sanitizeChatLiveJson( payload );
 
         if( !queryResult.m_Ok )
         {
             AI_TOOL_INVOCATION_RESULT result =
-                    deniedResult( aRequest, aToolCall, queryResult.m_ErrorCode,
-                                  queryResult.m_Message );
-            result.m_ResultJson = resultJson( result, std::move( payload ) );
+                    m_DirectLiveApplyAfterMutation
+                            ? deniedChatDirectResult( aRequest, aToolCall,
+                                                      queryResult.m_ErrorCode,
+                                                      queryResult.m_Message,
+                                                      std::move( payload ) )
+                            : deniedResult( aRequest, aToolCall,
+                                            queryResult.m_ErrorCode,
+                                            queryResult.m_Message );
+            if( !m_DirectLiveApplyAfterMutation )
+                result.m_ResultJson = resultJson( result, std::move( payload ) );
             return result;
         }
 
         return allowedResult( aRequest, aToolCall, false,
-                              wxS( "Session observation returned." ),
+                              m_DirectLiveApplyAfterMutation
+                                      ? wxString( wxS( "Current-board observation returned." ) )
+                                      : wxString( wxS( "Session observation returned." ) ),
                               std::move( payload ) );
     }
 
@@ -4053,7 +5884,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( name.IsEmpty() )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  wxS( "kisurf_checkpoint requires name." ) );
         }
 
@@ -4075,11 +5906,11 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( !resolveCheckpointReference( *m_Session, arguments, checkpointId,
                                          checkpointName, error ) )
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ), error );
+            return deniedForMode( wxS( "malformed_arguments" ), error );
 
         if( !m_Session->RollbackTo( checkpointId ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "rollback_failed" ),
+            return deniedForMode( wxS( "rollback_failed" ),
                                  wxS( "Checkpoint id is not valid for this session." ) );
         }
 
@@ -4105,7 +5936,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( !validateRenderPreviewArguments( arguments, argumentError ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  argumentError );
         }
 
@@ -4115,14 +5946,22 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
         nlohmann::json payload = previewResult.m_Payload;
         payload["session"] = sessionJson( *m_Session );
 
-        if( !previewResult.m_Ok )
-        {
-            AI_TOOL_INVOCATION_RESULT result =
-                    deniedResult( aRequest, aToolCall, previewResult.m_ErrorCode,
-                                  previewResult.m_Message );
-            result.m_ResultJson = resultJson( result, std::move( payload ) );
-            return result;
-        }
+            if( !previewResult.m_Ok )
+            {
+                if( m_DirectLiveApplyAfterMutation )
+                {
+                    return deniedChatDirectResult(
+                            aRequest, aToolCall, previewResult.m_ErrorCode,
+                            previewResult.m_Message, std::move( payload ) );
+                }
+
+                AI_TOOL_INVOCATION_RESULT result =
+                        deniedResult( aRequest, aToolCall,
+                                      previewResult.m_ErrorCode,
+                                      previewResult.m_Message );
+                result.m_ResultJson = resultJson( result, std::move( payload ) );
+                return result;
+            }
 
         const bool executed = m_PreviewService != nullptr;
 
@@ -4142,7 +5981,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( !validateRunValidationArguments( arguments, argumentError ) )
         {
-            return deniedResult( aRequest, aToolCall, wxS( "malformed_arguments" ),
+            return deniedForMode( wxS( "malformed_arguments" ),
                                  argumentError );
         }
 
@@ -4161,7 +6000,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             if( stepId != 0 )
                 m_Session->FailStep( stepId, execution.m_Message );
 
-            return deniedResult( aRequest, aToolCall, execution.m_ErrorCode,
+            return deniedForMode( execution.m_ErrorCode,
                                  execution.m_Message );
         }
 
@@ -4175,7 +6014,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             if( stepId != 0 )
                 m_Session->FailStep( stepId, validationMessage );
 
-            return deniedResult( aRequest, aToolCall, validationErrorCode,
+            return deniedForMode( validationErrorCode,
                                  validationMessage );
         }
 
@@ -4196,9 +6035,13 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                 stepId != 0 ? parseObjectJson( observation.AsJsonText() )
                             : nlohmann::json::object();
         payload["session"] = sessionJson( *m_Session );
+        if( m_DirectLiveApplyAfterMutation )
+            sanitizeChatLiveJson( payload );
 
         return allowedResult( aRequest, aToolCall, true,
-                              wxS( "Session validation completed." ),
+                              m_DirectLiveApplyAfterMutation
+                                      ? wxString( wxS( "Live-board validation completed." ) )
+                                      : wxString( wxS( "Session validation completed." ) ),
                               std::move( payload ) );
     }
 
@@ -4219,7 +6062,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
             if( !applyResult.m_Ok )
             {
-                return deniedResult( aRequest, aToolCall, applyResult.m_ErrorCode,
+                return deniedForMode( applyResult.m_ErrorCode,
                                      applyResult.m_Message );
             }
 
@@ -4244,11 +6087,11 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                 && m_Session->BaseHash() == baseHash
                 && m_Session->SelectionRevisionConflicts( currentVersion ) )
             {
-                return deniedResult( aRequest, aToolCall, wxS( "selection_conflict" ),
+                return deniedForMode( wxS( "selection_conflict" ),
                                      wxS( "Session selection changed after it was opened." ) );
             }
 
-            return deniedResult( aRequest, aToolCall, wxS( "stale_session" ),
+            return deniedForMode( wxS( "stale_session" ),
                                  wxS( "Session base hash does not match the live board." ) );
         }
 
@@ -4308,7 +6151,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
                                 { "board_mutated", false } } );
     }
 
-    return deniedResult( aRequest, aToolCall, wxS( "unknown_tool" ),
+    return deniedForMode( wxS( "unknown_tool" ),
                          wxS( "Tool is not an AI execution session tool." ) );
 }
 
@@ -4344,12 +6187,14 @@ bool AI_SESSION_TOOL_CALL_HANDLER::HasPendingSessionPreview() const
 
 wxString AI_SESSION_TOOL_CALL_HANDLER::ToolCatalogJson() const
 {
-    return fromJson( sessionToolCatalogJson() );
+    return fromJson( m_DirectLiveApplyAfterMutation ? chatDirectToolCatalogJson()
+                                                    : sessionToolCatalogJson() );
 }
 
 
-bool AI_SESSION_TOOL_CALL_HANDLER::ensureShadowBoardSeeded( wxString& aErrorCode,
-                                                            wxString& aMessage )
+bool AI_SESSION_TOOL_CALL_HANDLER::ensureShadowBoardSeeded(
+        const AI_PROVIDER_REQUEST& aRequest, wxString& aErrorCode,
+        wxString& aMessage )
 {
     if( !m_Session )
     {
@@ -4363,6 +6208,13 @@ bool AI_SESSION_TOOL_CALL_HANDLER::ensureShadowBoardSeeded( wxString& aErrorCode
 
     try
     {
+        if( m_ShadowBoardSeeder )
+        {
+            m_ShadowBoardSeeder->Seed( *m_Session, aRequest );
+            m_ShadowBoardSeeded = true;
+            return true;
+        }
+
         if( seedShadowBoardFromContextSnapshot( *m_Session,
                                                 m_SessionOpenContextSnapshot ) )
         {
@@ -4370,8 +6222,13 @@ bool AI_SESSION_TOOL_CALL_HANDLER::ensureShadowBoardSeeded( wxString& aErrorCode
             return true;
         }
 
-        // Agent tool calls are driven from the provider request snapshot.  Walking
-        // live BOARD containers here can race editor state and crash the UI path.
+        if( seedShadowBoardFromContextSnapshot( *m_Session,
+                                                aRequest.m_ContextSnapshot ) )
+        {
+            m_ShadowBoardSeeded = true;
+            return true;
+        }
+
         m_ShadowBoardSeeded = true;
         return true;
     }

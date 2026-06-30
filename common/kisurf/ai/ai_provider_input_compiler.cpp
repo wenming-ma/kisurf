@@ -58,6 +58,23 @@ nlohmann::json contextVersionJson( const AI_CONTEXT_VERSION& aVersion )
 }
 
 
+std::string editorKindName( AI_EDITOR_KIND aKind )
+{
+    switch( aKind )
+    {
+    case AI_EDITOR_KIND::Pcb:
+        return "pcb";
+
+    case AI_EDITOR_KIND::Schematic:
+        return "schematic";
+
+    case AI_EDITOR_KIND::Unknown:
+    default:
+        return "unknown";
+    }
+}
+
+
 AI_CONTEXT_SNAPSHOT boundedSnapshot( const AI_CONTEXT_SNAPSHOT& aSnapshot,
                                      size_t aMaxActivityRecords )
 {
@@ -744,6 +761,180 @@ nlohmann::json validationSummaryForCompressedToolResult(
 }
 
 
+nlohmann::json boundedSemanticValue( const nlohmann::json& aValue,
+                                     size_t aDepth = 0 )
+{
+    if( aDepth >= 3 )
+        return nlohmann::json();
+
+    if( aValue.is_null() || aValue.is_boolean() || aValue.is_number() )
+        return aValue;
+
+    if( aValue.is_string() )
+    {
+        std::string value = aValue.get<std::string>();
+
+        if( value.size() > 240 )
+            value = value.substr( 0, 240 ) + "...";
+
+        return value;
+    }
+
+    if( aValue.is_array() )
+    {
+        nlohmann::json array = nlohmann::json::array();
+        const size_t    limit = std::min<size_t>( aValue.size(), 8 );
+
+        for( size_t ii = 0; ii < limit; ++ii )
+        {
+            nlohmann::json child = boundedSemanticValue( aValue[ii], aDepth + 1 );
+
+            if( !child.is_discarded() && !child.is_null() )
+                array.push_back( std::move( child ) );
+        }
+
+        if( aValue.size() > limit )
+            array.push_back( { { "omitted_count", aValue.size() - limit } } );
+
+        return array;
+    }
+
+    if( aValue.is_object() )
+    {
+        nlohmann::json object = nlohmann::json::object();
+        size_t         copied = 0;
+
+        for( const auto& [key, value] : aValue.items() )
+        {
+            if( copied >= 16 )
+            {
+                object["_omitted_fields"] = aValue.size() - copied;
+                break;
+            }
+
+            nlohmann::json child = boundedSemanticValue( value, aDepth + 1 );
+
+            if( !child.is_discarded() && !child.is_null() )
+            {
+                object[key] = std::move( child );
+                ++copied;
+            }
+        }
+
+        return object;
+    }
+
+    return nlohmann::json();
+}
+
+
+void copySemanticFieldIfPresent( nlohmann::json& aSummary,
+                                 const nlohmann::json& aRoot,
+                                 const char* aField )
+{
+    if( !aRoot.is_object() || !aRoot.contains( aField ) )
+        return;
+
+    nlohmann::json value = boundedSemanticValue( aRoot[aField] );
+
+    if( !value.is_discarded() && !value.is_null() )
+        aSummary[aField] = std::move( value );
+}
+
+
+nlohmann::json itemCountsForSemanticSummary( const nlohmann::json& aItems )
+{
+    if( !aItems.is_array() )
+        return nlohmann::json();
+
+    nlohmann::json counts = nlohmann::json::object();
+
+    for( const nlohmann::json& item : aItems )
+    {
+        if( !item.is_object() || !item.contains( "type" )
+            || !item["type"].is_string() )
+        {
+            continue;
+        }
+
+        const std::string type = item["type"].get<std::string>();
+        counts[type] = counts.value( type, static_cast<size_t>( 0 ) ) + 1;
+    }
+
+    return counts;
+}
+
+
+nlohmann::json itemSamplesForSemanticSummary( const nlohmann::json& aItems )
+{
+    if( !aItems.is_array() )
+        return nlohmann::json();
+
+    nlohmann::json samples = nlohmann::json::array();
+
+    for( const nlohmann::json& item : aItems )
+    {
+        if( samples.size() >= 5 )
+            break;
+
+        if( !item.is_object() )
+            continue;
+
+        nlohmann::json sample = nlohmann::json::object();
+
+        for( const char* field :
+             { "handle", "type", "alias", "reference", "net", "layer" } )
+        {
+            copySemanticFieldIfPresent( sample, item, field );
+        }
+
+        if( !sample.empty() )
+            samples.push_back( std::move( sample ) );
+    }
+
+    return samples;
+}
+
+
+nlohmann::json semanticSummaryForCompressedToolResult(
+        const wxString& aRaw )
+{
+    nlohmann::json root = nlohmann::json::parse(
+            toUtf8String( aRaw ), nullptr, false );
+
+    if( root.is_discarded() || !root.is_object() )
+        return nlohmann::json();
+
+    nlohmann::json summary = nlohmann::json::object();
+
+    for( const char* field :
+         { "status", "ok", "allowed", "executed", "error_code", "message",
+           "retryable", "retry_hint", "expected_arguments", "valid_tools",
+           "valid_operations", "total_count", "returned_count", "truncated",
+           "filter", "summary", "board_mutated", "shadow_board_mutated",
+           "current_board_apply", "applied_operation_count", "operation_count",
+           "max_operation_count", "kind" } )
+    {
+        copySemanticFieldIfPresent( summary, root, field );
+    }
+
+    if( root.contains( "items" ) && root["items"].is_array() )
+    {
+        nlohmann::json counts = itemCountsForSemanticSummary( root["items"] );
+
+        if( counts.is_object() && !counts.empty() )
+            summary["item_type_counts"] = std::move( counts );
+
+        nlohmann::json samples = itemSamplesForSemanticSummary( root["items"] );
+
+        if( samples.is_array() && !samples.empty() )
+            summary["sample_items"] = std::move( samples );
+    }
+
+    return summary.empty() ? nlohmann::json() : summary;
+}
+
+
 wxString compressedToolResultJson( const AI_TOOL_CALL_RECORD& aToolResult,
                                    size_t aMaxChars )
 {
@@ -797,6 +988,12 @@ wxString compressedToolResultJson( const AI_TOOL_CALL_RECORD& aToolResult,
 
     if( validationSummary.is_object() )
         summary["validation_summary"] = std::move( validationSummary );
+
+    nlohmann::json semanticSummary =
+            semanticSummaryForCompressedToolResult( raw );
+
+    if( semanticSummary.is_object() )
+        summary["semantic_summary"] = std::move( semanticSummary );
 
     return fromUtf8String( summary.dump() );
 }
@@ -1089,7 +1286,8 @@ AI_PROVIDER_REQUEST AiCompileProviderInput( const AI_PROVIDER_REQUEST& aRequest 
     appendProviderContractBlocks( compiled, userContent );
     appendVisualObservationArtifactBlock( compiled, userContent );
 
-    if( compiled.m_ContextSnapshot.HasContext() )
+    if( compiled.m_ContextSnapshot.HasContext()
+        && compiled.m_IncludeContextSnapshotInPrompt )
     {
         wxString contextBlock;
         contextBlock << wxS( "Editor context summary:\n" )
@@ -1104,6 +1302,32 @@ AI_PROVIDER_REQUEST AiCompileProviderInput( const AI_PROVIDER_REQUEST& aRequest 
         appendContextBlock( compiled, userContent, wxS( "editor.context.json" ),
                             wxS( "context_json" ), wxS( "editor_state" ),
                             jsonBlock, false );
+    }
+    else if( compiled.m_ContextSnapshot.HasContext() )
+    {
+        nlohmann::json metadata = {
+            { "editor_kind", editorKindName( compiled.m_ContextSnapshot.m_EditorKind ) },
+            { "context_version", contextVersionJson( compiled.m_ContextSnapshot.m_Version ) },
+            { "context_inline_policy", "minimal_prompt_tools_on_demand" },
+            { "workspace_observation_tool", "kisurf_get_workspace_view" }
+        };
+
+        wxString contextAccessBlock;
+        contextAccessBlock
+                << wxS( "Editor context is available on demand through tools, "
+                         "not preloaded into this prompt. " )
+                << wxS( "Call kisurf_get_workspace_view when board state, board view, " )
+                << wxS( "selection, activity, panel state, or validation context is needed. "
+                         "Use workspace view parameters to request layers, regions, "
+                         "element filters, overlays, pixels, and concise or detailed "
+                         "response format explicitly. Use current-board query tools for "
+                         "item handles, counts, nets, layers, selection, and validation "
+                         "facts when a concrete edit or inspection task needs them.\n" )
+                << fromUtf8String( metadata.dump() );
+
+        appendContextBlock( compiled, userContent, wxS( "editor.context.access" ),
+                            wxS( "context_access" ), wxS( "editor_state" ),
+                            contextAccessBlock, true );
     }
 
     appendRequestInputBlocks( compiled, userContent, aRequest.m_ProviderInputBlocks );

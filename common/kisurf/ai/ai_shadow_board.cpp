@@ -31,6 +31,105 @@ wxString stringFromJson( const nlohmann::json& aValue )
 }
 
 
+void appendUniqueType( std::vector<wxString>& aTypes, const wxString& aType )
+{
+    if( aType.IsEmpty() )
+        return;
+
+    if( std::find( aTypes.begin(), aTypes.end(), aType ) == aTypes.end() )
+        aTypes.push_back( aType );
+}
+
+
+std::vector<wxString> canonicalItemTypeFilters( const nlohmann::json& aValue )
+{
+    std::vector<wxString> types;
+
+    if( aValue.is_array() )
+    {
+        for( const nlohmann::json& entry : aValue )
+        {
+            for( const wxString& type : canonicalItemTypeFilters( entry ) )
+                appendUniqueType( types, type );
+        }
+
+        return types;
+    }
+
+    wxString type = stringFromJson( aValue );
+    type.Trim( true );
+    type.Trim( false );
+    type.MakeLower();
+    type.Replace( wxS( "-" ), wxS( "_" ) );
+    type.Replace( wxS( " " ), wxS( "_" ) );
+
+    if( type == wxS( "route" ) || type == wxS( "routes" )
+        || type == wxS( "routing" ) || type == wxS( "all_routing" )
+        || type == wxS( "routed_items" ) )
+    {
+        appendUniqueType( types, wxS( "track_segment" ) );
+        appendUniqueType( types, wxS( "via" ) );
+        return types;
+    }
+
+    if( type == wxS( "track" ) || type == wxS( "tracks" )
+        || type == wxS( "trace" ) || type == wxS( "traces" )
+        || type == wxS( "pcb_track" )
+        || type == wxS( "pcb_tracks" ) || type == wxS( "track_segments" ) )
+    {
+        appendUniqueType( types, wxS( "track_segment" ) );
+        return types;
+    }
+
+    if( type == wxS( "vias" ) || type == wxS( "pcb_via" )
+        || type == wxS( "pcb_vias" ) )
+    {
+        appendUniqueType( types, wxS( "via" ) );
+        return types;
+    }
+
+    if( type == wxS( "footprints" ) || type == wxS( "component" )
+        || type == wxS( "components" ) || type == wxS( "part" )
+        || type == wxS( "parts" ) )
+    {
+        appendUniqueType( types, wxS( "footprint" ) );
+        return types;
+    }
+
+    if( type == wxS( "pads" ) )
+    {
+        appendUniqueType( types, wxS( "pad" ) );
+        return types;
+    }
+
+    if( type == wxS( "zones" ) || type == wxS( "copper_zone" )
+        || type == wxS( "copper_zones" ) || type == wxS( "copper_pour" )
+        || type == wxS( "copper_pours" ) )
+    {
+        appendUniqueType( types, wxS( "zone" ) );
+        return types;
+    }
+
+    if( type == wxS( "shapes" ) || type == wxS( "graphic" )
+        || type == wxS( "graphics" ) )
+    {
+        appendUniqueType( types, wxS( "shape" ) );
+        return types;
+    }
+
+    appendUniqueType( types, type );
+    return types;
+}
+
+
+bool itemMatchesTypeFilter( const AI_SHADOW_ITEM& aItem,
+                            const nlohmann::json& aTypeFilter )
+{
+    const std::vector<wxString> types = canonicalItemTypeFilters( aTypeFilter );
+    return std::find( types.begin(), types.end(), aItem.m_Type ) != types.end();
+}
+
+
 bool sameHandle( const AI_SESSION_HANDLE& aLeft, const AI_SESSION_HANDLE& aRight )
 {
     return aLeft.m_SessionId == aRight.m_SessionId
@@ -427,7 +526,7 @@ std::vector<AI_SHADOW_ITEM> AI_SHADOW_BOARD::QueryItems(
             continue;
 
         if( filter.contains( "type" )
-            && item.m_Type != stringFromJson( filter["type"] ) )
+            && !itemMatchesTypeFilter( item, filter["type"] ) )
         {
             continue;
         }
@@ -486,10 +585,52 @@ wxString AI_SHADOW_BOARD::QueryBoardSummary() const
         { "zones", LiveItemCountByType( wxS( "zone" ) ) },
         { "shapes", LiveItemCountByType( wxS( "shape" ) ) },
         { "footprints", LiveItemCountByType( wxS( "footprint" ) ) },
-        { "pads", LiveItemCountByType( wxS( "pad" ) ) }
+        { "pads", LiveItemCountByType( wxS( "pad" ) ) },
+        { "nets", QueryNets().size() }
     };
 
     return fromJson( payload );
+}
+
+
+void AI_SHADOW_BOARD::SetNets( std::vector<wxString> aNets )
+{
+    std::vector<wxString> nets;
+
+    for( wxString net : aNets )
+    {
+        net.Trim( true );
+        net.Trim( false );
+
+        if( net.IsEmpty() )
+            continue;
+
+        if( std::find( nets.begin(), nets.end(), net ) == nets.end() )
+            nets.push_back( net );
+    }
+
+    std::sort( nets.begin(), nets.end() );
+    m_Nets = std::move( nets );
+}
+
+
+std::vector<wxString> AI_SHADOW_BOARD::QueryNets() const
+{
+    std::vector<wxString> nets = m_Nets;
+
+    for( const auto& [id, item] : m_Items )
+    {
+        wxUnusedVar( id );
+
+        if( item.m_Deleted || item.m_Net.IsEmpty() )
+            continue;
+
+        if( std::find( nets.begin(), nets.end(), item.m_Net ) == nets.end() )
+            nets.push_back( item.m_Net );
+    }
+
+    std::sort( nets.begin(), nets.end() );
+    return nets;
 }
 
 

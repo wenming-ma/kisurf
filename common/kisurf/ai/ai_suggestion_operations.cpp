@@ -178,20 +178,23 @@ std::optional<AI_SUGGESTION_OPERATION> parseMoveOperation( const nlohmann::json&
 
 std::optional<AI_SUGGESTION_OPERATION> parseRouteSegmentPreview( const nlohmann::json& aArgs )
 {
-    if( !aArgs.contains( "net" ) || !aArgs.contains( "layer" ) || !aArgs.contains( "width" )
+    if( !aArgs.contains( "layer" ) || !aArgs.contains( "width" )
         || !aArgs.contains( "start" ) || !aArgs.contains( "end" ) )
     {
         return std::nullopt;
     }
 
-    wxString netName = jsonStringToWxString( aArgs["net"] );
+    wxString netName;
+
+    if( aArgs.contains( "net" ) )
+        netName = jsonStringToWxString( aArgs["net"] );
+
     wxString layerName = jsonStringToWxString( aArgs["layer"] );
     int      width = 0;
     VECTOR2I start;
     VECTOR2I end;
 
-    if( netName.IsEmpty() || layerName.IsEmpty()
-        || !jsonPositiveIntegerToInt( aArgs["width"], width )
+    if( layerName.IsEmpty() || !jsonPositiveIntegerToInt( aArgs["width"], width )
         || !jsonPointToVector2I( aArgs["start"], start )
         || !jsonPointToVector2I( aArgs["end"], end ) )
     {

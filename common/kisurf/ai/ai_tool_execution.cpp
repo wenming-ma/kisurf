@@ -19,9 +19,21 @@ wxString resultJson( const AI_TOOL_INVOCATION_RESULT& aResult, bool aDryRun,
                                { "allowed", aResult.m_Allowed },
                                { "executed", aResult.m_Executed },
                                { "dry_run", aDryRun },
+                               { "ok", aResult.m_Allowed
+                                       && aResult.m_ErrorCode.IsEmpty()
+                                       && std::string( aStatus ) != "failed" },
                                { "status", aStatus },
                                { "error_code", toUtf8String( aResult.m_ErrorCode ) },
                                { "message", toUtf8String( aResult.m_Message ) } };
+
+    if( !aResult.m_ErrorCode.IsEmpty() || std::string( aStatus ) == "failed" )
+    {
+        payload["retryable"] = true;
+        payload["retry_hint"] =
+                "Review error_code and message, then retry with a valid action "
+                "from the current catalog or use current-board atomic/script tools "
+                "for board mutations.";
+    }
 
     return wxString::FromUTF8( payload.dump().c_str() );
 }
@@ -87,8 +99,9 @@ AI_TOOL_INVOCATION_RESULT AI_TOOL_EXECUTION_POLICY::Evaluate(
 
     if( aRequest.m_Action.m_Safety == AI_ACTION_SAFETY::Modifying )
     {
-        deny( result, wxS( "requires_preview" ),
-              wxS( "Modifying actions require preview and materialization policy." ) );
+        deny( result, wxS( "modifying_action_not_available" ),
+              wxS( "Modifying UI actions are not a Chat Agent board-edit path; use "
+                   "current-board atomic or script tools for board mutations." ) );
         return result;
     }
 

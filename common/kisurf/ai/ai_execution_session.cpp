@@ -60,6 +60,7 @@ bool isMutationKind( AI_SESSION_OPERATION_KIND aKind )
     case AI_SESSION_OPERATION_KIND::QueryBoardSummary:
     case AI_SESSION_OPERATION_KIND::QueryItems:
     case AI_SESSION_OPERATION_KIND::QueryItem:
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
     case AI_SESSION_OPERATION_KIND::QuerySelection:
     case AI_SESSION_OPERATION_KIND::QueryNets:
     case AI_SESSION_OPERATION_KIND::QueryLayers:
@@ -93,6 +94,9 @@ wxString AiSessionOperationKindId( AI_SESSION_OPERATION_KIND aKind )
 
     case AI_SESSION_OPERATION_KIND::QueryItem:
         return wxS( "query.item" );
+
+    case AI_SESSION_OPERATION_KIND::QueryUnplacedFootprints:
+        return wxS( "query.unplaced_footprints" );
 
     case AI_SESSION_OPERATION_KIND::QuerySelection:
         return wxS( "query.selection" );

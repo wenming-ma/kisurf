@@ -361,6 +361,7 @@ struct KICOMMON_API AI_PROVIDER_REQUEST
     wxString                         m_ToolCatalogJson;
     size_t                           m_MaxToolRounds = 1;
     bool                             m_DisableDefaultTools = false;
+    bool                             m_RequireToolCall = false;
     size_t                           m_MaxProviderInputChars = 160000;
     size_t                           m_MaxContextActivityRecords = 24;
     size_t                           m_MaxToolResultChars = 4096;
@@ -368,6 +369,7 @@ struct KICOMMON_API AI_PROVIDER_REQUEST
     size_t                           m_MaxRetrievedMemoryChars = 4096;
     size_t                           m_MaxVisualDataUriChars = 1500000;
     bool                             m_AllowVisualPixels = true;
+    bool                             m_IncludeContextSnapshotInPrompt = false;
     bool                             m_ContextCompiled = false;
     bool                             m_ProviderInputWasShrunk = false;
     size_t                           m_ContextEstimatedChars = 0;

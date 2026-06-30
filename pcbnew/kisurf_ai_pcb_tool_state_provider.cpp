@@ -49,8 +49,11 @@ AI_TOOL_STATE_KIND classifyName( const wxString& aName )
     if( aName.IsEmpty() )
         return AI_TOOL_STATE_KIND::Idle;
 
-    if( contains( aName, wxS( "InteractiveRouter" ) ) )
+    if( contains( aName, wxS( "InteractiveRouter" ) )
+        || contains( aName, wxS( "InteractiveRoute" ) ) )
+    {
         return AI_TOOL_STATE_KIND::RoutingTrack;
+    }
 
     if( contains( aName, wxS( "InteractiveDrawing.via" ) )
             || contains( aName, wxS( "InteractiveDrawing.drawVia" ) ) )
@@ -97,6 +100,23 @@ std::string toUtf8String( const wxString& aText )
 wxString fromUtf8String( const std::string& aText )
 {
     return wxString::FromUTF8( aText.c_str() );
+}
+
+
+bool isGenericToolActivationForSpecificAction( const wxString& aCommandName,
+                                               const wxString& aLastActionName )
+{
+    if( aCommandName.IsEmpty() || aLastActionName.IsEmpty() )
+        return false;
+
+    const std::string commandName = toUtf8String( aCommandName );
+    const std::string lastActionName = toUtf8String( aLastActionName );
+
+    if( std::count( commandName.begin(), commandName.end(), '.' ) != 1 )
+        return false;
+
+    const std::string actionPrefix = commandName + ".";
+    return lastActionName.rfind( actionPrefix, 0 ) == 0;
 }
 
 
@@ -587,7 +607,16 @@ void KISURF_AI_PCB_TOOL_STATE_PROVIDER::RecordToolEvent( const TOOL_EVENT& aEven
         if( aEvent.IsCancel() )
             m_LastActionName.Clear();
         else if( !aEvent.CommandString().empty() )
-            m_LastActionName = wxString::FromUTF8( aEvent.CommandString().c_str() );
+        {
+            const wxString commandName =
+                    wxString::FromUTF8( aEvent.CommandString().c_str() );
+
+            if( !isGenericToolActivationForSpecificAction( commandName,
+                                                           m_LastActionName ) )
+            {
+                m_LastActionName = commandName;
+            }
+        }
     }
 
     if( aEvent.HasPosition() )

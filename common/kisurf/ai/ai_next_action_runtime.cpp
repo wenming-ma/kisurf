@@ -2221,6 +2221,12 @@ bool decisionHasExplicitKind( const wxString& aDecisionJson )
 }
 
 
+bool providerResponseIsError( const AI_PROVIDER_RESPONSE& aResponse )
+{
+    return aResponse.m_Title.CmpNoCase( wxS( "AI Provider Error" ) ) == 0;
+}
+
+
 bool shouldAttemptAfterUnstructuredDecision(
         const AI_NEXT_ACTION_LLM_DECISION& aDecision )
 {
@@ -4045,6 +4051,62 @@ AI_TOOL_CALL_RECORD previewGateFeedbackToolResult(
               { "preview_gate_result",
                 parseObjectBody( aPublish.m_GateResult.AsJsonText() ) },
               { "publish_decision", parseObjectBody( aPublish.m_RawJson ) } };
+    feedback.m_ResultJson = fromUtf8String( result.dump() );
+    return feedback;
+}
+
+
+bool reviewNeedsSchemaFeedback( const AI_NEXT_ACTION_REVIEW_DECISION& aReview )
+{
+    return aReview.m_Kind == AI_NEXT_ACTION_DECISION_KIND::Abandon
+           && !aReview.m_RawJson.IsEmpty()
+           && !decisionHasExplicitKind( aReview.m_RawJson );
+}
+
+
+AI_TOOL_CALL_RECORD reviewSchemaFeedbackToolResult(
+        uint64_t aRequestId,
+        const AI_NEXT_ACTION_REVIEW_DECISION& aReview,
+        size_t aFeedbackRound )
+{
+    wxString excerpt = aReview.m_RawJson;
+
+    if( excerpt.length() > 240 )
+        excerpt = excerpt.Left( 240 );
+
+    AI_TOOL_CALL_RECORD feedback;
+    feedback.m_RequestId = aRequestId;
+    feedback.m_ToolCallId = wxString::Format(
+            wxS( "runtime_review_schema_feedback_%llu" ),
+            static_cast<unsigned long long>( aFeedbackRound ) );
+    feedback.m_ToolName = wxS( "review_schema_feedback" );
+    feedback.m_ArgumentsJson = wxS( "{}" );
+    feedback.m_Allowed = true;
+    feedback.m_Executed = true;
+    feedback.m_Message =
+            wxS( "review response did not match the required JSON schema; "
+                 "return a structured review decision" );
+
+    nlohmann::json result =
+            { { "tool", "review.schema_feedback" },
+              { "status", "invalid_review_schema" },
+              { "direct_publish", false },
+              { "publish_allowed", false },
+              { "message",
+                "Review must return JSON with decision_kind. To publish, "
+                "include review_basis.render_valid, "
+                "review_basis.validation_passed, "
+                "review_basis.budget_within_limits, and "
+                "review_basis.self_review_passed set to true." },
+              { "required_shape",
+                { { "decision_kind", "publish|retry|rollback_retry|abandon" },
+                  { "reason_code", "short_machine_readable_reason" },
+                  { "review_basis",
+                    { { "render_valid", true },
+                      { "validation_passed", true },
+                      { "budget_within_limits", true },
+                      { "self_review_passed", true } } } } },
+              { "original_review_excerpt", toUtf8String( excerpt ) } };
     feedback.m_ResultJson = fromUtf8String( result.dump() );
     return feedback;
 }
@@ -16341,9 +16403,40 @@ void AI_NEXT_ACTION_RUNTIME::attachRetrievedMemory(
     if( m_LocalTextMemoryIndex
         && aRequest.m_RetrievedMemoryBlocks.size() < aRequest.m_MaxRetrievedMemoryRecords )
     {
+        wxString searchText;
+
+        if( aRequest.m_RequestKind == AI_PROVIDER_REQUEST_KIND::NextActionReview )
+            searchText << wxS( "review " );
+        else
+            searchText << wxS( "decision " );
+
+        searchText << AiDynamicContextKind( aRequest.m_ContextSnapshot ) << wxS( " " )
+                   << AiToolStateKindName( aRequest.m_ContextSnapshot.m_ToolState.m_Kind );
+
+        switch( aRequest.m_ContextSnapshot.m_ToolState.m_Kind )
+        {
+        case AI_TOOL_STATE_KIND::RoutingTrack:
+            searchText << wxS( " routing route track" );
+            break;
+
+        case AI_TOOL_STATE_KIND::PlacingVia:
+            searchText << wxS( " placement placing via" );
+            break;
+
+        case AI_TOOL_STATE_KIND::PlacingFootprint:
+            searchText << wxS( " placement placing footprint component" );
+            break;
+
+        case AI_TOOL_STATE_KIND::DrawingZone:
+            searchText << wxS( " placement drawing zone copper" );
+            break;
+
+        default:
+            break;
+        }
+
         AI_LOCAL_TEXT_MEMORY_QUERY query;
-        query.m_Text = aRequest.m_UserText + wxS( "\n" )
-                       + aRequest.m_ContextSnapshot.AsPromptText();
+        query.m_Text = searchText;
         query.m_ProjectId = aRequest.m_ContextSnapshot.m_ProjectId;
         query.m_DocumentId = aRequest.m_ContextSnapshot.m_DocumentId;
 
@@ -16545,6 +16638,7 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
 
         std::vector<AI_TOOL_CALL_RECORD> reviewInitialToolResults;
         size_t                           gateFeedbackRounds = 0;
+        size_t                           reviewSchemaFeedbackRounds = 0;
         bool                             tryNextCandidate = false;
         bool                             stopAttemptLoop = false;
 
@@ -16570,6 +16664,18 @@ std::optional<AI_SUGGESTION_RECORD> AI_NEXT_ACTION_RUNTIME::Update(
                     storedAttempt.m_BudgetCounters = attempt.m_BudgetCounters;
                     break;
                 }
+            }
+
+            if( reviewNeedsSchemaFeedback( review )
+                && reviewSchemaFeedbackRounds < 1 )
+            {
+                reviewInitialToolResults =
+                        toolCallRecordsFromReviewJson( review.m_RawJson );
+                reviewInitialToolResults.push_back(
+                        reviewSchemaFeedbackToolResult(
+                                step.m_Id * 10 + 2, review,
+                                ++reviewSchemaFeedbackRounds ) );
+                continue;
             }
 
             if( review.WantsPublish() )
@@ -17260,22 +17366,10 @@ AI_OBSERVATION_PACKET AI_NEXT_ACTION_RUNTIME::buildObservationPacket(
               { "tool_state",
                 toUtf8String( aEvent.m_ContextSnapshot.m_ToolState.KindAsString() ) },
               { "work_state_packet", workStatePacketJson( aEvent ) },
-              { "visual",
-                { { "source", toUtf8String( aEvent.m_ContextSnapshot.m_Visual.m_Source ) },
-                  { "has_pixels", aEvent.m_ContextSnapshot.m_Visual.HasPixels() },
-                  { "unavailable_reason",
-                    toUtf8String( aEvent.m_ContextSnapshot.m_Visual.m_UnavailableReason ) } } } };
-
-    nlohmann::json contextSnapshot =
-            nlohmann::json::parse( toUtf8String(
-                                           aEvent.m_ContextSnapshot.AsJsonText(
-                                                   32, 64, 32, 32, 8 ) ),
-                                   nullptr, false );
-
-    if( contextSnapshot.is_discarded() || !contextSnapshot.is_object() )
-        contextSnapshot = nlohmann::json::object();
-
-    facts["context_snapshot"] = std::move( contextSnapshot );
+              { "context_access",
+                { { "inline_policy", "minimal_prompt_tools_on_demand" },
+                  { "workspace_observation_tool", "kisurf_get_workspace_view" },
+                  { "parameterized_observation", true } } } };
 
     packet.m_ObservationJson = fromUtf8String( facts.dump() );
     return packet;
@@ -17310,7 +17404,16 @@ AI_NEXT_ACTION_LLM_DECISION AI_NEXT_ACTION_RUNTIME::runDecisionTurn(
     request.m_UserText = fromUtf8String( decisionInput.dump() );
     request.m_SystemPromptOverride =
             wxS( "You are KiSurf's Next Action Agent. Decide whether the current "
-                 "observation should start a hidden attempt. Return JSON only." );
+                 "observation should start a hidden attempt. Return one JSON "
+                 "object, not a JSON schema. Required field: decision_kind, one "
+                 "of attempt, wait, abandon. Optional fields: opportunity_type, "
+                 "reason_code, selected_candidate_index. For active routing, "
+                 "placement, or focused structured-surface fill states, prefer "
+                 "attempt when a generated candidate or callable tool can create "
+                 "a hidden attempt. Example: {\"decision_kind\":\"attempt\","
+                 "\"opportunity_type\":\"routing\",\"reason_code\":\"active_"
+                 "route_head\",\"selected_candidate_index\":0}. Never return "
+                 "{\"type\":\"object\"}." );
     request.m_ResponseFormatJson = wxS( "{\"type\":\"json_object\"}" );
     request.m_ToolCatalogJson = m_Tools.CallableToolCatalogJson();
     request.m_MaxToolRounds =
@@ -17455,7 +17558,12 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
                  "and review_basis.self_review_passed to be true. "
                  "If you execute hidden mutation tools during review, call "
                  "render_hidden_attempt and validate_hidden_attempt after the final "
-                 "hidden mutation before requesting publish. Return JSON only." );
+                 "hidden mutation before requesting publish. Return one JSON "
+                 "object, not a JSON schema. Required field: decision_kind, one "
+                 "of publish, retry, rollback_retry, abandon. If publishing, "
+                 "include review_basis with render_valid, validation_passed, "
+                 "budget_within_limits, and self_review_passed all true. Never "
+                 "return {\"type\":\"object\"}." );
     request.m_ResponseFormatJson = wxS( "{\"type\":\"json_object\"}" );
     request.m_ToolCatalogJson = m_Tools.CallableToolCatalogJson();
     const ATTEMPT_BUDGET_POLICY policy = attemptPolicyForWorkState(
@@ -17479,6 +17587,41 @@ AI_NEXT_ACTION_REVIEW_DECISION AI_NEXT_ACTION_RUNTIME::runReviewTurn(
             generateWithToolLoop( request, aObservation, &aAttempt );
     nlohmann::json       parsed = parseObjectBody( response.m_Body );
     attachProviderToolResults( parsed, response );
+
+    if( providerResponseIsError( response ) )
+    {
+        wxString excerpt = response.m_Body;
+
+        if( excerpt.length() > 240 )
+            excerpt = excerpt.Left( 240 );
+
+        nlohmann::json providerError =
+                { { "decision_kind", "abandon" },
+                  { "reason_code", "provider_error" },
+                  { "provider_error", true },
+                  { "message",
+                    "Provider failed during Next Action review; do not "
+                    "schema-repair or blindly replay hidden tools." },
+                  { "provider_body_excerpt", toUtf8String( excerpt ) },
+                  { "provider_tool_results",
+                    toolCallRecordsJson( response.m_ToolCalls ) } };
+
+        nlohmann::json providerTrace =
+                nlohmann::json::parse(
+                        toUtf8String( response.m_ProviderTraceJson ), nullptr,
+                        false );
+
+        if( providerTrace.is_object() )
+            providerError["provider_trace"] = providerTrace;
+
+        review.m_Kind = AI_NEXT_ACTION_DECISION_KIND::Abandon;
+        review.m_ReasonCode = wxS( "provider_error" );
+        review.m_AttemptId = aAttempt.m_Id;
+        review.m_RawJson = fromUtf8String( providerError.dump() );
+        review.m_ToolResultsJson =
+                fromUtf8String( toolCallRecordsJson( response.m_ToolCalls ).dump() );
+        return review;
+    }
 
     review.m_Kind = parseDecisionKind( parsed );
     review.m_ReasonCode = optionalString( parsed, "reason_code" );

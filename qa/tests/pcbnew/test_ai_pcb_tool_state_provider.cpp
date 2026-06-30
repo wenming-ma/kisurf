@@ -53,6 +53,20 @@ std::string readPcbEditFrameSource()
 }
 
 
+std::string readBoardSetupDialogSource()
+{
+    const std::string path =
+            std::string( QA_SRC_ROOT ) + "/pcbnew/dialogs/dialog_board_setup.cpp";
+    std::ifstream     in( path, std::ios::binary );
+
+    BOOST_REQUIRE_MESSAGE( in.good(), "Unable to read source file: " << path );
+
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+
 std::string sourceSlice( const std::string& aSource, const std::string& aStartNeedle,
                          const std::string& aEndNeedle )
 {
@@ -72,18 +86,62 @@ std::string sourceSlice( const std::string& aSource, const std::string& aStartNe
 BOOST_AUTO_TEST_SUITE( AiPcbToolStateProvider )
 
 
-BOOST_AUTO_TEST_CASE( PcbEditFrameDoesNotContinuouslyRequestIdleForBackgroundAgent )
+BOOST_AUTO_TEST_CASE( PcbEditFrameRequestsIdlePulseForActiveBackgroundAgentStates )
 {
     const std::string source = readPcbEditFrameSource();
     const std::string idleHandler = sourceSlice(
             source, "Bind( wxEVT_IDLE,", "resolveCanvasType();" );
 
-    BOOST_CHECK_EQUAL( idleHandler.find( "PulseBackgroundAgent" ),
-                       std::string::npos );
-    BOOST_CHECK_EQUAL( idleHandler.find( "ShouldContinueBackgroundIdlePulse()" ),
-                       std::string::npos );
-    BOOST_CHECK_EQUAL( idleHandler.find( "aEvent.RequestMore()" ),
-                       std::string::npos );
+    BOOST_CHECK( idleHandler.find( "ShouldContinueBackgroundIdlePulse()" )
+                 != std::string::npos );
+    BOOST_CHECK( idleHandler.find( "PulseBackgroundAgent" )
+                 != std::string::npos );
+    BOOST_CHECK( idleHandler.find( "aEvent.RequestMore()" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( BoardSetupSemanticEventsPulseBackgroundAgent )
+{
+    const std::string frameSource = readPcbEditFrameSource();
+    const std::string notifyBody = sourceSlice(
+            frameSource,
+            "void PCB_EDIT_FRAME::NotifyAiPanelSemanticStateChanged",
+            "void PCB_EDIT_FRAME::FocusSearch()" );
+
+    BOOST_CHECK( notifyBody.find( "CallAfter" ) != std::string::npos );
+    BOOST_CHECK( notifyBody.find( "PulseBackgroundAgent" ) != std::string::npos );
+
+    const std::string dialogSource = readBoardSetupDialogSource();
+    const std::string installBody = sourceSlice(
+            dialogSource,
+            "void DIALOG_BOARD_SETUP::installAiSemanticEventHandlers",
+            "bool DIALOG_BOARD_SETUP::PreviewAiSuggestion" );
+    const std::string pageChangedBody = sourceSlice(
+            dialogSource,
+            "void DIALOG_BOARD_SETUP::onPageChanged",
+            "void DIALOG_BOARD_SETUP::onAuxiliaryAction" );
+
+    BOOST_CHECK( installBody.find( "wxEVT_SET_FOCUS" ) != std::string::npos );
+    BOOST_CHECK( installBody.find( "wxEVT_GRID_SELECT_CELL" ) != std::string::npos );
+    BOOST_CHECK( installBody.find( "wxEVT_GRID_CELL_CHANGED" ) != std::string::npos );
+    BOOST_CHECK( installBody.find( "wxEVT_GRID_EDITOR_SHOWN" ) != std::string::npos );
+    BOOST_CHECK( pageChangedBody.find( "installAiSemanticEventHandlers" )
+                 != std::string::npos );
+    BOOST_CHECK( pageChangedBody.find( "board_setup.page_changed" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( PcbEditFrameSeedsFootprintsForChatLiveBoardQueries )
+{
+    const std::string source = readPcbEditFrameSource();
+    const std::string serviceSetup = sourceSlice(
+            source, "void PCB_EDIT_FRAME::refreshAiPcbSessionServices()",
+            "void PCB_EDIT_FRAME::configureAiAgentPanelToolCalls()" );
+
+    BOOST_CHECK( serviceSetup.find( "SEED_OPTIONS" ) == std::string::npos
+                 || serviceSetup.find( "false }" ) == std::string::npos );
 }
 
 
@@ -118,6 +176,12 @@ BOOST_AUTO_TEST_CASE( MapsRecentPcbActionsIntoToolStateKinds )
                        static_cast<int>( AI_TOOL_STATE_KIND::PlacingVia ) );
 
     provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveRoute" ) );
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::RoutingTrack ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
                                           "pcbnew.EditorControl.placeFootprint" ) );
     snapshot = provider.BuildToolState( version );
     BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
@@ -146,6 +210,59 @@ BOOST_AUTO_TEST_CASE( MapsRecentPcbActionsIntoToolStateKinds )
     snapshot = provider.BuildToolState( version );
     BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
                        static_cast<int>( AI_TOOL_STATE_KIND::MovingSelection ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( GenericToolActivationDoesNotEraseSpecificActiveAction )
+{
+    KISURF_AI_PCB_TOOL_STATE_PROVIDER provider( nullptr );
+
+    AI_CONTEXT_VERSION version;
+    version.m_DocumentRevision = 8;
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing.via" ) );
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing" ) );
+
+    AI_TOOL_STATE_SNAPSHOT snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::PlacingVia ) );
+    BOOST_CHECK_EQUAL( snapshot.m_ActiveActionName,
+                       wxString( wxS( "pcbnew.InteractiveDrawing.via" ) ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing.zone" ) );
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveDrawing" ) );
+
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::DrawingZone ) );
+    BOOST_CHECK_EQUAL( snapshot.m_ActiveActionName,
+                       wxString( wxS( "pcbnew.InteractiveDrawing.zone" ) ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.EditorControl.placeFootprint" ) );
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.EditorControl" ) );
+
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::PlacingFootprint ) );
+    BOOST_CHECK_EQUAL( snapshot.m_ActiveActionName,
+                       wxString( wxS( "pcbnew.EditorControl.placeFootprint" ) ) );
+
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveRouter.SingleTrack" ) );
+    provider.RecordToolEvent( TOOL_EVENT( TC_COMMAND, TA_ACTIVATE,
+                                          "pcbnew.InteractiveRouter" ) );
+
+    snapshot = provider.BuildToolState( version );
+    BOOST_CHECK_EQUAL( static_cast<int>( snapshot.m_Kind ),
+                       static_cast<int>( AI_TOOL_STATE_KIND::RoutingTrack ) );
+    BOOST_CHECK_EQUAL( snapshot.m_ActiveActionName,
+                       wxString( wxS( "pcbnew.InteractiveRouter.SingleTrack" ) ) );
 }
 
 

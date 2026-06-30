@@ -252,17 +252,19 @@ std::optional<ROUTING_SEGMENT_CANDIDATE> parseRoutingCandidate(
                                    nullptr, false );
 
     if( modeContext.is_discarded() || !modeContext.is_object()
-        || !modeContext.contains( "net" ) || !modeContext.contains( "layer" )
+        || !modeContext.contains( "layer" )
         || !modeContext.contains( "width" ) || !modeContext.contains( "start" ) )
     {
         return std::nullopt;
     }
 
     ROUTING_SEGMENT_CANDIDATE candidate;
-    candidate.m_NetName = jsonStringToWxString( modeContext["net"] );
+    if( modeContext.contains( "net" ) )
+        candidate.m_NetName = jsonStringToWxString( modeContext["net"] );
+
     candidate.m_LayerName = jsonStringToWxString( modeContext["layer"] );
 
-    if( candidate.m_NetName.IsEmpty() || candidate.m_LayerName.IsEmpty()
+    if( candidate.m_LayerName.IsEmpty()
         || !jsonPositiveIntegerToInt( modeContext["width"], candidate.m_Width )
         || !jsonPointToVector2I( modeContext["start"], candidate.m_Start ) )
     {

@@ -43,6 +43,8 @@ public:
 
     std::vector<AI_SHADOW_ITEM> QueryItems( const wxString& aFilterJson = wxS( "{}" ) ) const;
     wxString QueryBoardSummary() const;
+    void SetNets( std::vector<wxString> aNets );
+    std::vector<wxString> QueryNets() const;
     size_t LiveItemCount() const;
     size_t LiveItemCountByType( const wxString& aType ) const;
 
@@ -73,5 +75,6 @@ private:
     };
 
     std::map<uint64_t, AI_SHADOW_ITEM> m_Items;
+    std::vector<wxString>              m_Nets;
     std::vector<CHECKPOINT_STATE>      m_Checkpoints;
 };

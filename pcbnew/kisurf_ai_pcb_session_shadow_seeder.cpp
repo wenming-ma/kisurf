@@ -6,6 +6,7 @@
 #include <kisurf/ai/ai_execution_session.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <lset.h>
+#include <netinfo.h>
 #include <nlohmann/json.hpp>
 #include <pad.h>
 #include <pcb_shape.h>
@@ -13,11 +14,16 @@
 #include <zone.h>
 
 #include <map>
+#include <mutex>
 #include <string>
 #include <utility>
 
 namespace
 {
+std::mutex s_LiveAliasMutex;
+std::map<const BOARD*, std::map<wxString, wxString>> s_LiveAliasesByBoard;
+
+
 std::string toUtf8String( const wxString& aText )
 {
     wxScopedCharBuffer buffer = aText.ToUTF8();
@@ -104,8 +110,14 @@ void upsertLiveItem( AI_EXECUTION_SESSION& aSession, BOARD_ITEM& aItem,
                      const std::vector<wxString>& aLayers = {},
                      const std::map<wxString, wxString>& aMetadata = {} )
 {
-    const wxString alias =
-            wxString::Format( wxS( "live:%s" ), aItem.m_Uuid.AsString() );
+    wxString alias;
+
+    if( BOARD* board = aItem.GetBoard() )
+        alias = KisurfAiPcbLiveItemAlias( *board, aItem );
+
+    if( alias.IsEmpty() )
+        alias = wxString::Format( wxS( "live:%s" ), aItem.m_Uuid.AsString() );
+
     AI_SESSION_HANDLE handle = aSession.CreateHandle( alias );
 
     AI_SHADOW_ITEM shadowItem;
@@ -220,6 +232,46 @@ nlohmann::json zoneOutlineGeometry( const ZONE& aZone )
 } // namespace
 
 
+void KisurfAiPcbRecordLiveItemAlias( BOARD& aBoard, const BOARD_ITEM& aItem,
+                                     const wxString& aAlias )
+{
+    if( aAlias.IsEmpty() )
+        return;
+
+    std::lock_guard<std::mutex> lock( s_LiveAliasMutex );
+    s_LiveAliasesByBoard[&aBoard][aItem.m_Uuid.AsString()] = aAlias;
+}
+
+
+wxString KisurfAiPcbLiveItemAlias( const BOARD& aBoard, const BOARD_ITEM& aItem )
+{
+    std::lock_guard<std::mutex> lock( s_LiveAliasMutex );
+    const auto boardIt = s_LiveAliasesByBoard.find( &aBoard );
+
+    if( boardIt == s_LiveAliasesByBoard.end() )
+        return wxEmptyString;
+
+    const auto aliasIt = boardIt->second.find( aItem.m_Uuid.AsString() );
+
+    return aliasIt == boardIt->second.end() ? wxString() : aliasIt->second;
+}
+
+
+void KisurfAiPcbForgetLiveItemAlias( BOARD& aBoard, const BOARD_ITEM& aItem )
+{
+    std::lock_guard<std::mutex> lock( s_LiveAliasMutex );
+    const auto boardIt = s_LiveAliasesByBoard.find( &aBoard );
+
+    if( boardIt == s_LiveAliasesByBoard.end() )
+        return;
+
+    boardIt->second.erase( aItem.m_Uuid.AsString() );
+
+    if( boardIt->second.empty() )
+        s_LiveAliasesByBoard.erase( boardIt );
+}
+
+
 KISURF_AI_PCB_SESSION_SHADOW_SEEDER::KISURF_AI_PCB_SESSION_SHADOW_SEEDER(
         BOARD& aBoard, SEED_OPTIONS aOptions ) :
         m_BoardProvider( [&aBoard]() { return &aBoard; } ),
@@ -242,6 +294,16 @@ void KISURF_AI_PCB_SESSION_SHADOW_SEEDER::Seed( AI_EXECUTION_SESSION& aSession )
 
     if( !board )
         return;
+
+    std::vector<wxString> nets;
+
+    for( NETINFO_ITEM* net : board->GetNetInfo() )
+    {
+        if( net && !net->GetNetname().IsEmpty() )
+            nets.push_back( net->GetNetname() );
+    }
+
+    aSession.ShadowBoard().SetNets( std::move( nets ) );
 
     for( PCB_TRACK* track : board->Tracks() )
     {

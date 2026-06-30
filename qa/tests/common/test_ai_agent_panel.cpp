@@ -106,6 +106,21 @@ public:
                 decltype( &AI_AGENT_PANEL_BASE_SURFACE_TEST::OnNewChat )>;
     }
 
+    static constexpr bool HasPreviewButtonMember()
+    {
+        return HasPreviewButtonMemberImpl<AI_AGENT_PANEL_BASE_SURFACE_TEST>();
+    }
+
+    static constexpr bool HasAcceptButtonMember()
+    {
+        return HasAcceptButtonMemberImpl<AI_AGENT_PANEL_BASE_SURFACE_TEST>();
+    }
+
+    static constexpr bool HasRejectButtonMember()
+    {
+        return HasRejectButtonMemberImpl<AI_AGENT_PANEL_BASE_SURFACE_TEST>();
+    }
+
     static constexpr bool HasPromptTextChangedEvent()
     {
         return std::is_member_function_pointer_v<
@@ -123,7 +138,32 @@ private:
     {
         return requires { &T::m_ModeChoice; };
     }
+
+    template<typename T>
+    static constexpr bool HasPreviewButtonMemberImpl()
+    {
+        return requires { &T::m_PreviewButton; };
+    }
+
+    template<typename T>
+    static constexpr bool HasAcceptButtonMemberImpl()
+    {
+        return requires { &T::m_AcceptButton; };
+    }
+
+    template<typename T>
+    static constexpr bool HasRejectButtonMemberImpl()
+    {
+        return requires { &T::m_RejectButton; };
+    }
 };
+
+
+template<typename T>
+constexpr bool hasPendingChatSessionPreviewMember()
+{
+    return requires { &T::HasPendingChatSessionPreview; };
+}
 
 
 template<typename T>
@@ -156,6 +196,9 @@ BOOST_AUTO_TEST_CASE( AgentPanelBaseExposesExpectedControlSurface )
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasNewChatButtonMember() );
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasNewChatEvent() );
     BOOST_CHECK( AI_AGENT_PANEL_BASE_SURFACE_TEST::HasPromptTextChangedEvent() );
+    BOOST_CHECK( !AI_AGENT_PANEL_BASE_SURFACE_TEST::HasPreviewButtonMember() );
+    BOOST_CHECK( !AI_AGENT_PANEL_BASE_SURFACE_TEST::HasAcceptButtonMember() );
+    BOOST_CHECK( !AI_AGENT_PANEL_BASE_SURFACE_TEST::HasRejectButtonMember() );
     BOOST_CHECK( !AI_AGENT_PANEL_BASE_SURFACE_TEST::HasModeChoiceMember() );
 }
 
@@ -261,7 +304,7 @@ BOOST_AUTO_TEST_CASE( AgentPanelSendCurrentTextRendersPendingUserBeforeContextSa
 
     const size_t pendingUser = sendBody.find( "m_PendingUserText = text" );
     const size_t pendingRender = sendBody.find( "renderPendingChatRequest()" );
-    const size_t deferredWork = sendBody.find( "wxTheApp->CallAfter" );
+    const size_t deferredWork = sendBody.find( "m_ChatStartTimer.StartOnce" );
 
     BOOST_REQUIRE( pendingUser != std::string::npos );
     BOOST_REQUIRE( pendingRender != std::string::npos );
@@ -272,12 +315,31 @@ BOOST_AUTO_TEST_CASE( AgentPanelSendCurrentTextRendersPendingUserBeforeContextSa
                        std::string::npos );
     BOOST_CHECK_EQUAL( sendBody.find( "PrepareUserTextRequest(" ),
                        std::string::npos );
+    BOOST_CHECK_EQUAL( sendBody.find( "wxTheApp->CallAfter" ),
+                       std::string::npos );
 
     const std::string renderBody = sourceFunctionBody(
             source, "void AI_AGENT_PANEL::renderPendingChatRequest()",
             "void AI_AGENT_PANEL::handlePreparedChatStreamEvent(" );
 
     BOOST_CHECK( renderBody.find( "m_PendingUserText" ) != std::string::npos );
+    BOOST_CHECK( renderBody.find( "m_Transcript->Refresh()" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelDefersChatStartLongEnoughForPendingTranscriptPaint )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string sendBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::SendCurrentText()",
+            "void AI_AGENT_PANEL::prepareAndRunPendingChatRequest(" );
+
+    BOOST_CHECK( source.find( "CHAT_START_DEFER_MS" ) != std::string::npos );
+    BOOST_CHECK( sendBody.find( "m_ChatStartTimer.StartOnce( CHAT_START_DEFER_MS )" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( sendBody.find( "m_ChatStartTimer.StartOnce( 1 )" ),
+                       std::string::npos );
 }
 
 
@@ -341,8 +403,7 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesSuggestionReviewCommands )
             decltype( &AI_AGENT_PANEL::AcceptLatestSuggestion )> ) );
     BOOST_CHECK( ( std::is_member_function_pointer_v<
             decltype( &AI_AGENT_PANEL::RejectLatestSuggestion )> ) );
-    BOOST_CHECK( ( std::is_member_function_pointer_v<
-            decltype( &AI_AGENT_PANEL::HasPendingChatSessionPreview )> ) );
+    BOOST_CHECK( !hasPendingChatSessionPreviewMember<AI_AGENT_PANEL>() );
 }
 
 
@@ -350,15 +411,6 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesProviderRecoveryCommand )
 {
     BOOST_CHECK( ( std::is_member_function_pointer_v<
             decltype( &AI_AGENT_PANEL::RecoverLatestProviderFailure )> ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( ReviewCommandsTargetPendingChatSession )
-{
-    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( false, true ) );
-    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( true, true ) );
-    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( true, false ) );
-    BOOST_CHECK( !AiAgentReviewCommandTargetsChatSession( false, false ) );
 }
 
 
@@ -371,16 +423,23 @@ BOOST_AUTO_TEST_CASE( AgentPanelExposesBackgroundAgentToggleSurface )
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTimerUsesLowFrequencySampling )
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTimerIsOneShotSemanticDebounce )
 {
     const std::string source = readAiAgentPanelSource();
-    const std::string body = sourceFunctionBody(
+    const std::string enableBody = sourceFunctionBody(
             source, "void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )",
             "bool AI_AGENT_PANEL::BackgroundAgentEnabled() const" );
+    const std::string scheduleBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::scheduleBackgroundSemanticTick(",
+            "void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(" );
 
-    BOOST_CHECK( body.find( "m_BackgroundPulseTimer.Start( 1500 )" )
+    BOOST_CHECK_EQUAL( enableBody.find( "m_BackgroundPulseTimer.Start( 1500 )" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( enableBody.find( "m_BackgroundPulseTimer.Start(" ),
+                       std::string::npos );
+    BOOST_CHECK( scheduleBody.find( "m_BackgroundPulseTimer.StartOnce( 200 )" )
                  != std::string::npos );
-    BOOST_CHECK_EQUAL( body.find( "m_BackgroundPulseTimer.Start( 750 )" ),
+    BOOST_CHECK_EQUAL( scheduleBody.find( "m_BackgroundPulseTimer.Start( 750 )" ),
                        std::string::npos );
 }
 
@@ -453,32 +512,25 @@ BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickTargetsActiveSemanticStates )
     panel.m_PanelStates.push_back( panelState );
     BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( panel ) );
 
+    AI_CONTEXT_SNAPSHOT agentPanel;
+    agentPanel.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    agentPanel.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    agentPanel.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    AI_PANEL_STATE_RECORD agentPanelState;
+    agentPanelState.m_Id = wxS( "agent.panel" );
+    agentPanelState.m_Title = wxS( "Agent" );
+    agentPanelState.m_FocusedControlId = wxS( "agent.input" );
+    agentPanelState.m_FocusedControlLabel = wxS( "Input" );
+    agentPanel.m_PanelStates.push_back( agentPanelState );
+    BOOST_CHECK( !AiAgentSnapshotNeedsBackgroundTick( agentPanel ) );
+    BOOST_CHECK( AiAgentBackgroundTickFingerprint( agentPanel ).IsEmpty() );
+    BOOST_CHECK( !AiAgentShouldQueueBackgroundTick( agentPanel, wxEmptyString ) );
+
     AI_CONTEXT_SNAPSHOT idle;
     idle.m_EditorKind = AI_EDITOR_KIND::Pcb;
     idle.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
     idle.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
     BOOST_CHECK( !AiAgentSnapshotNeedsBackgroundTick( idle ) );
-}
-
-
-BOOST_AUTO_TEST_CASE( AgentPanelContinuousBackgroundIdleOnlyTargetsActiveTools )
-{
-    AI_CONTEXT_SNAPSHOT routing;
-    routing.m_EditorKind = AI_EDITOR_KIND::Pcb;
-    routing.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
-    routing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
-    BOOST_CHECK( AiAgentSnapshotNeedsContinuousBackgroundIdle( routing ) );
-
-    AI_CONTEXT_SNAPSHOT panel;
-    panel.m_EditorKind = AI_EDITOR_KIND::Pcb;
-    panel.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
-    panel.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
-    AI_PANEL_STATE_RECORD panelState;
-    panelState.m_Id = wxS( "board_setup.layers" );
-    panelState.m_FocusedControlId = wxS( "board_setup.layers.grid.r0.c1" );
-    panel.m_PanelStates.push_back( panelState );
-    BOOST_CHECK( AiAgentSnapshotNeedsBackgroundTick( panel ) );
-    BOOST_CHECK( !AiAgentSnapshotNeedsContinuousBackgroundIdle( panel ) );
 }
 
 
@@ -490,11 +542,17 @@ BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickFingerprintTracksSemanticState )
     first.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
     first.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
     first.m_ToolState.m_ModeContextJson =
-            wxS( "{\"mode\":\"routing_track\",\"start\":{\"x\":1,\"y\":2}}" );
+            wxS( "{\"mode\":\"routing_track\",\"net\":\"GND\",\"layer\":\"F.Cu\","
+                 "\"start\":{\"x\":1,\"y\":2},\"current_end\":{\"x\":9,\"y\":9},"
+                 "\"cursor\":{\"x\":9,\"y\":9},"
+                 "\"viewport\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100}}" );
 
     AI_CONTEXT_SNAPSHOT second = first;
     second.m_ToolState.m_ModeContextJson =
-            wxS( "{\"mode\":\"routing_track\",\"start\":{\"x\":3,\"y\":4}}" );
+            wxS( "{\"mode\":\"routing_track\",\"net\":\"GND\",\"layer\":\"F.Cu\","
+                 "\"start\":{\"x\":3,\"y\":4},\"current_end\":{\"x\":9,\"y\":9},"
+                 "\"cursor\":{\"x\":9,\"y\":9},"
+                 "\"viewport\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100}}" );
 
     BOOST_CHECK( !AiAgentBackgroundTickFingerprint( first ).IsEmpty() );
     BOOST_CHECK( AiAgentBackgroundTickFingerprint( first )
@@ -502,7 +560,62 @@ BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickFingerprintTracksSemanticState )
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelQueuesRepeatedActiveToolBackgroundTicks )
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickFingerprintIgnoresCursorEndAndViewport )
+{
+    AI_CONTEXT_SNAPSHOT first;
+    first.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_Version.m_DocumentRevision = 10;
+    first.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::RoutingTrack;
+    first.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"routing_track\",\"net\":\"GND\",\"layer\":\"F.Cu\","
+                 "\"start\":{\"x\":1,\"y\":2},\"current_end\":{\"x\":9,\"y\":9},"
+                 "\"cursor\":{\"x\":9,\"y\":9},"
+                 "\"viewport\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100}}" );
+
+    AI_CONTEXT_SNAPSHOT second = first;
+    second.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"routing_track\",\"net\":\"GND\",\"layer\":\"F.Cu\","
+                 "\"start\":{\"x\":1,\"y\":2},\"current_end\":{\"x\":99,\"y\":99},"
+                 "\"cursor\":{\"x\":99,\"y\":99},"
+                 "\"viewport\":{\"x\":10,\"y\":20,\"width\":300,\"height\":400}}" );
+
+    BOOST_REQUIRE( !AiAgentBackgroundTickFingerprint( first ).IsEmpty() );
+    BOOST_CHECK_EQUAL( AiAgentBackgroundTickFingerprint( first ),
+                       AiAgentBackgroundTickFingerprint( second ) );
+    BOOST_CHECK( !AiAgentShouldQueueBackgroundTick(
+            second, AiAgentBackgroundTickFingerprint( first ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundTickFingerprintTracksPlacementCursorRegion )
+{
+    AI_CONTEXT_SNAPSHOT first;
+    first.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_Version.m_DocumentRevision = 10;
+    first.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    first.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::PlacingVia;
+    first.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"placing_via\",\"layer\":\"F.Cu\","
+                 "\"cursor\":{\"x\":10,\"y\":20},"
+                 "\"cursor_region\":{\"x\":0,\"y\":0,\"width\":100,\"height\":100},"
+                 "\"viewport\":{\"x\":0,\"y\":0,\"width\":500,\"height\":300}}" );
+
+    AI_CONTEXT_SNAPSHOT second = first;
+    second.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"placing_via\",\"layer\":\"F.Cu\","
+                 "\"cursor\":{\"x\":200,\"y\":300},"
+                 "\"cursor_region\":{\"x\":200,\"y\":300,\"width\":100,\"height\":100},"
+                 "\"viewport\":{\"x\":0,\"y\":0,\"width\":500,\"height\":300}}" );
+
+    const wxString firstFingerprint = AiAgentBackgroundTickFingerprint( first );
+    BOOST_REQUIRE( !firstFingerprint.IsEmpty() );
+    BOOST_CHECK( AiAgentBackgroundTickFingerprint( second ) != firstFingerprint );
+    BOOST_CHECK( AiAgentShouldQueueBackgroundTick( second, firstFingerprint ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelDoesNotRepeatUnchangedActiveToolFingerprints )
 {
     AI_CONTEXT_SNAPSHOT routing;
     routing.m_EditorKind = AI_EDITOR_KIND::Pcb;
@@ -515,8 +628,19 @@ BOOST_AUTO_TEST_CASE( AgentPanelQueuesRepeatedActiveToolBackgroundTicks )
     const wxString routingFingerprint =
             AiAgentBackgroundTickFingerprint( routing );
     BOOST_REQUIRE( !routingFingerprint.IsEmpty() );
-    BOOST_CHECK( AiAgentShouldQueueBackgroundTick( routing,
-                                                   routingFingerprint ) );
+    BOOST_CHECK( !AiAgentShouldQueueBackgroundTick( routing,
+                                                    routingFingerprint ) );
+
+    AI_CONTEXT_SNAPSHOT placing = routing;
+    placing.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::PlacingVia;
+    placing.m_ToolState.m_ModeContextJson =
+            wxS( "{\"mode\":\"placing_via\",\"position\":{\"x\":1,\"y\":2}}" );
+
+    const wxString placingFingerprint =
+            AiAgentBackgroundTickFingerprint( placing );
+    BOOST_REQUIRE( !placingFingerprint.IsEmpty() );
+    BOOST_CHECK( !AiAgentShouldQueueBackgroundTick( placing,
+                                                    placingFingerprint ) );
 
     AI_CONTEXT_SNAPSHOT panel;
     panel.m_EditorKind = AI_EDITOR_KIND::Pcb;
@@ -534,6 +658,39 @@ BOOST_AUTO_TEST_CASE( AgentPanelQueuesRepeatedActiveToolBackgroundTicks )
     BOOST_REQUIRE( !panelFingerprint.IsEmpty() );
     BOOST_CHECK( !AiAgentShouldQueueBackgroundTick( panel,
                                                     panelFingerprint ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelRetriesActiveBackgroundWhenRuntimeReturnsNoSuggestion )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string retryBody = sourceFunctionBody(
+            source,
+            "void AI_AGENT_PANEL::scheduleBackgroundRetryAfterEmptyResult(",
+            "void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(" );
+    const std::string finishBody = sourceFunctionBody(
+            source,
+            "void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(",
+            "bool AI_AGENT_PANEL::backgroundSuggestionUpdateInFlight() const" );
+
+    BOOST_CHECK( source.find( "BACKGROUND_RETRY_AFTER_EMPTY_MS" )
+                 != std::string::npos );
+    BOOST_CHECK( retryBody.find( "AiAgentSnapshotNeedsBackgroundTick" )
+                 != std::string::npos );
+    BOOST_CHECK( retryBody.find( "m_LastBackgroundTickFingerprint.Clear()" )
+                 != std::string::npos );
+    BOOST_CHECK( retryBody.find( "m_LastBackgroundEmptyRetryFingerprint" )
+                 != std::string::npos );
+    BOOST_CHECK( retryBody.find( "m_LastBackgroundEmptyRetryFingerprint = fingerprint" )
+                 != std::string::npos );
+    BOOST_CHECK( retryBody.find(
+            "m_BackgroundPulseTimer.StartOnce( BACKGROUND_RETRY_AFTER_EMPTY_MS )" )
+                 != std::string::npos );
+    BOOST_CHECK( finishBody.find(
+            "if( !stored )\n        scheduleBackgroundRetryAfterEmptyResult()" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( retryBody.find( "m_BackgroundPulseTimer.Start( 1500" ),
+                       std::string::npos );
 }
 
 
@@ -637,6 +794,120 @@ BOOST_AUTO_TEST_CASE( AgentPanelBackgroundQueueUsesConfiguredModelRuntime )
 }
 
 
+BOOST_AUTO_TEST_CASE( AgentPanelWrapsNextActionNativeServicesForMainThread )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string configureBody = sourceFunctionBody(
+            source,
+            "void AI_AGENT_PANEL::ConfigureActionToolCalls(",
+            "void AI_AGENT_PANEL::ConfigureSuggestionReview(" );
+
+    BOOST_CHECK( configureBody.find(
+            "AI_MARSHALLED_SESSION_PREVIEW_SERVICE" )
+                 != std::string::npos );
+    BOOST_CHECK( configureBody.find(
+            "AI_MARSHALLED_SESSION_VALIDATION_SERVICE" )
+                 != std::string::npos );
+    BOOST_CHECK( configureBody.find(
+            "m_Model->ConfigureNextActionServices( nextActionPreviewService,"
+            )
+                 != std::string::npos );
+    BOOST_CHECK( configureBody.find( "wxThread::IsMain()" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelSemanticStatusReflectsBackgroundWorkInFlight )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string semanticBody = sourceFunctionBody(
+            source, "AI_SEMANTIC_UI_TREE AI_AGENT_PANEL::SemanticUiTree() const",
+            "AI_PANEL_STATE_RECORD AI_AGENT_PANEL::SemanticPanelStateRecord() const" );
+
+    BOOST_CHECK( semanticBody.find(
+            "status.m_BackgroundAgentBusy = backgroundSuggestionUpdateInFlight()" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelRecordActivityUsesSemanticBackgroundTickGate )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string body = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )",
+            "void AI_AGENT_PANEL::updateModeControls()" );
+
+    BOOST_CHECK( body.find( "AiAgentSnapshotNeedsBackgroundTick" )
+                 != std::string::npos );
+    BOOST_CHECK( body.find( "AiAgentShouldQueueBackgroundTick" )
+                 != std::string::npos );
+    BOOST_CHECK( body.find( "m_LastBackgroundTickFingerprint" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelBackgroundAgentIsSemanticEventDriven )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string enableBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::SetBackgroundAgentEnabled( bool aEnabled )",
+            "bool AI_AGENT_PANEL::BackgroundAgentEnabled() const" );
+    const std::string recordBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::RecordActivity( AI_ACTIVITY_RECORD aRecord )",
+            "void AI_AGENT_PANEL::updateModeControls()" );
+
+    BOOST_CHECK_EQUAL( enableBody.find( "m_BackgroundPulseTimer.Start( 1500" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( enableBody.find( "m_BackgroundPulseTimer.Start(" ),
+                       std::string::npos );
+    BOOST_CHECK( recordBody.find( "scheduleBackgroundSemanticTick" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( recordBody.find( "queueBackgroundSuggestionUpdate" ),
+                       std::string::npos );
+
+    const std::string scheduleBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::scheduleBackgroundSemanticTick(",
+            "void AI_AGENT_PANEL::finishBackgroundSuggestionUpdate(" );
+
+    BOOST_CHECK( scheduleBody.find( "StartOnce" ) != std::string::npos );
+    BOOST_CHECK_EQUAL( scheduleBody.find( "Start( 1500" ), std::string::npos );
+    BOOST_CHECK( source.find( "ShouldContinueBackgroundIdlePulse" )
+                 != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelSemanticPulseQueuesRuntimeUpdate )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string pulseBody = sourceFunctionBody(
+            source, "bool AI_AGENT_PANEL::PulseBackgroundAgent( const wxString& aReason )",
+            "void AI_AGENT_PANEL::RefreshTranscript()" );
+
+    BOOST_CHECK( pulseBody.find( "queueBackgroundSuggestionUpdate" )
+                 != std::string::npos );
+    BOOST_CHECK( pulseBody.find( "m_Model->RecordActivity" )
+                 != std::string::npos );
+    BOOST_CHECK_EQUAL( pulseBody.find( "\n    RecordActivity( std::move( record ) );" ),
+                       std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelSemanticPulseExpiresStaleSuggestionBeforeActiveGate )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string pulseBody = sourceFunctionBody(
+            source, "bool AI_AGENT_PANEL::PulseBackgroundAgent( const wxString& aReason )",
+            "void AI_AGENT_PANEL::RefreshTranscript()" );
+
+    const size_t expirePos = pulseBody.find( "m_Model->ExpireSuggestions" );
+    const size_t activeGatePos = pulseBody.find( "LatestActiveSuggestionId" );
+
+    BOOST_REQUIRE( expirePos != std::string::npos );
+    BOOST_REQUIRE( activeGatePos != std::string::npos );
+    BOOST_CHECK_LT( expirePos, activeGatePos );
+}
+
+
 BOOST_AUTO_TEST_CASE( AgentPanelResetsBackgroundTickAfterSuggestionReview )
 {
     const std::string source = readAiAgentPanelSource();
@@ -651,10 +922,14 @@ BOOST_AUTO_TEST_CASE( AgentPanelResetsBackgroundTickAfterSuggestionReview )
                  != std::string::npos );
     BOOST_CHECK( rejectBody.find( "m_LastBackgroundTickFingerprint.Clear()" )
                  != std::string::npos );
+    BOOST_CHECK( acceptBody.find( "scheduleBackgroundSemanticTick" )
+                 != std::string::npos );
+    BOOST_CHECK( rejectBody.find( "scheduleBackgroundSemanticTick" )
+                 != std::string::npos );
 }
 
 
-BOOST_AUTO_TEST_CASE( AgentPanelAutoAcceptsPendingChatSessionWhenResponseFinishes )
+BOOST_AUTO_TEST_CASE( AgentPanelDoesNotAutoAcceptPendingChatSessionWhenResponseFinishes )
 {
     const std::string source = readAiAgentPanelSource();
     const std::string finishBody = sourceFunctionBody(
@@ -662,10 +937,24 @@ BOOST_AUTO_TEST_CASE( AgentPanelAutoAcceptsPendingChatSessionWhenResponseFinishe
             "void AI_AGENT_PANEL::ConfigureActionToolCalls(" );
 
     BOOST_CHECK( finishBody.find(
-            "autoAcceptCompletedChatSession()" ) != std::string::npos );
+            "autoAcceptCompletedChatSession()" ) == std::string::npos );
     BOOST_CHECK( finishBody.find(
             "model->FinishPreparedChatRequest( std::move( state )," )
                  != std::string::npos );
+}
+
+
+BOOST_AUTO_TEST_CASE( AgentPanelStartNewChatDoesNotRejectChatSessionPreview )
+{
+    const std::string source = readAiAgentPanelSource();
+    const std::string startBody = sourceFunctionBody(
+            source, "void AI_AGENT_PANEL::StartNewChat()",
+            "void AI_AGENT_PANEL::SendCurrentText()" );
+
+    BOOST_CHECK_EQUAL( startBody.find( "rejectActiveChatSession" ),
+                       std::string::npos );
+    BOOST_CHECK_EQUAL( startBody.find( "HasPendingChatSessionPreview" ),
+                       std::string::npos );
 }
 
 
@@ -683,8 +972,9 @@ BOOST_AUTO_TEST_CASE( AgentPanelSemanticViewDoesNotExposeChatSessionReview )
                        std::string::npos );
     BOOST_CHECK_EQUAL( modeBody.find( "pendingChatSessionPreview" ),
                        std::string::npos );
-    BOOST_CHECK( modeBody.find( "m_PreviewButton->Enable( canPreviewSuggestion )" )
-                 != std::string::npos );
+    BOOST_CHECK_EQUAL( modeBody.find( "m_PreviewButton" ), std::string::npos );
+    BOOST_CHECK_EQUAL( modeBody.find( "m_AcceptButton" ), std::string::npos );
+    BOOST_CHECK_EQUAL( modeBody.find( "m_RejectButton" ), std::string::npos );
 }
 
 

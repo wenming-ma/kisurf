@@ -800,6 +800,8 @@ void PCB_EDIT_FRAME::ToggleAgentPanel()
 
     if( agentPane.IsShown() )
     {
+        KisurfPrepareVisibleAgentPane( agentPane );
+
         if( KisurfShouldRestoreAgentPaneWidth( settings->m_AuiPanels.agent_panel_width ) )
             SetAuiPaneSize( m_auimgr, agentPane, settings->m_AuiPanels.agent_panel_width, -1 );
         else

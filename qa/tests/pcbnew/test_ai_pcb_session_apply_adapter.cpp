@@ -195,6 +195,181 @@ BOOST_AUTO_TEST_CASE( AcceptReplayAppliesTargetPositionMoveToCreatedVia )
 }
 
 
+BOOST_AUTO_TEST_CASE( AtomicMoveItemsAcceptsAliasHandleObject )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "move via by alias object" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"target-via-object\",\"net\":\"GND\","
+                 "\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":10,\"y\":20}}" ) )
+                           .m_Ok );
+
+    AI_ATOMIC_EXECUTION_RESULT moveResult =
+            AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                    session, AI_SESSION_OPERATION_KIND::MoveItems,
+                    wxS( "{\"handles\":[{\"alias\":\"target-via-object\"}],"
+                         "\"target_positions\":{\"x\":70,\"y\":80}}" ) );
+
+    BOOST_REQUIRE_MESSAGE( moveResult.m_Ok, moveResult.m_Message );
+
+    session.EndStep( stepId );
+
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+
+    std::vector<PCB_VIA*> vias = boardVias( board );
+    BOOST_REQUIRE_EQUAL( vias.size(), 1 );
+    BOOST_CHECK_EQUAL( vias.front()->GetPosition().x, 70 );
+    BOOST_CHECK_EQUAL( vias.front()->GetPosition().y, 80 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AtomicMoveItemsAcceptsTopLevelAliasAndTargetPositionShortcut )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "move via by alias shortcut" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"target-via-shortcut\",\"net\":\"GND\","
+                 "\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":10,\"y\":20}}" ) )
+                           .m_Ok );
+
+    AI_ATOMIC_EXECUTION_RESULT moveResult =
+            AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                    session, AI_SESSION_OPERATION_KIND::MoveItems,
+                    wxS( "{\"alias\":\"target-via-shortcut\","
+                         "\"target_position\":{\"x\":0.07,\"y\":0.08,"
+                         "\"units\":\"mm\"}}" ) );
+
+    BOOST_REQUIRE_MESSAGE( moveResult.m_Ok, moveResult.m_Message );
+
+    session.EndStep( stepId );
+
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE( result.m_Ok );
+
+    std::vector<PCB_VIA*> vias = boardVias( board );
+    BOOST_REQUIRE_EQUAL( vias.size(), 1 );
+    BOOST_CHECK_EQUAL( vias.front()->GetPosition().x, 70000 );
+    BOOST_CHECK_EQUAL( vias.front()->GetPosition().y, 80000 );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptedCreatedItemAliasIsRestoredByLiveBoardSeeder )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_EXECUTION_SESSION session = makeSession();
+
+    const uint64_t stepId = session.BeginStep( wxS( "create via with alias" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    BOOST_REQUIRE( AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"persisted-via\",\"net\":\"GND\","
+                 "\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":10,\"y\":20}}" ) )
+                           .m_Ok );
+    session.EndStep( stepId );
+
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+    BOOST_REQUIRE( result.m_Ok );
+
+    AI_EXECUTION_SESSION observedSession = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( observedSession );
+
+    std::vector<AI_SHADOW_ITEM> aliases =
+            observedSession.ShadowBoard().QueryItems(
+                    wxS( "{\"alias\":\"persisted-via\"}" ) );
+    BOOST_REQUIRE_EQUAL( aliases.size(), 1 );
+    BOOST_CHECK_EQUAL( aliases.front().m_Type, wxString( wxS( "via" ) ) );
+    BOOST_CHECK_EQUAL( aliases.front().m_Net, wxString( wxS( "GND" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( AcceptReplayDeletesLiveSeededItemByAlias )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    PCB_VIA* via = addVia( board, gnd, VECTOR2I( 100, 200 ) );
+    KisurfAiPcbRecordLiveItemAlias( board, *via, wxS( "delete-live-via" ) );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_EXECUTION_SESSION session = makeSession();
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( board );
+    seeder.Seed( session );
+
+    BOOST_REQUIRE_EQUAL(
+            session.ShadowBoard().QueryItems(
+                    wxS( "{\"alias\":\"delete-live-via\"}" ) )
+                    .size(),
+            1 );
+
+    const uint64_t stepId = session.BeginStep( wxS( "delete live via" ) );
+    BOOST_REQUIRE_NE( stepId, 0 );
+
+    AI_ATOMIC_EXECUTION_RESULT deleteResult =
+            AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+                    session, AI_SESSION_OPERATION_KIND::DeleteItems,
+                    wxS( "{\"handles\":[\"delete-live-via\"]}" ) );
+
+    BOOST_REQUIRE_MESSAGE( deleteResult.m_Ok, deleteResult.m_Message );
+    session.EndStep( stepId );
+
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::Apply( session, wxS( "board-hash-a" ),
+                                      session.ContextVersion(), adapter );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Ok, result.m_Message );
+    BOOST_CHECK( result.m_BoardMutated );
+    BOOST_CHECK( boardVias( board ).empty() );
+}
+
+
 BOOST_AUTO_TEST_CASE( NativeValidationServiceRunsDrcLiteOnBoardDrcEngine )
 {
     BOARD board;

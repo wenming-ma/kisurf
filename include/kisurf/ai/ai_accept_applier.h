@@ -30,6 +30,28 @@ public:
     virtual void AbortTransaction() {}
 };
 
+struct KICOMMON_API AI_CURRENT_BOARD_TOOL_RESULT
+{
+    bool     m_Ok = false;
+    bool     m_Executed = false;
+    wxString m_ErrorCode;
+    wxString m_Message;
+    wxString m_ResultJson = wxS( "{}" );
+};
+
+class KICOMMON_API AI_CURRENT_BOARD_TOOL_ADAPTER
+{
+public:
+    virtual ~AI_CURRENT_BOARD_TOOL_ADAPTER() = default;
+
+    virtual AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardSummary() = 0;
+    virtual AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardItems(
+            const wxString& aFilterJson ) = 0;
+    virtual AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardNets() = 0;
+    virtual AI_CURRENT_BOARD_TOOL_RESULT RunCurrentBoardAtomicOperation(
+            AI_SESSION_OPERATION_KIND aKind, const wxString& aArgumentsJson ) = 0;
+};
+
 struct KICOMMON_API AI_ACCEPT_APPLY_RESULT
 {
     bool     m_Ok = false;
@@ -45,5 +67,8 @@ public:
     static AI_ACCEPT_APPLY_RESULT Apply( AI_EXECUTION_SESSION& aSession,
             const wxString& aCurrentBaseHash,
             const AI_CONTEXT_VERSION& aCurrentContextVersion,
+            AI_ACCEPT_APPLY_ADAPTER& aAdapter );
+
+    static AI_ACCEPT_APPLY_RESULT ApplyDirectLive( AI_EXECUTION_SESSION& aSession,
             AI_ACCEPT_APPLY_ADAPTER& aAdapter );
 };

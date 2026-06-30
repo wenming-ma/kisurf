@@ -14,6 +14,7 @@
 #include <set>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -112,9 +113,7 @@ bool isRuntimeTextToolName( const std::string& aName )
     static const std::set<std::string> names = {
         "kisurf_run_action",
         "kisurf_check_action",
-        "kisurf_get_context_snapshot",
         "kisurf_get_workspace_view",
-        "kisurf_get_activity_timeline",
         "kisurf_invoke_semantic_ui_action",
         "kisurf_open_session",
         "kisurf_close_session",
@@ -131,6 +130,7 @@ bool isRuntimeTextToolName( const std::string& aName )
         "kisurf_query_board_summary",
         "kisurf_query_items",
         "kisurf_query_item",
+        "kisurf_query_unplaced_footprints",
         "kisurf_query_selection",
         "kisurf_query_nets",
         "kisurf_query_layers",
@@ -777,6 +777,798 @@ bool repeatsHandledToolCall( const std::vector<AI_TOOL_CALL_RECORD>& aRoundToolC
 }
 
 
+bool wxContainsAny( const wxString& aText,
+                    std::initializer_list<const wxString> aNeedles )
+{
+    for( const wxString& needle : aNeedles )
+    {
+        if( !needle.IsEmpty() && aText.Contains( needle ) )
+            return true;
+    }
+
+    return false;
+}
+
+
+bool chatRequestNeedsAtLeastOneToolCall( const AI_PROVIDER_REQUEST& aRequest,
+                                         const AI_PROVIDER_RESPONSE& aResponse )
+{
+    if( aRequest.m_RequestKind != AI_PROVIDER_REQUEST_KIND::Chat
+        || aRequest.m_MaxToolRounds == 0
+        || aResponse.m_Title.CmpNoCase( wxS( "AI Provider Error" ) ) == 0 )
+    {
+        return false;
+    }
+
+    if( aRequest.m_DisableDefaultTools && aRequest.m_ToolCatalogJson.IsEmpty() )
+        return false;
+
+    const wxString text = aRequest.m_UserText.Lower();
+
+    return wxContainsAny(
+            text,
+            { wxS( "删除" ), wxS( "清除" ), wxS( "移除" ), wxS( "创建" ),
+              wxS( "新建" ), wxS( "添加" ), wxS( "放置" ), wxS( "移动" ),
+              wxS( "修改" ), wxS( "更改" ), wxS( "改成" ), wxS( "生成" ),
+              wxS( "绘制" ), wxS( "布线" ), wxS( "走线" ), wxS( "过孔" ),
+              wxS( "铺铜" ), wxS( "检查" ), wxS( "查询" ), wxS( "多少" ),
+              wxS( "几个" ), wxS( "delete" ), wxS( "remove" ),
+              wxS( "clear" ), wxS( "create" ), wxS( "add" ), wxS( "place" ),
+              wxS( "move" ), wxS( "modify" ), wxS( "change" ),
+              wxS( "set " ), wxS( "draw" ), wxS( "route" ),
+              wxS( "routing" ), wxS( "track" ), wxS( "tracks" ),
+              wxS( "via" ), wxS( "vias" ), wxS( "zone" ), wxS( "fill" ),
+              wxS( "drc" ), wxS( "check" ), wxS( "inspect" ),
+              wxS( "count" ), wxS( "how many" ), wxS( "query" ),
+              wxS( "list" ), wxS( "current board" ), wxS( "pcb" ) } );
+}
+
+
+struct BOARD_SUMMARY_COUNTS
+{
+    bool     m_HasTrackSegments = false;
+    bool     m_HasVias = false;
+    bool     m_HasPads = false;
+    bool     m_HasFootprints = false;
+    bool     m_HasZones = false;
+    bool     m_HasNets = false;
+    bool     m_HasTotalItems = false;
+    uint64_t m_TrackSegments = 0;
+    uint64_t m_Vias = 0;
+    uint64_t m_Pads = 0;
+    uint64_t m_Footprints = 0;
+    uint64_t m_Zones = 0;
+    uint64_t m_Nets = 0;
+    uint64_t m_TotalItems = 0;
+
+    uint64_t RoutingCount() const
+    {
+        return m_TrackSegments + m_Vias;
+    }
+};
+
+
+wxString boardSummaryCountsText( const BOARD_SUMMARY_COUNTS& aSummary )
+{
+    std::vector<wxString> parts;
+
+    if( aSummary.m_HasTrackSegments )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Track Segments: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_TrackSegments ) ) );
+    }
+
+    if( aSummary.m_HasVias )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Vias: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_Vias ) ) );
+    }
+
+    if( aSummary.m_HasPads )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Pads: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_Pads ) ) );
+    }
+
+    if( aSummary.m_HasFootprints )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Footprints: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_Footprints ) ) );
+    }
+
+    if( aSummary.m_HasZones )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Zones: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_Zones ) ) );
+    }
+
+    if( aSummary.m_HasNets )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Nets: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_Nets ) ) );
+    }
+
+    if( aSummary.m_HasTotalItems )
+    {
+        parts.push_back( wxString::Format(
+                wxS( "Total Items: %llu" ),
+                static_cast<unsigned long long>( aSummary.m_TotalItems ) ) );
+    }
+
+    if( parts.empty() )
+        return wxS( "no board summary count fields" );
+
+    wxString text = parts.front();
+
+    for( size_t ii = 1; ii < parts.size(); ++ii )
+        text += wxS( "; " ) + parts[ii];
+
+    return text;
+}
+
+
+nlohmann::json boardSummaryCountsMetadata( const BOARD_SUMMARY_COUNTS& aSummary )
+{
+    nlohmann::json payload = nlohmann::json::object();
+
+    if( aSummary.m_HasTrackSegments )
+        payload["track_segments"] = aSummary.m_TrackSegments;
+
+    if( aSummary.m_HasVias )
+        payload["vias"] = aSummary.m_Vias;
+
+    if( aSummary.m_HasPads )
+        payload["pads"] = aSummary.m_Pads;
+
+    if( aSummary.m_HasFootprints )
+        payload["footprints"] = aSummary.m_Footprints;
+
+    if( aSummary.m_HasZones )
+        payload["zones"] = aSummary.m_Zones;
+
+    if( aSummary.m_HasNets )
+        payload["nets"] = aSummary.m_Nets;
+
+    if( aSummary.m_HasTotalItems )
+        payload["total_items"] = aSummary.m_TotalItems;
+
+    payload["routing_count"] = aSummary.RoutingCount();
+    return payload;
+}
+
+
+AI_PROVIDER_INPUT_BLOCK toolRequiredRetryBlock()
+{
+    AI_PROVIDER_INPUT_BLOCK block;
+    block.m_Id = wxS( "runtime.tool_required.retry" );
+    block.m_Kind = wxS( "runtime_instruction" );
+    block.m_Source = wxS( "ai_runtime" );
+    block.m_Text =
+            wxS( "The current user request asks about or modifies the live KiCad "
+                 "workspace. The previous model response did not include a tool "
+                 "call, so it is not acceptable as a final answer. You must call "
+                 "at least one appropriate KiSurf tool now: use read-only query "
+                 "tools for board facts and current-board atomic/script tools for "
+                 "edits. Do not answer from assumptions, screenshots, visible "
+                 "status text, or chat history." );
+    return block;
+}
+
+
+AI_PROVIDER_INPUT_BLOCK toolGroundingConflictRetryBlock(
+        uint64_t aObservedRoutingCount,
+        const std::optional<BOARD_SUMMARY_COUNTS>& aObservedSummary,
+        const AI_PROVIDER_RESPONSE& aRejectedResponse )
+{
+    AI_PROVIDER_INPUT_BLOCK block;
+    block.m_Id = wxS( "runtime.tool_grounding_conflict.retry" );
+    block.m_Kind = wxS( "runtime_instruction" );
+    block.m_Source = wxS( "ai_runtime" );
+
+    if( aObservedSummary )
+    {
+        block.m_Text = wxString::Format(
+                wxS( "The previous final answer contradicted a KiSurf tool result. "
+                     "The already-executed current-board summary reports these exact "
+                     "fields: %s. The answer claimed no routing/tracks/vias or no "
+                     "action was needed. Produce a corrected final answer grounded "
+                     "strictly in these exact fields. Do not collapse Track Segments "
+                     "and Vias into a generic routing item count when the user asked "
+                     "for those fields." ),
+                boardSummaryCountsText( *aObservedSummary ).c_str() );
+    }
+    else
+    {
+        block.m_Text = wxString::Format(
+                wxS( "The previous final answer contradicted a KiSurf tool result. "
+                     "The already-executed current-board tool result reports %llu routing "
+                     "item(s), but the answer claimed no routing/tracks/vias or no action "
+                     "was needed. Produce a corrected final answer grounded strictly in "
+                     "the tool result. Do not repeat the contradicted claim. If the tool "
+                     "result is insufficient for the requested operation, state the exact "
+                     "missing fact and retry_hint instead of inventing board state." ),
+                static_cast<unsigned long long>( aObservedRoutingCount ) );
+    }
+
+    nlohmann::json metadata = {
+        { "observed_routing_count", aObservedRoutingCount },
+        { "rejected_title", toUtf8String( aRejectedResponse.m_Title ) }
+    };
+
+    if( aObservedSummary )
+        metadata["observed_board_summary"] = boardSummaryCountsMetadata( *aObservedSummary );
+
+    block.m_MetadataJson = fromUtf8String( metadata.dump() );
+    return block;
+}
+
+
+AI_PROVIDER_INPUT_BLOCK routingAbsenceVerificationRetryBlock()
+{
+    AI_PROVIDER_INPUT_BLOCK block;
+    block.m_Id = wxS( "runtime.routing_absence_verify.retry" );
+    block.m_Kind = wxS( "runtime_instruction" );
+    block.m_Source = wxS( "ai_runtime" );
+    block.m_Text =
+            wxS( "The previous final answer claimed there are no routing, tracks, "
+                 "or vias after only inconclusive item-query results. Before making "
+                 "that claim, call kisurf_query_board_summary to verify "
+                 "track_segments and vias. If the summary reports nonzero routing "
+                 "objects, retry with canonical filters such as {\"type\":\"tracks\"}, "
+                 "{\"type\":\"vias\"}, or {\"type\":\"routing\"}; do not tell the "
+                 "user that no action is needed from a narrow or ambiguous zero-count "
+                 "query." );
+    return block;
+}
+
+
+AI_PROVIDER_INPUT_BLOCK boardCountSummaryRetryBlock()
+{
+    AI_PROVIDER_INPUT_BLOCK block;
+    block.m_Id = wxS( "runtime.board_count_summary.retry" );
+    block.m_Kind = wxS( "runtime_instruction" );
+    block.m_Source = wxS( "ai_runtime" );
+    block.m_Text =
+            wxS( "The current user request asks for board object counts. "
+                 "Do not answer count questions from routing item lists, visual "
+                 "context, or chat history. Call kisurf_query_board_summary now "
+                 "and answer with the exact summary fields such as "
+                 "track_segments, vias, pads, footprints, zones, nets, and "
+                 "total_items." );
+    return block;
+}
+
+
+AI_PROVIDER_RESPONSE requiredToolCallMissingResponse(
+        const AI_PROVIDER_REQUEST& aRequest, const AI_PROVIDER_RESPONSE& aRejectedResponse )
+{
+    AI_PROVIDER_RESPONSE response;
+    response.m_RequestId = aRequest.m_RequestId;
+    response.m_Kind = AI_SUGGESTION_KIND::Chat;
+    response.m_Title = wxS( "Required tool call missing" );
+    response.m_Body =
+            wxS( "The AI provider did not return a required KiSurf tool call for "
+                 "this concrete board request, so KiSurf did not execute or trust "
+                 "the model's board-state answer. Please retry; the request must "
+                 "use the current-board query or atomic/script tools." );
+    wxUnusedVar( aRejectedResponse );
+    return response;
+}
+
+
+uint64_t jsonUnsignedValue( const nlohmann::json& aObject, const char* aKey )
+{
+    if( !aObject.is_object() || !aObject.contains( aKey ) )
+        return 0;
+
+    const nlohmann::json& value = aObject[aKey];
+
+    if( value.is_number_unsigned() )
+        return value.get<uint64_t>();
+
+    if( value.is_number_integer() )
+    {
+        const int64_t signedValue = value.get<int64_t>();
+        return signedValue > 0 ? static_cast<uint64_t>( signedValue ) : 0;
+    }
+
+    if( value.is_number_float() )
+    {
+        const double floatValue = value.get<double>();
+        return floatValue > 0 ? static_cast<uint64_t>( floatValue ) : 0;
+    }
+
+    return 0;
+}
+
+
+bool jsonHasUnsignedValue( const nlohmann::json& aObject, const char* aKey )
+{
+    if( !aObject.is_object() || !aObject.contains( aKey ) )
+        return false;
+
+    const nlohmann::json& value = aObject[aKey];
+
+    if( value.is_number_unsigned() )
+        return true;
+
+    if( value.is_number_integer() )
+        return value.get<int64_t>() >= 0;
+
+    if( value.is_number_float() )
+        return value.get<double>() >= 0;
+
+    return false;
+}
+
+
+std::optional<BOARD_SUMMARY_COUNTS> boardSummaryCountsFromToolCall(
+        const AI_TOOL_CALL_RECORD& aToolCall )
+{
+    if( !aToolCall.m_Allowed
+        || aToolCall.m_ToolName != wxS( "kisurf_query_board_summary" ) )
+    {
+        return std::nullopt;
+    }
+
+    nlohmann::json result = nlohmann::json::parse(
+            toUtf8String( aToolCall.m_ResultJson ), nullptr, false );
+
+    if( !result.is_object() || !result.contains( "summary" )
+        || !result["summary"].is_object() )
+    {
+        return std::nullopt;
+    }
+
+    const nlohmann::json& summary = result["summary"];
+    BOARD_SUMMARY_COUNTS counts;
+
+    counts.m_HasTrackSegments = jsonHasUnsignedValue( summary, "track_segments" );
+    counts.m_HasVias = jsonHasUnsignedValue( summary, "vias" );
+    counts.m_HasPads = jsonHasUnsignedValue( summary, "pads" );
+    counts.m_HasFootprints = jsonHasUnsignedValue( summary, "footprints" );
+    counts.m_HasZones = jsonHasUnsignedValue( summary, "zones" );
+    counts.m_HasNets = jsonHasUnsignedValue( summary, "nets" );
+    counts.m_HasTotalItems = jsonHasUnsignedValue( summary, "total_items" )
+                             || jsonHasUnsignedValue( summary, "items_total" );
+
+    counts.m_TrackSegments = jsonUnsignedValue( summary, "track_segments" );
+    counts.m_Vias = jsonUnsignedValue( summary, "vias" );
+    counts.m_Pads = jsonUnsignedValue( summary, "pads" );
+    counts.m_Footprints = jsonUnsignedValue( summary, "footprints" );
+    counts.m_Zones = jsonUnsignedValue( summary, "zones" );
+    counts.m_Nets = jsonUnsignedValue( summary, "nets" );
+    counts.m_TotalItems = jsonHasUnsignedValue( summary, "total_items" )
+                          ? jsonUnsignedValue( summary, "total_items" )
+                          : jsonUnsignedValue( summary, "items_total" );
+
+    return counts;
+}
+
+
+std::optional<BOARD_SUMMARY_COUNTS> latestBoardSummaryCounts(
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    std::optional<BOARD_SUMMARY_COUNTS> latest;
+
+    for( const AI_TOOL_CALL_RECORD& toolCall : aHandledToolCalls )
+    {
+        if( std::optional<BOARD_SUMMARY_COUNTS> counts =
+                    boardSummaryCountsFromToolCall( toolCall ) )
+        {
+            latest = counts;
+        }
+    }
+
+    return latest;
+}
+
+
+bool itemTypeIsRouting( const nlohmann::json& aType )
+{
+    if( !aType.is_string() )
+        return false;
+
+    wxString type = wxString::FromUTF8(
+            aType.get_ref<const std::string&>().c_str() );
+    type.MakeLower();
+    type.Replace( wxS( "-" ), wxS( "_" ) );
+    type.Replace( wxS( " " ), wxS( "_" ) );
+
+    return type == wxS( "track_segment" ) || type == wxS( "track" )
+           || type == wxS( "tracks" ) || type == wxS( "trace" )
+           || type == wxS( "traces" ) || type == wxS( "via" )
+           || type == wxS( "vias" ) || type == wxS( "route" )
+           || type == wxS( "routes" ) || type == wxS( "routing" )
+           || type == wxS( "routed_items" );
+}
+
+
+bool filterTargetsRouting( const nlohmann::json& aFilter )
+{
+    if( !aFilter.is_object() || !aFilter.contains( "type" ) )
+        return false;
+
+    const nlohmann::json& type = aFilter["type"];
+
+    if( type.is_array() )
+    {
+        for( const nlohmann::json& entry : type )
+        {
+            if( itemTypeIsRouting( entry ) )
+                return true;
+        }
+
+        return false;
+    }
+
+    return itemTypeIsRouting( type );
+}
+
+
+uint64_t routingObservationCount( const AI_TOOL_CALL_RECORD& aToolCall )
+{
+    nlohmann::json result = nlohmann::json::parse(
+            toUtf8String( aToolCall.m_ResultJson ), nullptr, false );
+
+    if( !result.is_object() )
+        return 0;
+
+    if( aToolCall.m_ToolName == wxS( "kisurf_query_items" ) )
+    {
+        const uint64_t reportedCount =
+                std::max( jsonUnsignedValue( result, "returned_count" ),
+                          jsonUnsignedValue( result, "total_count" ) );
+        uint64_t routingItemsInPayload = 0;
+
+        if( result.contains( "items" ) && result["items"].is_array() )
+        {
+            for( const nlohmann::json& item : result["items"] )
+            {
+                if( item.is_object() && item.contains( "type" )
+                    && itemTypeIsRouting( item["type"] ) )
+                {
+                    ++routingItemsInPayload;
+                }
+            }
+        }
+
+        if( routingItemsInPayload > 0 )
+            return std::max( routingItemsInPayload, reportedCount );
+
+        if( filterTargetsRouting( result.value( "filter", nlohmann::json::object() ) ) )
+            return reportedCount;
+    }
+
+    if( std::optional<BOARD_SUMMARY_COUNTS> counts =
+                boardSummaryCountsFromToolCall( aToolCall ) )
+    {
+        return counts->RoutingCount();
+    }
+
+    return 0;
+}
+
+
+uint64_t nonZeroRoutingToolObservationCount(
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    uint64_t count = 0;
+
+    for( const AI_TOOL_CALL_RECORD& toolCall : aHandledToolCalls )
+    {
+        if( !toolCall.m_Allowed )
+            continue;
+
+        count = std::max( count, routingObservationCount( toolCall ) );
+    }
+
+    return count;
+}
+
+
+bool hasBoardSummaryRoutingObservation(
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    for( const AI_TOOL_CALL_RECORD& toolCall : aHandledToolCalls )
+    {
+        if( std::optional<BOARD_SUMMARY_COUNTS> counts =
+                    boardSummaryCountsFromToolCall( toolCall ) )
+        {
+            if( counts->m_HasTrackSegments || counts->m_HasVias )
+                return true;
+        }
+    }
+
+    return false;
+}
+
+
+std::string canonicalUnsignedString( uint64_t aValue )
+{
+    return std::to_string( aValue );
+}
+
+
+bool textContainsUnsignedToken( const wxString& aText, uint64_t aValue )
+{
+    const std::string body = toUtf8String( aText );
+    const std::string expected = canonicalUnsignedString( aValue );
+
+    for( size_t ii = 0; ii < body.size(); )
+    {
+        if( !std::isdigit( static_cast<unsigned char>( body[ii] ) ) )
+        {
+            ++ii;
+            continue;
+        }
+
+        size_t end = ii;
+
+        while( end < body.size()
+               && std::isdigit( static_cast<unsigned char>( body[end] ) ) )
+        {
+            ++end;
+        }
+
+        std::string token = body.substr( ii, end - ii );
+        size_t      firstNonZero = token.find_first_not_of( '0' );
+
+        if( firstNonZero == std::string::npos )
+            token = "0";
+        else if( firstNonZero > 0 )
+            token.erase( 0, firstNonZero );
+
+        if( token == expected )
+            return true;
+
+        ii = end;
+    }
+
+    return false;
+}
+
+
+bool responseClaimsNoRoutingItems( const wxString& aBody )
+{
+    wxString body = aBody;
+    body.MakeLower();
+
+    const bool mentionsRouting =
+            wxContainsAny( body,
+                           { wxS( "布线" ), wxS( "走线" ), wxS( "过孔" ),
+                             wxS( "track" ), wxS( "tracks" ), wxS( "trace" ),
+                             wxS( "traces" ), wxS( "route" ), wxS( "routing" ),
+                             wxS( "via" ), wxS( "vias" ) } );
+
+    if( !mentionsRouting )
+        return false;
+
+    return wxContainsAny( body,
+                          { wxS( "未发现" ), wxS( "没有" ), wxS( "不存在" ),
+                            wxS( "无需" ), wxS( "不需要" ), wxS( "无任何" ),
+                            wxS( "no " ), wxS( "none" ), wxS( "not found" ),
+                            wxS( "zero" ), wxS( "0 " ) } );
+}
+
+
+bool routingAbsenceNeedsVerification(
+        const AI_PROVIDER_RESPONSE& aResponse,
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    if( aHandledToolCalls.empty() || !aResponse.m_ToolCalls.empty()
+        || aResponse.m_Body.IsEmpty()
+        || !responseClaimsNoRoutingItems( aResponse.m_Body ) )
+    {
+        return false;
+    }
+
+    if( nonZeroRoutingToolObservationCount( aHandledToolCalls ) > 0 )
+        return false;
+
+    return !hasBoardSummaryRoutingObservation( aHandledToolCalls );
+}
+
+
+bool boardCountRequestNeedsSummary( const AI_PROVIDER_REQUEST& aRequest )
+{
+    if( aRequest.m_RequestKind != AI_PROVIDER_REQUEST_KIND::Chat )
+        return false;
+
+    const wxString text = aRequest.m_UserText.Lower();
+
+    const bool asksForCount =
+            wxContainsAny( text,
+                           { wxS( "多少" ), wxS( "几个" ), wxS( "数量" ),
+                             wxS( "count" ), wxS( "counts" ),
+                             wxS( "how many" ) } );
+
+    if( !asksForCount )
+        return false;
+
+    return wxContainsAny(
+            text,
+            { wxS( "track" ), wxS( "tracks" ), wxS( "track segment" ),
+              wxS( "track segments" ), wxS( "布线" ), wxS( "走线" ),
+              wxS( "routing" ), wxS( "via" ), wxS( "vias" ), wxS( "过孔" ),
+              wxS( "pad" ), wxS( "pads" ), wxS( "焊盘" ),
+              wxS( "footprint" ), wxS( "footprints" ), wxS( "封装" ),
+              wxS( "zone" ), wxS( "zones" ), wxS( "铺铜" ),
+              wxS( "net" ), wxS( "nets" ), wxS( "网络" ),
+              wxS( "current board" ), wxS( "pcb" ), wxS( "板子" ) } );
+}
+
+
+bool requestMentionsTrackCount( const AI_PROVIDER_REQUEST& aRequest )
+{
+    const wxString text = aRequest.m_UserText.Lower();
+
+    return wxContainsAny(
+            text,
+            { wxS( "track" ), wxS( "tracks" ), wxS( "track segment" ),
+              wxS( "track segments" ), wxS( "布线" ), wxS( "走线" ),
+              wxS( "routing" ), wxS( "route" ), wxS( "trace" ),
+              wxS( "traces" ) } );
+}
+
+
+bool requestMentionsViaCount( const AI_PROVIDER_REQUEST& aRequest )
+{
+    const wxString text = aRequest.m_UserText.Lower();
+
+    return wxContainsAny( text,
+                          { wxS( "via" ), wxS( "vias" ), wxS( "过孔" ) } );
+}
+
+
+bool boardCountAnswerNeedsSummary(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const AI_PROVIDER_RESPONSE& aResponse,
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    return boardCountRequestNeedsSummary( aRequest )
+           && !aHandledToolCalls.empty()
+           && aResponse.m_ToolCalls.empty()
+           && !aResponse.m_Body.IsEmpty()
+           && !hasBoardSummaryRoutingObservation( aHandledToolCalls );
+}
+
+
+bool boardCountAnswerMissingRequestedSummaryFacts(
+        const AI_PROVIDER_REQUEST& aRequest,
+        const AI_PROVIDER_RESPONSE& aResponse,
+        const BOARD_SUMMARY_COUNTS& aSummary )
+{
+    if( !boardCountRequestNeedsSummary( aRequest )
+        || aResponse.m_ToolCalls.size() != 0
+        || aResponse.m_Body.IsEmpty() )
+    {
+        return false;
+    }
+
+    const bool needsTrack = requestMentionsTrackCount( aRequest );
+    const bool needsVia = requestMentionsViaCount( aRequest );
+
+    bool missing = false;
+
+    if( needsTrack && aSummary.m_HasTrackSegments
+        && !textContainsUnsignedToken( aResponse.m_Body,
+                                       aSummary.m_TrackSegments ) )
+    {
+        missing = true;
+    }
+
+    if( needsVia && aSummary.m_HasVias
+        && !textContainsUnsignedToken( aResponse.m_Body, aSummary.m_Vias ) )
+    {
+        missing = true;
+    }
+
+    return missing;
+}
+
+
+bool toolGroundingConflictDetected(
+        const AI_PROVIDER_RESPONSE& aResponse,
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls,
+        uint64_t& aObservedRoutingCount )
+{
+    aObservedRoutingCount = 0;
+
+    if( aHandledToolCalls.empty() || !aResponse.m_ToolCalls.empty()
+        || aResponse.m_Body.IsEmpty() )
+    {
+        return false;
+    }
+
+    aObservedRoutingCount =
+            nonZeroRoutingToolObservationCount( aHandledToolCalls );
+
+    return aObservedRoutingCount > 0
+           && responseClaimsNoRoutingItems( aResponse.m_Body );
+}
+
+
+AI_PROVIDER_RESPONSE toolGroundingConflictResponse(
+        const AI_PROVIDER_REQUEST& aRequest, const AI_PROVIDER_RESPONSE& aRejectedResponse,
+        uint64_t aObservedRoutingCount,
+        const std::optional<BOARD_SUMMARY_COUNTS>& aObservedSummary )
+{
+    AI_PROVIDER_RESPONSE response;
+    response.m_RequestId = aRequest.m_RequestId;
+    response.m_Kind = AI_SUGGESTION_KIND::Chat;
+    response.m_Title = wxS( "Tool-grounding conflict" );
+
+    if( aObservedSummary )
+    {
+        response.m_Body = wxString::Format(
+                wxS( "工具查询结果：%s。模型最终回答声称不存在或无需操作，"
+                     "所以 KiSurf 已拦截该回答。请以这些工具字段为准。" ),
+                boardSummaryCountsText( *aObservedSummary ).c_str() );
+    }
+    else
+    {
+        response.m_Body = wxString::Format(
+                wxS( "工具查询显示当前板子上有 %llu 个 routing item(s)，但模型最终回答"
+                     "声称不存在或无需操作，所以 KiSurf 已拦截该回答。请以工具结果为准："
+                     "模型必须重新调用正确的 current-board 查询或修改工具；如果工具失败，"
+                     "必须报告精确的 tool result / error_code / retry_hint。" ),
+                static_cast<unsigned long long>( aObservedRoutingCount ) );
+    }
+
+    wxUnusedVar( aRejectedResponse );
+    return response;
+}
+
+
+AI_PROVIDER_RESPONSE boardSummaryGroundedCountResponse(
+        const AI_PROVIDER_REQUEST& aRequest, const AI_PROVIDER_RESPONSE& aRejectedResponse,
+        const BOARD_SUMMARY_COUNTS& aSummary )
+{
+    AI_PROVIDER_RESPONSE response;
+    response.m_RequestId = aRequest.m_RequestId;
+    response.m_Kind = AI_SUGGESTION_KIND::Chat;
+    response.m_Title = wxS( "Tool-grounded board summary" );
+    response.m_Body = wxString::Format( wxS( "工具查询结果：%s。" ),
+                                        boardSummaryCountsText( aSummary ).c_str() );
+    wxUnusedVar( aRejectedResponse );
+    return response;
+}
+
+
+AI_PROVIDER_RESPONSE guardPostToolBoardStateAnswer(
+        const AI_PROVIDER_REQUEST& aRequest, AI_PROVIDER_RESPONSE aResponse,
+        const std::vector<AI_TOOL_CALL_RECORD>& aHandledToolCalls )
+{
+    uint64_t routingCount = 0;
+    const std::optional<BOARD_SUMMARY_COUNTS> summary =
+            latestBoardSummaryCounts( aHandledToolCalls );
+
+    if( summary && boardCountRequestNeedsSummary( aRequest )
+        && ( boardCountAnswerMissingRequestedSummaryFacts( aRequest, aResponse,
+                                                           *summary )
+             || responseClaimsNoRoutingItems( aResponse.m_Body ) ) )
+    {
+        return boardSummaryGroundedCountResponse( aRequest, aResponse, *summary );
+    }
+
+    if( toolGroundingConflictDetected( aResponse, aHandledToolCalls,
+                                       routingCount ) )
+    {
+        return toolGroundingConflictResponse( aRequest, aResponse, routingCount,
+                                              summary );
+    }
+
+    return aResponse;
+}
+
+
 wxString promptTraceStatusForResponse( const AI_PROVIDER_RESPONSE& aResponse )
 {
     if( aResponse.m_Title.CmpNoCase( wxS( "AI Provider Error" ) ) == 0 )
@@ -1206,6 +1998,35 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest,
 
     appendPromptTrace( traceStore, providerRequest, response );
 
+    if( response.m_ToolCalls.empty()
+        && chatRequestNeedsAtLeastOneToolCall( aRequest, response ) )
+    {
+        AI_PROVIDER_REQUEST retryRequest = aRequest;
+        retryRequest.m_ContextCompiled = false;
+        retryRequest.m_CompiledUserMessageText.Clear();
+        retryRequest.m_PromptTraceJson.Clear();
+        retryRequest.m_RequireToolCall = true;
+        retryRequest.m_ProviderInputBlocks.push_back( toolRequiredRetryBlock() );
+
+        providerRequest = AiCompileProviderInputWithBudget( retryRequest );
+        response = m_Provider->Generate(
+                providerRequest,
+                providerStreamSinkForRequest( eventSink, aRequest.m_RequestId,
+                                              providerRequest ) );
+        promoteStrictTextualToolCall( response );
+        normalizeToolCallArguments( response.m_ToolCalls );
+        emitProviderResponseEvent( eventSink, aRequest.m_RequestId, response );
+        appendPromptTrace( traceStore, providerRequest, response );
+
+        if( response.m_ToolCalls.empty()
+            && chatRequestNeedsAtLeastOneToolCall( aRequest, response ) )
+        {
+            response = requiredToolCallMissingResponse( aRequest, response );
+            emitProviderResponseEvent( eventSink, aRequest.m_RequestId, response );
+            appendPromptTrace( traceStore, providerRequest, response );
+        }
+    }
+
     std::vector<AI_TOOL_CALL_RECORD> handledToolCalls;
     size_t                           toolRounds = 0;
 
@@ -1272,7 +2093,6 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest,
         continuationRequest.m_ContextCompiled = false;
         continuationRequest.m_CompiledUserMessageText.Clear();
         continuationRequest.m_PromptTraceJson.Clear();
-        continuationRequest.m_ProviderInputBlocks.clear();
 
         providerRequest = AiCompileProviderInputWithBudget( continuationRequest );
 
@@ -1288,6 +2108,66 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest,
         archiveProviderRecoveryArtifact( artifactStore, providerRequest,
                                          continuationResponse );
         appendPromptTrace( traceStore, providerRequest, continuationResponse );
+
+        if( boardCountAnswerNeedsSummary( aRequest, continuationResponse,
+                                          handledToolCalls )
+            && toolRounds < aRequest.m_MaxToolRounds )
+        {
+            AI_PROVIDER_REQUEST summaryRequest = aRequest;
+            summaryRequest.m_ToolResults = handledToolCalls;
+            summaryRequest.m_ContextCompiled = false;
+            summaryRequest.m_CompiledUserMessageText.Clear();
+            summaryRequest.m_PromptTraceJson.Clear();
+            summaryRequest.m_RequireToolCall = true;
+            summaryRequest.m_ProviderInputBlocks.push_back(
+                    boardCountSummaryRetryBlock() );
+
+            providerRequest = AiCompileProviderInputWithBudget( summaryRequest );
+            continuationResponse = m_Provider->Generate(
+                    providerRequest,
+                    providerStreamSinkForRequest( eventSink, aRequest.m_RequestId,
+                                                  providerRequest ) );
+            promoteStrictTextualToolCall( continuationResponse );
+            normalizeToolCallArguments( continuationResponse.m_ToolCalls );
+            emitProviderResponseEvent( eventSink, aRequest.m_RequestId,
+                                       continuationResponse );
+            markPostSideEffectProviderFailure( continuationResponse, providerRequest,
+                                               handledToolCalls );
+            archiveProviderRecoveryArtifact( artifactStore, providerRequest,
+                                             continuationResponse );
+            appendPromptTrace( traceStore, providerRequest,
+                               continuationResponse );
+        }
+        else if( routingAbsenceNeedsVerification( continuationResponse,
+                                                  handledToolCalls )
+            && toolRounds < aRequest.m_MaxToolRounds )
+        {
+            AI_PROVIDER_REQUEST verifyRequest = aRequest;
+            verifyRequest.m_ToolResults = handledToolCalls;
+            verifyRequest.m_ContextCompiled = false;
+            verifyRequest.m_CompiledUserMessageText.Clear();
+            verifyRequest.m_PromptTraceJson.Clear();
+            verifyRequest.m_RequireToolCall = true;
+            verifyRequest.m_ProviderInputBlocks.push_back(
+                    routingAbsenceVerificationRetryBlock() );
+
+            providerRequest = AiCompileProviderInputWithBudget( verifyRequest );
+            continuationResponse = m_Provider->Generate(
+                    providerRequest,
+                    providerStreamSinkForRequest( eventSink, aRequest.m_RequestId,
+                                                  providerRequest ) );
+            promoteStrictTextualToolCall( continuationResponse );
+            normalizeToolCallArguments( continuationResponse.m_ToolCalls );
+            emitProviderResponseEvent( eventSink, aRequest.m_RequestId,
+                                       continuationResponse );
+            markPostSideEffectProviderFailure( continuationResponse, providerRequest,
+                                               handledToolCalls );
+            archiveProviderRecoveryArtifact( artifactStore, providerRequest,
+                                             continuationResponse );
+            appendPromptTrace( traceStore, providerRequest,
+                               continuationResponse );
+        }
+
         continuationResponse.m_RequestId = aRequest.m_RequestId;
         response = std::move( continuationResponse );
     }
@@ -1330,6 +2210,65 @@ AI_PROVIDER_RESPONSE AI_RUNTIME::Submit( AI_PROVIDER_REQUEST aRequest,
 
         response = std::move( finalResponse );
     }
+
+    uint64_t groundingConflictRoutingCount = 0;
+    const std::optional<BOARD_SUMMARY_COUNTS> groundingConflictSummary =
+            latestBoardSummaryCounts( handledToolCalls );
+
+    if( toolGroundingConflictDetected( response, handledToolCalls,
+                                       groundingConflictRoutingCount )
+        && !( groundingConflictSummary
+              && boardCountRequestNeedsSummary( aRequest ) ) )
+    {
+        AI_PROVIDER_REQUEST groundingRetryRequest = aRequest;
+        groundingRetryRequest.m_ToolResults = handledToolCalls;
+        groundingRetryRequest.m_ContextCompiled = false;
+        groundingRetryRequest.m_CompiledUserMessageText.Clear();
+        groundingRetryRequest.m_PromptTraceJson.Clear();
+        groundingRetryRequest.m_RequireToolCall = false;
+        groundingRetryRequest.m_ProviderInputBlocks.push_back(
+                toolGroundingConflictRetryBlock( groundingConflictRoutingCount,
+                                                 groundingConflictSummary,
+                                                 response ) );
+
+        providerRequest = AiCompileProviderInputWithBudget( groundingRetryRequest );
+
+        AI_PROVIDER_RESPONSE groundingRetryResponse = m_Provider->Generate(
+                providerRequest,
+                providerStreamSinkForRequest( eventSink, aRequest.m_RequestId,
+                                              providerRequest ) );
+        promoteStrictTextualToolCall( groundingRetryResponse );
+        normalizeToolCallArguments( groundingRetryResponse.m_ToolCalls );
+        emitProviderResponseEvent( eventSink, aRequest.m_RequestId,
+                                   groundingRetryResponse );
+        markPostSideEffectProviderFailure( groundingRetryResponse, providerRequest,
+                                           handledToolCalls );
+        archiveProviderRecoveryArtifact( artifactStore, providerRequest,
+                                         groundingRetryResponse );
+        appendPromptTrace( traceStore, providerRequest, groundingRetryResponse );
+        groundingRetryResponse.m_RequestId = aRequest.m_RequestId;
+
+        if( !groundingRetryResponse.m_ToolCalls.empty() )
+        {
+            groundingRetryResponse.m_ToolCalls.clear();
+
+            if( groundingRetryResponse.m_Body.IsEmpty()
+                || groundingRetryResponse.m_Body == wxS( "Tool call requested." ) )
+            {
+                groundingRetryResponse.m_Body =
+                        wxS( "The provider requested another tool after KiSurf "
+                             "reported a tool-result grounding conflict. Retry the "
+                             "request; the final answer must be grounded in the "
+                             "already returned tool results or call the needed tool "
+                             "inside the normal tool loop." );
+            }
+        }
+
+        response = std::move( groundingRetryResponse );
+    }
+
+    response = guardPostToolBoardStateAnswer( aRequest, std::move( response ),
+                                              handledToolCalls );
 
     if( !handledToolCalls.empty() )
         response.m_ToolCalls = std::move( handledToolCalls );

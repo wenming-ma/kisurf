@@ -7520,9 +7520,15 @@ BOOST_AUTO_TEST_CASE( RuntimePublishesOnlyAfterDecisionAndReviewTurns )
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
             wxS( "atomic.run_operation" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
-            wxS( "context_snapshot" ) ) );
+            wxS( "context_access" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
-            wxS( "visible_objects" ) ) );
+            wxS( "minimal_prompt_tools_on_demand" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "kisurf_get_workspace_view" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "\"context_snapshot\"" ) ) );
+    BOOST_CHECK( !provider->m_Requests.at( 0 ).m_UserText.Contains(
+            wxS( "\"visual\":{\"source\"" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
             wxS( "via:100,50" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 0 ).m_UserText.Contains(
@@ -9518,7 +9524,9 @@ BOOST_AUTO_TEST_CASE( RuntimeExecutesProviderToolCallsBeforeDecisionAndReview )
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.Contains(
             wxS( "\"observation\"" ) ) );
     BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.Contains(
-            wxS( "\"visible_objects\"" ) ) );
+            wxS( "\"context_access\"" ) ) );
+    BOOST_CHECK( provider->m_Requests.at( 1 ).m_ToolResults.front().m_ResultJson.Contains(
+            wxS( "\"minimal_prompt_tools_on_demand\"" ) ) );
 
     BOOST_CHECK( provider->m_Requests.at( 2 ).m_RequestKind
                  == AI_PROVIDER_REQUEST_KIND::NextActionReview );
@@ -11647,6 +11655,37 @@ BOOST_AUTO_TEST_CASE( RuntimeHiddenAttemptExecutesAtomicOperationIntoShadowJourn
             wxS( "budget_counters" ) ) );
     BOOST_CHECK( runtime.Attempts().front().m_ProvenanceJson.Contains(
             wxS( "touched_object_set" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( RuntimeRepairsMalformedReviewBeforeAbandoningActiveToolPreview )
+{
+    auto* provider = new SCRIPTED_NEXT_ACTION_PROVIDER(
+            { wxS( "{\"decision_kind\":\"attempt\","
+                   "\"opportunity_type\":\"placement\"}" ),
+              wxS( "The hidden attempt looks acceptable; publish the preview." ),
+              publishReview() } );
+
+    PUBLISH_READY_NEXT_ACTION_SERVICES services;
+    AI_NEXT_ACTION_RUNTIME runtime{ std::unique_ptr<AI_PROVIDER>( provider ),
+                                    &services.m_Validation,
+                                    &services.m_Preview };
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            runtime.Update( makeViaTrigger() );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+    BOOST_REQUIRE_GE( provider->m_Requests.size(), 3 );
+
+    const AI_PROVIDER_REQUEST& repairRequest = provider->m_Requests.back();
+    BOOST_CHECK( repairRequest.m_RequestKind
+                 == AI_PROVIDER_REQUEST_KIND::NextActionReview );
+    BOOST_REQUIRE_GE( repairRequest.m_ToolResults.size(), 1 );
+    BOOST_CHECK_EQUAL( repairRequest.m_ToolResults.back().m_ToolName,
+                       wxString( wxS( "review_schema_feedback" ) ) );
+    BOOST_CHECK( repairRequest.m_ToolResults.back().m_ResultJson.Contains(
+            wxS( "invalid_review_schema" ) ) );
+    BOOST_CHECK( runtime.CanPreview( suggestion->m_Id ) );
 }
 
 

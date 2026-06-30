@@ -26,6 +26,30 @@ std::string toStdString( const wxString& aText )
 }
 
 
+class ENV_GUARD
+{
+public:
+    explicit ENV_GUARD( wxString aName ) :
+            m_Name( std::move( aName ) ),
+            m_HadValue( wxGetEnv( m_Name, &m_Value ) )
+    {
+    }
+
+    ~ENV_GUARD()
+    {
+        if( m_HadValue )
+            wxSetEnv( m_Name, m_Value );
+        else
+            wxUnsetEnv( m_Name );
+    }
+
+private:
+    wxString m_Name;
+    wxString m_Value;
+    bool     m_HadValue = false;
+};
+
+
 kiapi::ai::session::WorkerResponse makeCellResponse()
 {
     kiapi::ai::session::WorkerResponse response;
@@ -559,6 +583,110 @@ BOOST_AUTO_TEST_CASE( LocalWorkerRunsSdkCellThroughPythonProcess )
     BOOST_CHECK_EQUAL( args["alias"].get<std::string>(), "lv0" );
     BOOST_CHECK_EQUAL( args["position"]["x"].get<int>(), 3 );
     BOOST_CHECK_EQUAL( args["position"]["y"].get<int>(), 4 );
+}
+
+
+BOOST_AUTO_TEST_CASE( LocalWorkerIgnoresInheritedPythonHome )
+{
+    ENV_GUARD pythonHomeGuard( wxS( "PYTHONHOME" ) );
+    ENV_GUARD pythonPathGuard( wxS( "PYTHONPATH" ) );
+
+    wxSetEnv( wxS( "PYTHONHOME" ), wxS( "C:\\kisurf\\invalid-python-home" ) );
+    wxSetEnv( wxS( "PYTHONPATH" ), wxS( "C:\\kisurf\\invalid-python-path" ) );
+
+    const wxString interpreter = wxS( "python" );
+
+    wxFileName sdkRoot( wxString::FromUTF8( QA_SRC_ROOT ), wxEmptyString );
+    sdkRoot.AppendDir( wxS( "common" ) );
+    sdkRoot.AppendDir( wxS( "kisurf" ) );
+    sdkRoot.AppendDir( wxS( "ai" ) );
+    sdkRoot.AppendDir( wxS( "python" ) );
+
+    AI_PYTHON_LOCAL_WORKER worker( interpreter, sdkRoot.GetPath() );
+    BOOST_REQUIRE( worker.IsConnected() );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 19;
+    options.m_BoardId = wxS( "board-main" );
+    options.m_BaseHash = wxS( "h0" );
+    AI_EXECUTION_SESSION session( options );
+
+    AI_PYTHON_CELL_REQUEST request;
+    request.m_SessionId = session.SessionId();
+    request.m_BoardId = session.BoardId();
+    request.m_BaseHash = session.BaseHash();
+    request.m_Epoch = session.Epoch();
+    request.m_CellId = wxS( "cell-ignore-pythonhome" );
+    request.m_CellText = wxS(
+            "with session.step('python home isolation'):\n"
+            "    session.create_via(position={'x': 7, 'y': 8}, alias='env_via')\n" );
+
+    AI_PYTHON_CELL_RESULT result = worker.RunCell( session, request );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Ok,
+                           "error_code=" << toStdString( result.m_ErrorCode )
+                                         << " message=" << toStdString( result.m_Message )
+                                         << " stderr=" << toStdString( result.m_Stderr ) );
+    BOOST_REQUIRE_EQUAL( result.m_Operations.size(), 1 );
+    BOOST_CHECK( result.m_Operations[0].m_Kind == AI_SESSION_OPERATION_KIND::CreateVia );
+}
+
+
+BOOST_AUTO_TEST_CASE( LocalWorkerRunsViaArrayLoopCell )
+{
+    const wxString interpreter = wxS( "python" );
+
+    wxFileName sdkRoot( wxString::FromUTF8( QA_SRC_ROOT ), wxEmptyString );
+    sdkRoot.AppendDir( wxS( "common" ) );
+    sdkRoot.AppendDir( wxS( "kisurf" ) );
+    sdkRoot.AppendDir( wxS( "ai" ) );
+    sdkRoot.AppendDir( wxS( "python" ) );
+
+    AI_PYTHON_LOCAL_WORKER worker( interpreter, sdkRoot.GetPath() );
+    BOOST_REQUIRE( worker.IsConnected() );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 20;
+    options.m_BoardId = wxS( "board-main" );
+    options.m_BaseHash = wxS( "h0" );
+    AI_EXECUTION_SESSION session( options );
+
+    AI_PYTHON_CELL_REQUEST request;
+    request.m_SessionId = session.SessionId();
+    request.m_BoardId = session.BoardId();
+    request.m_BaseHash = session.BaseHash();
+    request.m_Epoch = session.Epoch();
+    request.m_CellId = wxS( "cell-via-array" );
+    request.m_CellText = wxS(
+            "with session.step('3x3 via array'):\n"
+            "    pitch = 1.0\n"
+            "    for row in range(3):\n"
+            "        for col in range(3):\n"
+            "            session.create_via(\n"
+            "                position=[100 + col * pitch, 100 + row * pitch],\n"
+            "                net='GND', diameter=0.3, drill=0.2,\n"
+            "                alias=f'via_{row}_{col}')\n" );
+
+    AI_PYTHON_CELL_RESULT result = worker.RunCell( session, request );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Ok,
+                           "error_code=" << toStdString( result.m_ErrorCode )
+                                         << " message=" << toStdString( result.m_Message )
+                                         << " stderr=" << toStdString( result.m_Stderr ) );
+    BOOST_CHECK_EQUAL( result.m_StepLabel, wxString( wxS( "3x3 via array" ) ) );
+    BOOST_REQUIRE_EQUAL( result.m_Operations.size(), 9 );
+
+    for( size_t i = 0; i < result.m_Operations.size(); ++i )
+    {
+        BOOST_CHECK( result.m_Operations[i].m_Kind
+                     == AI_SESSION_OPERATION_KIND::CreateVia );
+
+        nlohmann::json args = nlohmann::json::parse(
+                toStdString( result.m_Operations[i].m_ArgumentsJson ) );
+        BOOST_CHECK( args["position"].is_array() );
+        BOOST_CHECK_EQUAL( args["diameter"].get<double>(), 0.3 );
+        BOOST_CHECK_EQUAL( args["drill"].get<double>(), 0.2 );
+    }
 }
 
 

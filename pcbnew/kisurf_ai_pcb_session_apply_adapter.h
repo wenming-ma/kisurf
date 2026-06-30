@@ -22,7 +22,8 @@ class BOARD;
 class PCB_EDIT_FRAME;
 class TOOL_MANAGER;
 
-class KISURF_AI_PCB_SESSION_APPLY_ADAPTER : public AI_ACCEPT_APPLY_ADAPTER
+class KISURF_AI_PCB_SESSION_APPLY_ADAPTER : public AI_ACCEPT_APPLY_ADAPTER,
+                                             public AI_CURRENT_BOARD_TOOL_ADAPTER
 {
 public:
     explicit KISURF_AI_PCB_SESSION_APPLY_ADAPTER( PCB_EDIT_FRAME& aFrame );
@@ -38,11 +39,23 @@ public:
     bool HasBoardChanges() const override;
     void AbortTransaction() override;
 
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardSummary() override;
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardItems(
+            const wxString& aFilterJson ) override;
+    AI_CURRENT_BOARD_TOOL_RESULT QueryCurrentBoardNets() override;
+    AI_CURRENT_BOARD_TOOL_RESULT RunCurrentBoardAtomicOperation(
+            AI_SESSION_OPERATION_KIND aKind, const wxString& aArgumentsJson ) override;
+
 private:
     using HANDLE_KEY = std::pair<uint64_t, uint64_t>;
 
     static HANDLE_KEY keyForHandle( const AI_SESSION_HANDLE& aHandle );
     void seedLiveItemHandleMap( const AI_EXECUTION_SESSION& aSession );
+    void seedOperationLiveItemHandleMap(
+            const AI_SESSION_OPERATION_RECORD& aOperation );
+    bool beginCurrentBoardToolTransaction( wxString& aError );
+    bool commitCurrentBoardToolTransaction( wxString& aError );
+    void abortCurrentBoardToolTransaction();
     void stageModify( BOARD_ITEM* aItem );
     void addCreatedItem( BOARD_ITEM* aItem );
     void removeItem( BOARD_ITEM* aItem );

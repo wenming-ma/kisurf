@@ -58,9 +58,6 @@ class KICOMMON_API AI_AGENT_PANEL_BASE : public wxPanel
 		wxBoxSizer* m_ComposerFooterSizer;
 		wxStaticText* m_ComposerStatus;
 		wxGridSizer* m_ComposerButtonSizer;
-		wxButton* m_PreviewButton;
-		wxButton* m_AcceptButton;
-		wxButton* m_RejectButton;
 		wxButton* m_SendButton;
 		wxButton* m_StopButton;
 
@@ -70,9 +67,6 @@ class KICOMMON_API AI_AGENT_PANEL_BASE : public wxPanel
 		virtual void OnBackgroundAgentToggled( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPromptTextChanged( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnPromptEnter( wxCommandEvent& event ) { event.Skip(); }
-		virtual void OnPreviewSuggestion( wxCommandEvent& event ) { event.Skip(); }
-		virtual void OnAcceptSuggestion( wxCommandEvent& event ) { event.Skip(); }
-		virtual void OnRejectSuggestion( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnSend( wxCommandEvent& event ) { event.Skip(); }
 		virtual void OnStop( wxCommandEvent& event ) { event.Skip(); }
 

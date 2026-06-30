@@ -247,11 +247,65 @@ wxString missingModelConfigPath()
 
 bool pointSchemaRequiresXY( const nlohmann::json& aSchema )
 {
-    return aSchema.contains( "required" )
-           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
-                         "x" ) != aSchema["required"].end()
-           && std::find( aSchema["required"].begin(), aSchema["required"].end(),
-                         "y" ) != aSchema["required"].end();
+    auto requiresFields =
+            []( const nlohmann::json& aCandidate, const char* aX, const char* aY )
+            {
+                return aCandidate.contains( "required" )
+                       && std::find( aCandidate["required"].begin(),
+                                     aCandidate["required"].end(), aX )
+                                  != aCandidate["required"].end()
+                       && std::find( aCandidate["required"].begin(),
+                                     aCandidate["required"].end(), aY )
+                                  != aCandidate["required"].end();
+            };
+
+    if( requiresFields( aSchema, "x", "y" ) )
+        return true;
+
+    if( !aSchema.contains( "anyOf" ) || !aSchema["anyOf"].is_array() )
+        return false;
+
+    return std::any_of( aSchema["anyOf"].begin(), aSchema["anyOf"].end(),
+                        [&]( const nlohmann::json& aVariant )
+                        {
+                            return requiresFields( aVariant, "x", "y" );
+                        } );
+}
+
+
+bool pointSchemaSupportsModelFacingShortcuts( const nlohmann::json& aSchema )
+{
+    if( !pointSchemaRequiresXY( aSchema ) || !aSchema.contains( "anyOf" )
+        || !aSchema["anyOf"].is_array() )
+    {
+        return false;
+    }
+
+    bool sawMmObject = false;
+    bool sawMmArray = false;
+
+    for( const nlohmann::json& variant : aSchema["anyOf"] )
+    {
+        if( variant.value( "type", std::string() ) == "array"
+            && variant.value( "minItems", 0 ) == 2
+            && variant.value( "maxItems", 0 ) == 2 )
+        {
+            sawMmArray = true;
+        }
+
+        if( variant.contains( "required" )
+            && std::find( variant["required"].begin(), variant["required"].end(),
+                          "x_mm" )
+                       != variant["required"].end()
+            && std::find( variant["required"].begin(), variant["required"].end(),
+                          "y_mm" )
+                       != variant["required"].end() )
+        {
+            sawMmObject = true;
+        }
+    }
+
+    return sawMmObject && sawMmArray;
 }
 
 
@@ -429,8 +483,10 @@ bool validationSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema
 
     return properties.contains( "scope" )
            && stringEnumContainsAll( properties["scope"],
-                                     { "session", "affected_area", "selection",
-                                       "region" } )
+                                     { "affected_area", "selection", "region" } )
+           && std::find( properties["scope"]["enum"].begin(),
+                         properties["scope"]["enum"].end(), "session" )
+                      == properties["scope"]["enum"].end()
            && properties.contains( "level" )
            && stringEnumContainsAll( properties["level"],
                                      { "geometry", "drc_lite", "full_drc" } )
@@ -438,9 +494,7 @@ bool validationSchemaDeclaresTypedObservationArgs( const nlohmann::json& aSchema
            && boxSchemaSupportsCanonicalForms( properties["region"] )
            && properties.contains( "handles" )
            && handleArraySchemaSupportsTypedReferences( properties["handles"] )
-           && properties.contains( "gate" )
-           && stringEnumContainsAll( properties["gate"],
-                                     { "preview", "accept" } );
+           && !properties.contains( "gate" );
 }
 
 
@@ -615,15 +669,42 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderBuildsChatCompletionRequest )
                                    wxString( wxS( "Bearer unit-test-key" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "\"model\":\"unit-model\"" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "route selected trace" ) ) );
-                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "selected objects: 1" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "Editor context is available on demand through tools" ) ) );
 
                 nlohmann::json body = nlohmann::json::parse( aRequest.m_Body.ToStdString() );
+                const std::string systemContent =
+                        body["messages"].at( 0 )["content"].get<std::string>();
+                BOOST_CHECK( systemContent.find( "manual KiCad UI instructions" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "atomic operation tool path" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "retry_hint" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "expected_arguments" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "do not reuse created_handles" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "use aliases or re-query" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "pcb.delete_items with filter" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "{\"type\":\"tracks\"}" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "returns zero items" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "kisurf_query_board_summary" )
+                             != std::string::npos );
+                BOOST_CHECK( systemContent.find( "{\"type\":\"route\"}" )
+                             != std::string::npos );
                 const std::string content =
                         body["messages"].at( 1 )["content"].get<std::string>();
                 BOOST_CHECK( content.find( "Structured KiSurf context JSON:" )
+                             == std::string::npos );
+                BOOST_CHECK( content.find( "\"kisurf_context\"" ) == std::string::npos );
+                BOOST_CHECK( content.find( "\"selected_objects\"" ) == std::string::npos );
+                BOOST_CHECK( content.find( "kisurf_get_workspace_view" )
                              != std::string::npos );
-                BOOST_CHECK( content.find( "\"kisurf_context\"" ) != std::string::npos );
-                BOOST_CHECK( content.find( "\"selected_objects\"" ) != std::string::npos );
 
                 aResponse.m_StatusCode = 200;
                 aResponse.m_Body = wxS( "{\"choices\":[{\"message\":{\"content\":\"preview ready\"}}]}" );
@@ -663,9 +744,31 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSystemPromptRequiresValidationIssueAccuracy 
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "issue_count" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "warning" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains( wxS( "use the supplied tools" ) ) );
-                BOOST_CHECK( aRequest.m_Body.Contains( wxS( "undoable" ) ) );
                 BOOST_CHECK( aRequest.m_Body.Contains(
-                        wxS( "Do not ask the user to click Show or Accept" ) ) );
+                        wxS( "use current-board atomic or script tools directly" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "Do not use preview, accept, reject, checkpoint, "
+                             "or rollback workflows" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "When describing Chat Agent capabilities" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "describe direct current-board edits and normal "
+                             "KiCad undo" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "do not mention internal staging surfaces, "
+                             "preview approval, or Accept buttons" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "Use kisurf_query_board_summary for board counts" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "Do not estimate board item counts" ) ) );
+                BOOST_CHECK( aRequest.m_Body.Contains(
+                        wxS( "script or atomic operation tool path" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains(
+                        wxS( "session, script, or atomic operation tool path" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "session_only" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "session handles" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "shadow-board" ) ) );
+                BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "preview gate" ) ) );
                 BOOST_CHECK( !aRequest.m_Body.Contains( wxS( "preview-first" ) ) );
 
                 aResponse.m_StatusCode = 200;
@@ -682,6 +785,51 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSystemPromptRequiresValidationIssueAccuracy 
 
     BOOST_CHECK_EQUAL( response.m_RequestId, 16 );
     BOOST_CHECK_EQUAL( response.m_Body, wxString( wxS( "ok" ) ) );
+}
+
+
+BOOST_AUTO_TEST_CASE( OpenAiProviderHonorsRequiredToolCallRequest )
+{
+    AI_PROVIDER_SETTINGS settings;
+    settings.m_BaseUrl = wxS( "https://sub2api.wenming-dev.org/v1" );
+    settings.m_ApiKey = wxS( "unit-test-key" );
+    settings.m_Model = wxS( "unit-model" );
+
+    bool handlerCalled = false;
+
+    AI_OPENAI_COMPAT_PROVIDER provider(
+            settings,
+            [&handlerCalled]( const AI_HTTP_REQUEST& aRequest,
+                              AI_HTTP_RESPONSE& aResponse, wxString& aError )
+            {
+                wxUnusedVar( aError );
+                handlerCalled = true;
+
+                nlohmann::json body = nlohmann::json::parse(
+                        aRequest.m_Body.ToStdString() );
+
+                BOOST_REQUIRE( body.contains( "tools" ) );
+                BOOST_REQUIRE( body["tools"].is_array() );
+                BOOST_REQUIRE( !body["tools"].empty() );
+                BOOST_REQUIRE( body.contains( "tool_choice" ) );
+                BOOST_CHECK_EQUAL( body["tool_choice"].get<std::string>(),
+                                   "required" );
+
+                aResponse.m_StatusCode = 200;
+                aResponse.m_Body =
+                        wxS( "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}" );
+                return true;
+            } );
+
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 17;
+    request.m_UserText = wxS( "删除所有布线" );
+    request.m_RequireToolCall = true;
+
+    AI_PROVIDER_RESPONSE response = provider.Generate( request );
+
+    BOOST_CHECK( handlerCalled );
+    BOOST_CHECK_EQUAL( response.m_RequestId, 17 );
 }
 
 
@@ -1117,7 +1265,11 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderUsesNextActionPreflightBudget )
                         body["messages"].at( 1 )["content"].get<std::string>();
                 const std::string bodyText = aRequest.m_Body.ToStdString();
 
-                BOOST_CHECK( content.find( "activity-39" ) != std::string::npos );
+                BOOST_CHECK( content.find( "Editor context is available on demand through tools" )
+                             != std::string::npos );
+                BOOST_CHECK( content.find( "kisurf_get_workspace_view" )
+                             != std::string::npos );
+                BOOST_CHECK( content.find( "activity-39" ) == std::string::npos );
                 BOOST_CHECK( content.find( "activity-00" ) == std::string::npos );
                 BOOST_CHECK( bodyText.find( "NEXT_ACTION_RAW_TOOL_RESULT_NEEDLE" )
                              == std::string::npos );
@@ -1194,7 +1346,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderSendsVisualSnapshotAsImageUrlContent )
                 BOOST_REQUIRE_EQUAL( content.size(), 2 );
                 BOOST_CHECK_EQUAL( content.at( 0 )["type"].get<std::string>(), "text" );
                 BOOST_CHECK( content.at( 0 )["text"].get<std::string>().find(
-                                     "visual: test.image image/png pixels=yes" )
+                                     "Editor context is available on demand through tools" )
                              != std::string::npos );
                 BOOST_CHECK_EQUAL( content.at( 1 )["type"].get<std::string>(), "image_url" );
                 BOOST_CHECK_EQUAL( content.at( 1 )["image_url"]["url"].get<std::string>(),
@@ -1280,7 +1432,9 @@ BOOST_AUTO_TEST_CASE( ProviderInputCompilerKeepsRecentActivityAndTracesOmissions
 
     BOOST_CHECK( compiled.m_ContextCompiled );
     BOOST_CHECK( compiled.m_ProviderInputWasShrunk );
-    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains( wxS( "activity-39" ) ) );
+    BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "Editor context is available on demand through tools" ) ) );
+    BOOST_CHECK( !compiled.m_CompiledUserMessageText.Contains( wxS( "activity-39" ) ) );
     BOOST_CHECK( !compiled.m_CompiledUserMessageText.Contains( wxS( "activity-00" ) ) );
     BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "recent_activity" ) ) );
     BOOST_CHECK( compiled.m_PromptTraceJson.Contains( wxS( "omitted" ) ) );
@@ -1411,6 +1565,8 @@ BOOST_AUTO_TEST_CASE( ProviderInputCompilerKeepsFixedContextBeforeLongChatHistor
     AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
 
     BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
+            wxS( "Editor context is available on demand through tools" ) ) );
+    BOOST_CHECK( !compiled.m_CompiledUserMessageText.Contains(
             wxS( "FIXED_CONTEXT_NEEDLE" ) ) );
     BOOST_CHECK( compiled.m_CompiledUserMessageText.Contains(
             wxS( "FIXED_TOOL_NEEDLE" ) ) );
@@ -1666,6 +1822,62 @@ BOOST_AUTO_TEST_CASE( ProviderInputCompilerPreservesValidationSummaryInLargeTool
             compressed["validation_summary"]["sample_issues"].at( 0 )["title"]
                     .get<std::string>(),
             "Clearance violation" );
+}
+
+
+BOOST_AUTO_TEST_CASE( ProviderInputCompilerPreservesQueryItemCountsInLargeToolResults )
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 84;
+    request.m_UserText = wxS( "count current board items" );
+    request.m_MaxToolResultChars = 260;
+
+    nlohmann::json items = nlohmann::json::array();
+
+    for( int i = 0; i < 64; ++i )
+    {
+        items.push_back( {
+                { "handle", "session:1:" + std::to_string( i + 1 ) },
+                { "type", i < 40 ? "track_segment" : "via" },
+                { "net", "GND" },
+                { "layer", i < 40 ? "F.Cu" : "F.Cu/B.Cu" },
+                { "geometry", { { "start", { { "x", i * 100 }, { "y", 0 } } },
+                                { "end", { { "x", i * 100 + 50 }, { "y", 0 } } } } } } );
+    }
+
+    nlohmann::json payload = {
+        { "status", "items" },
+        { "total_count", 64 },
+        { "returned_count", 64 },
+        { "truncated", false },
+        { "filter", { { "type", "track_segment" } } },
+        { "items", items },
+        { "board_mutated", false } };
+
+    AI_TOOL_CALL_RECORD result;
+    result.m_RequestId = 84;
+    result.m_ToolCallId = wxS( "call_query_items" );
+    result.m_ToolName = wxS( "kisurf_query_items" );
+    result.m_ArgumentsJson = wxS( "{\"filter\":{\"type\":\"track_segment\"}}" );
+    result.m_ResultJson = wxString::FromUTF8( payload.dump().c_str() );
+    request.m_ToolResults.push_back( result );
+
+    AI_PROVIDER_REQUEST compiled = AiCompileProviderInput( request );
+
+    BOOST_REQUIRE_EQUAL( compiled.m_ToolResults.size(), 1 );
+    nlohmann::json compressed = nlohmann::json::parse(
+            compiled.m_ToolResults.front().m_ResultJson.ToStdString() );
+
+    BOOST_CHECK_EQUAL( compressed["status"].get<std::string>(),
+                       "compressed_tool_result" );
+    BOOST_REQUIRE( compressed.contains( "semantic_summary" ) );
+    BOOST_CHECK_EQUAL( compressed["semantic_summary"]["status"].get<std::string>(),
+                       "items" );
+    BOOST_CHECK_EQUAL( compressed["semantic_summary"]["total_count"].get<int>(), 64 );
+    BOOST_CHECK_EQUAL( compressed["semantic_summary"]["returned_count"].get<int>(), 64 );
+    BOOST_CHECK( !compressed["semantic_summary"]["truncated"].get<bool>() );
+    BOOST_CHECK_EQUAL( compressed["semantic_summary"]["filter"]["type"].get<std::string>(),
+                       "track_segment" );
 }
 
 
@@ -1956,7 +2168,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
 
                 BOOST_REQUIRE( body.contains( "tools" ) );
                 BOOST_REQUIRE( body["tools"].is_array() );
-                BOOST_REQUIRE_EQUAL( body["tools"].size(), 29 );
+                BOOST_REQUIRE_EQUAL( body["tools"].size(), 17 );
 
                 std::vector<std::string> toolNames;
                 nlohmann::json           toolByName;
@@ -1976,13 +2188,13 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                         "kisurf_check_action" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_context_snapshot" )
-                             != toolNames.end() );
+                             == toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_visual_frame" )
                              == toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_activity_timeline" )
-                             != toolNames.end() );
+                             == toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_get_workspace_view" )
                              != toolNames.end() );
@@ -1990,29 +2202,9 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                         "kisurf_invoke_semantic_ui_action" )
                              != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_open_session" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_close_session" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_run_cell" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_run_atomic_operation" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_begin_step" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_end_step" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_checkpoint" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_rollback_to" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_cancel_session" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_reject_session" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_accept_session" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_observe_step" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_query_board_summary" )
                              != toolNames.end() );
@@ -2021,13 +2213,14 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 const nlohmann::json& queryItemsParameters =
                         toolByName["kisurf_query_items"]["function"]["parameters"];
                 BOOST_REQUIRE( queryItemsParameters["properties"].contains( "filter" ) );
-                BOOST_REQUIRE( queryItemsParameters["properties"].contains( "live_board" ) );
-                BOOST_CHECK_EQUAL(
-                        queryItemsParameters["properties"]["live_board"]
-                                .value( "type", std::string() ),
-                        "boolean" );
-                BOOST_CHECK( queryFilterSchemaSupportsShadowFilters(
-                        queryItemsParameters["properties"]["filter"] ) );
+                BOOST_CHECK( !queryItemsParameters["properties"].contains(
+                        "live_board" ) );
+                BOOST_CHECK( !queryItemsParameters["properties"].contains(
+                        "session_only" ) );
+                BOOST_CHECK_EQUAL( queryItemsParameters.dump().find( "session_only" ),
+                                   std::string::npos );
+                BOOST_CHECK_EQUAL( queryItemsParameters.dump().find( "session_id" ),
+                                   std::string::npos );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_query_item" ) != toolNames.end() );
                 const nlohmann::json& queryItemParameters =
@@ -2035,6 +2228,14 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_REQUIRE( queryItemParameters["properties"].contains( "handle" ) );
                 BOOST_CHECK( queryHandleSchemaSupportsTypedReferences(
                         queryItemParameters["properties"]["handle"] ) );
+                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
+                                        "kisurf_query_unplaced_footprints" )
+                             != toolNames.end() );
+                BOOST_CHECK_EQUAL(
+                        toolByName["kisurf_query_unplaced_footprints"]["function"]
+                                ["parameters"]
+                                        .value( "type", std::string() ),
+                        "object" );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_query_selection" ) != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
@@ -2049,9 +2250,25 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                         "kisurf_query_activity_timeline" )
                              != toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
-                                        "kisurf_render_preview" ) != toolNames.end() );
-                BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_run_validation" ) != toolNames.end() );
+
+                for( const std::string& removedTool :
+                     { "kisurf_open_session",
+                       "kisurf_close_session",
+                       "kisurf_begin_step",
+                       "kisurf_end_step",
+                       "kisurf_checkpoint",
+                       "kisurf_rollback_to",
+                       "kisurf_cancel_session",
+                       "kisurf_reject_session",
+                       "kisurf_accept_session",
+                       "kisurf_observe_step",
+                       "kisurf_render_preview" } )
+                {
+                    BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
+                                            removedTool )
+                                 == toolNames.end() );
+                }
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
                                         "kisurf_preview_move_selected" ) == toolNames.end() );
                 BOOST_CHECK( std::find( toolNames.begin(), toolNames.end(),
@@ -2105,6 +2322,12 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                              == std::string::npos );
                 BOOST_CHECK( runCellDescription.find( "pcb_fill_via_matrix" )
                              == std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "current board" )
+                             != std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "session cell" )
+                             == std::string::npos );
+                BOOST_CHECK( runCellDescription.find( "cannot publish" )
+                             == std::string::npos );
                 BOOST_CHECK( runCellParameters["required"].dump().find( "cell_text" )
                              != std::string::npos );
                 BOOST_CHECK( runCellParameters["properties"].contains( "cell_id" ) );
@@ -2121,8 +2344,6 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( !runCellParameters["additionalProperties"].get<bool>() );
                 BOOST_CHECK( runCellDescription.find( "max_operation_count" )
                              != std::string::npos );
-                BOOST_CHECK( runCellDescription.find( "cannot publish" )
-                             != std::string::npos );
                 const nlohmann::json& atomicParameters =
                         toolByName["kisurf_run_atomic_operation"]["function"]["parameters"];
                 const std::string atomicDescription =
@@ -2130,7 +2351,7 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                 .get<std::string>();
                 BOOST_CHECK( atomicDescription.find( "typed KiSurf atomic operation" )
                              != std::string::npos );
-                BOOST_CHECK( atomicDescription.find( "cannot publish" )
+                BOOST_CHECK( atomicDescription.find( "directly to the current board" )
                              != std::string::npos );
                 BOOST_CHECK( atomicParameters["required"].dump().find( "kind" )
                              != std::string::npos );
@@ -2142,6 +2363,19 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      "surface.apply_patch" ) != std::string::npos );
                 BOOST_REQUIRE( atomicParameters.contains( "$defs" ) );
                 BOOST_REQUIRE( atomicParameters["$defs"].contains( "operation_contracts" ) );
+                BOOST_CHECK( atomicParameters.dump().find( "shadow-board" )
+                             == std::string::npos );
+                BOOST_CHECK( atomicParameters.dump().find( "session handles" )
+                             == std::string::npos );
+                BOOST_CHECK( atomicParameters.dump().find( "Session handle" )
+                             == std::string::npos );
+                BOOST_CHECK( atomicParameters.dump().find( "session_id" )
+                             == std::string::npos );
+                BOOST_CHECK( toolByName["kisurf_query_item"]["function"]
+                                     ["description"]
+                                             .get<std::string>()
+                                     .find( "shadow-board" )
+                             == std::string::npos );
                 const nlohmann::json& operationContracts =
                         atomicParameters["$defs"]["operation_contracts"];
                 BOOST_REQUIRE( operationContracts.contains( "pcb.create_via" ) );
@@ -2160,6 +2394,13 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      .contains( "width" ) );
                 BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
                         "target_positions" ) );
+                BOOST_REQUIRE( operationContracts.contains( "pcb.delete_items" ) );
+                BOOST_CHECK( operationContracts["pcb.delete_items"]["properties"].contains(
+                        "filter" ) );
+                BOOST_CHECK( operationContracts["pcb.delete_items"]["required"]
+                                     .dump()
+                                     .find( "handles" )
+                             == std::string::npos );
                 BOOST_REQUIRE( operationContracts.contains( "pcb.create_zone" ) );
                 BOOST_REQUIRE( operationContracts["pcb.create_zone"]["properties"]
                                        .contains( "outline" ) );
@@ -2172,6 +2413,8 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK_EQUAL( zoneOutlinePointsContract.value( "minItems", 0 ), 3 );
                 BOOST_REQUIRE( zoneOutlinePointsContract.contains( "items" ) );
                 BOOST_CHECK( pointSchemaRequiresXY(
+                        zoneOutlinePointsContract["items"] ) );
+                BOOST_CHECK( pointSchemaSupportsModelFacingShortcuts(
                         zoneOutlinePointsContract["items"] ) );
                 BOOST_CHECK( operationContracts["surface.apply_patch"]["required"]
                                      .dump()
@@ -2257,64 +2500,43 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 BOOST_CHECK( stringEnumContainsAll(
                         operationContracts["pcb.rebuild_connectivity"]["properties"]
                                           ["scope"],
-                        { "session", "affected_area", "selection", "region" } ) );
+                        { "affected_area", "selection", "region" } ) );
+                BOOST_CHECK( std::find(
+                                     operationContracts["pcb.rebuild_connectivity"]
+                                                       ["properties"]["scope"]["enum"]
+                                                               .begin(),
+                                     operationContracts["pcb.rebuild_connectivity"]
+                                                       ["properties"]["scope"]["enum"]
+                                                               .end(),
+                                     "session" )
+                             == operationContracts["pcb.rebuild_connectivity"]
+                                                 ["properties"]["scope"]["enum"]
+                                                         .end() );
                 BOOST_REQUIRE( operationContracts.contains( "pcb.run_validation" ) );
                 BOOST_REQUIRE( operationContracts["pcb.run_validation"]["properties"]
                                        .contains( "scope" ) );
                 BOOST_CHECK( stringEnumContainsAll(
                         operationContracts["pcb.run_validation"]["properties"]["scope"],
-                        { "session", "affected_area", "selection", "region" } ) );
+                        { "affected_area", "selection", "region" } ) );
+                BOOST_CHECK( std::find(
+                                     operationContracts["pcb.run_validation"]["properties"]
+                                                       ["scope"]["enum"]
+                                                               .begin(),
+                                     operationContracts["pcb.run_validation"]["properties"]
+                                                       ["scope"]["enum"]
+                                                               .end(),
+                                     "session" )
+                             == operationContracts["pcb.run_validation"]["properties"]
+                                                 ["scope"]["enum"]
+                                                         .end() );
                 BOOST_CHECK( stringEnumContainsAll(
                         operationContracts["pcb.run_validation"]["properties"]["level"],
                         { "geometry", "drc_lite", "full_drc" } ) );
                 BOOST_CHECK( !atomicParameters["additionalProperties"].get<bool>() );
-                const nlohmann::json& rollbackParameters =
-                        toolByName["kisurf_rollback_to"]["function"]["parameters"];
-                BOOST_CHECK( rollbackParameters["required"].empty() );
-                BOOST_CHECK( rollbackParameters["properties"].contains( "checkpoint_id" ) );
-                BOOST_CHECK( rollbackParameters["properties"].contains( "checkpoint_name" ) );
-                BOOST_CHECK( !rollbackParameters["additionalProperties"].get<bool>() );
                 const nlohmann::json& validationParameters =
                         toolByName["kisurf_run_validation"]["function"]["parameters"];
                 BOOST_CHECK( validationSchemaDeclaresTypedObservationArgs(
                         validationParameters ) );
-                const nlohmann::json& renderPreviewParameters =
-                        toolByName["kisurf_render_preview"]["function"]["parameters"];
-                BOOST_CHECK( renderPreviewParameters["properties"]["mode"]["enum"].dump().find(
-                                     "native" ) != std::string::npos );
-                BOOST_CHECK( renderPreviewSchemaDeclaresTypedObservationArgs(
-                        renderPreviewParameters ) );
-                const nlohmann::json& contextParameters =
-                        toolByName["kisurf_get_context_snapshot"]["function"]["parameters"];
-                BOOST_CHECK( contextParameters["required"].empty() );
-                BOOST_CHECK( !contextParameters["additionalProperties"].get<bool>() );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_visible_objects" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_selected_objects" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_actions" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_recent_activity" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_tool_state" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_anchors" ) );
-                BOOST_CHECK( contextParameters["properties"].contains(
-                        "include_panels" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "include_visual" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "max_objects" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "max_actions" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "max_activity" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "max_anchors" ) );
-                BOOST_CHECK( contextParameters["properties"].contains( "max_panels" ) );
-                const nlohmann::json& activityParameters =
-                        toolByName["kisurf_get_activity_timeline"]["function"]["parameters"];
-                BOOST_CHECK( activityParameters["required"].empty() );
-                BOOST_CHECK( !activityParameters["additionalProperties"].get<bool>() );
-                BOOST_CHECK( activityParameters["properties"].contains( "max_activity" ) );
-                BOOST_CHECK( activityParameters["properties"].contains( "kind" ) );
-                BOOST_CHECK( activityParameters["properties"].contains( "action_contains" ) );
                 const nlohmann::json& workspaceParameters =
                         toolByName["kisurf_get_workspace_view"]["function"]["parameters"];
                 BOOST_CHECK( workspaceParameters["required"].empty() );

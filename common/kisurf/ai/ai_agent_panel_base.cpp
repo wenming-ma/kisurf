@@ -73,15 +73,6 @@ AI_AGENT_PANEL_BASE::AI_AGENT_PANEL_BASE( wxWindow* parent, wxWindowID id, const
 
 	m_ComposerButtonSizer = new wxGridSizer( 0, 3, 4, 4 );
 
-	m_PreviewButton = new wxButton( m_ComposerPanel, wxID_ANY, _("Show"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_ComposerButtonSizer->Add( m_PreviewButton, 0, wxEXPAND, 0 );
-
-	m_AcceptButton = new wxButton( m_ComposerPanel, wxID_ANY, _("Accept"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_ComposerButtonSizer->Add( m_AcceptButton, 0, wxEXPAND, 0 );
-
-	m_RejectButton = new wxButton( m_ComposerPanel, wxID_ANY, _("Reject"), wxDefaultPosition, wxDefaultSize, 0 );
-	m_ComposerButtonSizer->Add( m_RejectButton, 0, wxEXPAND, 0 );
-
 	m_SendButton = new wxButton( m_ComposerPanel, wxID_ANY, _("Send"), wxDefaultPosition, wxDefaultSize, 0 );
 	m_ComposerButtonSizer->Add( m_SendButton, 0, wxEXPAND, 0 );
 
@@ -110,9 +101,6 @@ AI_AGENT_PANEL_BASE::AI_AGENT_PANEL_BASE( wxWindow* parent, wxWindowID id, const
 	m_BackgroundAgentToggle->Connect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnBackgroundAgentToggled ), NULL, this );
 	m_Input->Connect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptTextChanged ), NULL, this );
 	m_Input->Connect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptEnter ), NULL, this );
-	m_PreviewButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPreviewSuggestion ), NULL, this );
-	m_AcceptButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnAcceptSuggestion ), NULL, this );
-	m_RejectButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnRejectSuggestion ), NULL, this );
 	m_SendButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnSend ), NULL, this );
 	m_StopButton->Connect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnStop ), NULL, this );
 }
@@ -125,9 +113,6 @@ AI_AGENT_PANEL_BASE::~AI_AGENT_PANEL_BASE()
 	m_BackgroundAgentToggle->Disconnect( wxEVT_COMMAND_CHECKBOX_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnBackgroundAgentToggled ), NULL, this );
 	m_Input->Disconnect( wxEVT_COMMAND_TEXT_UPDATED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptTextChanged ), NULL, this );
 	m_Input->Disconnect( wxEVT_COMMAND_TEXT_ENTER, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPromptEnter ), NULL, this );
-	m_PreviewButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnPreviewSuggestion ), NULL, this );
-	m_AcceptButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnAcceptSuggestion ), NULL, this );
-	m_RejectButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnRejectSuggestion ), NULL, this );
 	m_SendButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnSend ), NULL, this );
 	m_StopButton->Disconnect( wxEVT_COMMAND_BUTTON_CLICKED, wxCommandEventHandler( AI_AGENT_PANEL_BASE::OnStop ), NULL, this );
 

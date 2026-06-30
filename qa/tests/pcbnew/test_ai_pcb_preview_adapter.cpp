@@ -20,7 +20,9 @@
 #include <zone.h>
 
 #include <cstdlib>
+#include <future>
 #include <json_common.h>
+#include <thread>
 #include <utility>
 
 namespace
@@ -500,6 +502,58 @@ BOOST_AUTO_TEST_CASE( SessionPreviewServiceRendersShadowBoardViaAndClearsBySessi
     previewService.ClearPreview( session.SessionId() );
 
     BOOST_CHECK( previewService.PreviewedItems().empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SessionPreviewServiceWorkerThreadRenderIsSemanticOnly )
+{
+    PCB_PREVIEW_FIXTURE fixture;
+    KIGFX::VIEW         view;
+    KISURF_AI_PCB_SESSION_PREVIEW_SERVICE previewService( fixture.m_Board, view );
+
+    AI_EXECUTION_SESSION::OPEN_OPTIONS options;
+    options.m_SessionId = 171;
+    options.m_BoardId = wxS( "pcb-session-worker-hidden-preview" );
+    options.m_BaseHash = wxS( "hash-worker" );
+    options.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    AI_EXECUTION_SESSION session( std::move( options ) );
+
+    BOOST_CHECK( session.BeginStep( wxS( "worker hidden preview via" ) ) != 0 );
+    AI_ATOMIC_EXECUTION_RESULT execution = AI_ATOMIC_OPERATION_EXECUTOR::Execute(
+            session, AI_SESSION_OPERATION_KIND::CreateVia,
+            wxS( "{\"alias\":\"worker-hidden-via\",\"net\":\"GND\","
+                 "\"diameter\":600000,\"drill\":300000,"
+                 "\"position\":{\"x\":400,\"y\":500}}" ) );
+    BOOST_REQUIRE( execution.m_Ok );
+    session.EndStep( 1 );
+
+    std::promise<AI_SESSION_PREVIEW_RESULT> promise;
+    std::future<AI_SESSION_PREVIEW_RESULT>  future = promise.get_future();
+
+    std::thread worker(
+            [&previewService, &session, promise = std::move( promise )]() mutable
+            {
+                promise.set_value( previewService.RenderPreview(
+                        session, wxS( "{\"mode\":\"hidden_attempt\"}" ) ) );
+            } );
+    worker.join();
+
+    AI_SESSION_PREVIEW_RESULT result = future.get();
+
+    BOOST_REQUIRE( result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_RenderedItemCount, 1 );
+    BOOST_CHECK_EQUAL( previewService.PreviewedItems().size(), 0 );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( payload["status"].get<std::string>(), "preview_rendered" );
+    BOOST_CHECK( payload["hidden_thread_safe_render"].get<bool>() );
+    BOOST_CHECK( payload["native_preview"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["rendered_item_count"].get<size_t>(), 1 );
+    BOOST_REQUIRE( payload.contains( "preview_frame" ) );
+    BOOST_CHECK_EQUAL( payload["preview_frame"]["source"].get<std::string>(),
+                       "pcbnew.hidden_semantic_preview" );
+    BOOST_CHECK( !payload["preview_frame"]["has_pixels"].get<bool>() );
 }
 
 

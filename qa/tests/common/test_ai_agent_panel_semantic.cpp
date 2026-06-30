@@ -96,9 +96,6 @@ BOOST_AUTO_TEST_CASE( EmitsStableAgentPaneNodeIds )
         wxS( "agent.composer.status" ),
         wxS( "agent.send" ),
         wxS( "agent.stop" ),
-        wxS( "agent.preview.invoke" ),
-        wxS( "agent.accept" ),
-        wxS( "agent.reject" ),
         wxS( "agent.recovery.execute" )
     };
 
@@ -108,12 +105,9 @@ BOOST_AUTO_TEST_CASE( EmitsStableAgentPaneNodeIds )
     BOOST_CHECK( !tree.FindNode( wxS( "agent.mode.choice" ) ) );
     BOOST_CHECK( !tree.FindNode( wxS( "agent.tabs.preview" ) ) );
     BOOST_CHECK( !tree.FindNode( wxS( "agent.preview.suggestions" ) ) );
-    BOOST_CHECK_EQUAL( tree.FindNode( wxS( "agent.preview.invoke" ) )->m_ParentNodeId,
-                       wxString( wxS( "agent.tabs.chat" ) ) );
-    BOOST_CHECK_EQUAL( tree.FindNode( wxS( "agent.accept" ) )->m_ParentNodeId,
-                       wxString( wxS( "agent.tabs.chat" ) ) );
-    BOOST_CHECK_EQUAL( tree.FindNode( wxS( "agent.reject" ) )->m_ParentNodeId,
-                       wxString( wxS( "agent.tabs.chat" ) ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.preview.invoke" ) ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.accept" ) ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.reject" ) ) );
 }
 
 
@@ -177,27 +171,7 @@ BOOST_AUTO_TEST_CASE( SendNodeReflectsInputState )
 }
 
 
-BOOST_AUTO_TEST_CASE( SuggestionControlsReflectHandlersAndActiveSuggestion )
-{
-    AI_AGENT_PANEL_SEMANTIC_VIEW view;
-    view.m_HasActiveSuggestion = false;
-    view.m_CanPreviewSuggestion = true;
-    view.m_CanAcceptSuggestion = true;
-
-    AI_SEMANTIC_UI_TREE tree = AiAgentPanelSemanticTree( view );
-    BOOST_CHECK( !tree.FindNode( wxS( "agent.preview.invoke" ) )->m_Enabled );
-    BOOST_CHECK( !tree.FindNode( wxS( "agent.accept" ) )->m_Enabled );
-    BOOST_CHECK( !tree.FindNode( wxS( "agent.reject" ) )->m_Enabled );
-
-    view.m_HasActiveSuggestion = true;
-    tree = AiAgentPanelSemanticTree( view );
-    BOOST_CHECK( tree.FindNode( wxS( "agent.preview.invoke" ) )->m_Enabled );
-    BOOST_CHECK( tree.FindNode( wxS( "agent.accept" ) )->m_Enabled );
-    BOOST_CHECK( tree.FindNode( wxS( "agent.reject" ) )->m_Enabled );
-}
-
-
-BOOST_AUTO_TEST_CASE( AcceptNodeRequiresUserConfirmation )
+BOOST_AUTO_TEST_CASE( SuggestionControlsAreNotExposedInChatPanelSemanticTree )
 {
     AI_AGENT_PANEL_SEMANTIC_VIEW view;
     view.m_HasActiveSuggestion = true;
@@ -206,15 +180,12 @@ BOOST_AUTO_TEST_CASE( AcceptNodeRequiresUserConfirmation )
 
     AI_SEMANTIC_UI_TREE tree = AiAgentPanelSemanticTree( view );
 
-    const AI_SEMANTIC_UI_NODE* accept = tree.FindNode( wxS( "agent.accept" ) );
-    const AI_SEMANTIC_UI_NODE* preview = tree.FindNode( wxS( "agent.preview.invoke" ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.preview.invoke" ) ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.accept" ) ) );
+    BOOST_CHECK( !tree.FindNode( wxS( "agent.reject" ) ) );
+
     const AI_SEMANTIC_UI_NODE* send = tree.FindNode( wxS( "agent.send" ) );
-
-    BOOST_REQUIRE( accept );
-    BOOST_REQUIRE( preview );
     BOOST_REQUIRE( send );
-    BOOST_CHECK( accept->m_RequiresUserConfirmation );
-    BOOST_CHECK( !preview->m_RequiresUserConfirmation );
     BOOST_CHECK( !send->m_RequiresUserConfirmation );
 }
 
@@ -377,7 +348,7 @@ BOOST_AUTO_TEST_CASE( PanelStateRecordProjectsSemanticTreeSafely )
     BOOST_CHECK( !record.m_Summary.Contains( wxS( "suggestions=" ) ) );
     BOOST_CHECK( record.m_Summary.Contains( wxS( "logs=4 entries" ) ) );
     BOOST_CHECK( record.m_Summary.Contains( wxS( "send=enabled" ) ) );
-    BOOST_CHECK( record.m_Summary.Contains( wxS( "active_suggestion=yes" ) ) );
+    BOOST_CHECK( !record.m_Summary.Contains( wxS( "active_suggestion=" ) ) );
 
     nlohmann::json state = nlohmann::json::parse( record.m_StateJson.ToStdString() );
     BOOST_CHECK_EQUAL( state["frame_id"].get<std::string>(), "agent" );
@@ -400,9 +371,9 @@ BOOST_AUTO_TEST_CASE( PanelStateRecordProjectsSemanticTreeSafely )
     BOOST_CHECK( !( *modelSettings )["requires_user_confirmation"].get<bool>() );
     BOOST_CHECK( !( *modelSettings ).contains( "text_value" ) );
 
-    const nlohmann::json* accept = findNodeJson( nodes, "agent.accept" );
-    BOOST_REQUIRE( accept );
-    BOOST_CHECK( ( *accept )["requires_user_confirmation"].get<bool>() );
+    BOOST_CHECK( !findNodeJson( nodes, "agent.preview.invoke" ) );
+    BOOST_CHECK( !findNodeJson( nodes, "agent.accept" ) );
+    BOOST_CHECK( !findNodeJson( nodes, "agent.reject" ) );
 
     const nlohmann::json* input = findNodeJson( nodes, "agent.input" );
     BOOST_REQUIRE( input );

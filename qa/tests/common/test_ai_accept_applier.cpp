@@ -391,6 +391,52 @@ BOOST_AUTO_TEST_CASE( StaleBaseHashRejectsBeforeAdapterBegins )
 }
 
 
+BOOST_AUTO_TEST_CASE( DirectLiveReplayDoesNotUsePreviewAcceptBaseHashGate )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+    appendTwoOps( session );
+    RECORDING_ACCEPT_ADAPTER adapter;
+
+    AI_CONTEXT_VERSION changedVersion = session.ContextVersion();
+    changedVersion.m_SelectionRevision = 5;
+
+    AI_ACCEPT_APPLY_RESULT previewAccept = AI_ACCEPT_APPLIER::Apply(
+            session, wxS( "different-base" ), changedVersion, adapter );
+
+    BOOST_CHECK( !previewAccept.m_Ok );
+    BOOST_CHECK_EQUAL( previewAccept.m_ErrorCode, wxString( wxS( "stale_session" ) ) );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+
+    AI_ACCEPT_APPLY_RESULT directLive =
+            AI_ACCEPT_APPLIER::ApplyDirectLive( session, adapter );
+
+    BOOST_REQUIRE( directLive.m_Ok );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 1 );
+    BOOST_CHECK_EQUAL( adapter.m_CommitCount, 1 );
+    BOOST_REQUIRE_EQUAL( adapter.m_OperationIds.size(), 2 );
+    BOOST_CHECK_EQUAL( directLive.m_AppliedOperationCount, 2 );
+    BOOST_CHECK( directLive.m_BoardMutated );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Accepted );
+}
+
+
+BOOST_AUTO_TEST_CASE( DirectLiveReplayRejectsOpenStepWithExplicitError )
+{
+    AI_EXECUTION_SESSION session = makeSession();
+    BOOST_REQUIRE_NE( session.BeginStep( wxS( "still editing" ) ), 0 );
+    RECORDING_ACCEPT_ADAPTER adapter;
+
+    AI_ACCEPT_APPLY_RESULT result =
+            AI_ACCEPT_APPLIER::ApplyDirectLive( session, adapter );
+
+    BOOST_CHECK( !result.m_Ok );
+    BOOST_CHECK_EQUAL( result.m_ErrorCode, wxString( wxS( "step_still_open" ) ) );
+    BOOST_CHECK_EQUAL( adapter.m_BeginCount, 0 );
+    BOOST_CHECK( session.Status() == AI_EXECUTION_SESSION_STATUS::Open );
+}
+
+
 BOOST_AUTO_TEST_CASE( SelectionRevisionConflictRejectsBeforeAdapterBegins )
 {
     AI_EXECUTION_SESSION session = makeSession();

@@ -59,6 +59,7 @@
 #include <dialog_board_setup.h>
 #include <footprint.h>
 
+#include <algorithm>
 #include <cctype>
 #include <memory>
 #include <vector>
@@ -393,6 +394,60 @@ AI_PANEL_STATE_RECORD DIALOG_BOARD_SETUP::SemanticPanelStateRecord()
 }
 
 
+void DIALOG_BOARD_SETUP::notifyAiSemanticStateChanged( const wxString& aReason )
+{
+    if( m_frame )
+        m_frame->NotifyAiPanelSemanticStateChanged( aReason );
+}
+
+
+void DIALOG_BOARD_SETUP::installAiSemanticEventHandlers( wxWindow& aRoot )
+{
+    if( std::find( m_aiSemanticObservedWindows.begin(), m_aiSemanticObservedWindows.end(),
+                   &aRoot ) == m_aiSemanticObservedWindows.end() )
+    {
+        m_aiSemanticObservedWindows.push_back( &aRoot );
+
+        aRoot.Bind( wxEVT_SET_FOCUS,
+                [this]( wxFocusEvent& aEvent )
+                {
+                    notifyAiSemanticStateChanged( wxS( "board_setup.focus" ) );
+                    aEvent.Skip();
+                } );
+
+        if( wxGrid* grid = dynamic_cast<wxGrid*>( &aRoot ) )
+        {
+            grid->Bind( wxEVT_GRID_SELECT_CELL,
+                    [this]( wxGridEvent& aEvent )
+                    {
+                        notifyAiSemanticStateChanged( wxS( "board_setup.grid_select" ) );
+                        aEvent.Skip();
+                    } );
+
+            grid->Bind( wxEVT_GRID_CELL_CHANGED,
+                    [this]( wxGridEvent& aEvent )
+                    {
+                        notifyAiSemanticStateChanged( wxS( "board_setup.grid_changed" ) );
+                        aEvent.Skip();
+                    } );
+
+            grid->Bind( wxEVT_GRID_EDITOR_SHOWN,
+                    [this]( wxGridEvent& aEvent )
+                    {
+                        notifyAiSemanticStateChanged( wxS( "board_setup.grid_edit" ) );
+                        aEvent.Skip();
+                    } );
+        }
+    }
+
+    for( wxWindow* child : aRoot.GetChildren() )
+    {
+        if( child )
+            installAiSemanticEventHandlers( *child );
+    }
+}
+
+
 bool DIALOG_BOARD_SETUP::PreviewAiSuggestion(
         AI_AGENT_PANEL_MODEL& aModel, uint64_t aSuggestionId,
         AI_PREVIEW_ADAPTER* aWorkspaceAdapter )
@@ -533,6 +588,11 @@ void DIALOG_BOARD_SETUP::onPageChanged( wxBookCtrlEvent& aEvent )
     }
 
     m_currentPage = page;
+
+    if( wxWindow* selectedPage = m_treebook->ResolvePage( page ) )
+        installAiSemanticEventHandlers( *selectedPage );
+
+    notifyAiSemanticStateChanged( wxS( "board_setup.page_changed" ) );
 }
 
 
