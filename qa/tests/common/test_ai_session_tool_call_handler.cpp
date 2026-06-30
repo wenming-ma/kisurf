@@ -1060,6 +1060,30 @@ BOOST_AUTO_TEST_CASE( SessionToolCatalogDeclaresLayeredAtomicScriptContract )
     BOOST_REQUIRE( operationContracts.contains( "surface.apply_patch" ) );
     BOOST_CHECK( operationContracts["pcb.create_via"]["required"].dump().find(
                          "position" ) != std::string::npos );
+    const nlohmann::json& createViaPosition =
+            operationContracts["pcb.create_via"]["properties"]["position"];
+    BOOST_REQUIRE( createViaPosition.contains( "anyOf" ) );
+
+    bool sawRelativePointVariant = false;
+    bool sawBetweenPointVariant = false;
+
+    for( const nlohmann::json& variant : createViaPosition["anyOf"] )
+    {
+        if( !variant.is_object() || !variant.contains( "properties" ) )
+            continue;
+
+        sawRelativePointVariant =
+                sawRelativePointVariant
+                || ( variant["properties"].contains( "relative_to" )
+                     && variant["properties"].contains( "offset" ) );
+        sawBetweenPointVariant =
+                sawBetweenPointVariant
+                || ( variant["properties"].contains( "between" )
+                     && variant["properties"].contains( "percent" ) );
+    }
+
+    BOOST_CHECK( sawRelativePointVariant );
+    BOOST_CHECK( sawBetweenPointVariant );
     BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
                          .contains( "width" ) );
     BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
@@ -4526,6 +4550,30 @@ BOOST_AUTO_TEST_CASE( ChatDirectLiveQueryDeleteAndMoveUseCurrentBoardHandles )
                  == AI_SESSION_OPERATION_KIND::DeleteItems );
     BOOST_CHECK( adapter.m_OperationKinds[1]
                  == AI_SESSION_OPERATION_KIND::MoveItems );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectLiveQueryItemsAcceptsTopLevelFilterKeys )
+{
+    RECORDING_CURRENT_BOARD_TOOL_ADAPTER adapter;
+    AI_SESSION_TOOL_CALL_HANDLER         handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_TOOL_INVOCATION_RESULT result = handler.HandleToolCall(
+            requestWithContext(),
+            toolCall( wxS( "kisurf_query_items" ),
+                      wxS( "{\"type\":\"routing\",\"net\":\"GND\","
+                           "\"layer\":\"F.Cu\"}" ) ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Allowed, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( adapter.m_QueryItemsCount, 1 );
+
+    nlohmann::json forwardedFilter =
+            nlohmann::json::parse( adapter.m_LastFilterJson.ToStdString() );
+    BOOST_CHECK_EQUAL( forwardedFilter["type"].get<std::string>(), "routing" );
+    BOOST_CHECK_EQUAL( forwardedFilter["net"].get<std::string>(), "GND" );
+    BOOST_CHECK_EQUAL( forwardedFilter["layer"].get<std::string>(), "F.Cu" );
+    BOOST_CHECK( !handler.ActiveSession() );
 }
 
 

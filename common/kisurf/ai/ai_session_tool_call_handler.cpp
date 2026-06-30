@@ -223,19 +223,63 @@ nlohmann::json sessionAtomicOperationSetJson()
 
 nlohmann::json catalogPointSchema( const char* aDescription )
 {
+    auto directPoint =
+            []( const char* aDescriptionText, bool aUseMillimeterDescription )
+            {
+                std::string description = aDescriptionText;
+
+                if( aUseMillimeterDescription )
+                {
+                    description +=
+                            " Small numeric x/y values are millimeters; large "
+                            "integer values are KiCad internal units.";
+                }
+
+                return nlohmann::json{
+                    { "type", "object" },
+                    { "description", description },
+                    { "additionalProperties", false },
+                    { "properties",
+                      { { "x", { { "type", "number" } } },
+                        { "y", { { "type", "number" } } } } },
+                    { "required", nlohmann::json::array( { "x", "y" } ) }
+                };
+            };
+
+    auto pointReference =
+            []()
+            {
+                return nlohmann::json{
+                    { "description", "Handle alias, handle id, handle object, or direct point." },
+                    { "anyOf",
+                      nlohmann::json::array(
+                              { { { "type", "string" },
+                                  { "description", "Model-readable handle alias." } },
+                                { { "type", "integer" },
+                                  { "minimum", 1 },
+                                  { "description", "Session-local handle id." } },
+                                { { "type", "object" },
+                                  { "additionalProperties", true },
+                                  { "description",
+                                    "Handle object such as {alias} or {handle_id,generation}." } },
+                                { { "type", "object" },
+                                  { "additionalProperties", false },
+                                  { "properties",
+                                    { { "x", { { "type", "number" } } },
+                                      { "y", { { "type", "number" } } } } },
+                                  { "required",
+                                    nlohmann::json::array( { "x", "y" } ) } } } ) }
+                };
+            };
+
+    const nlohmann::json offsetPoint =
+            directPoint( "Offset point or delta.", false );
+
     return { { "description", aDescription },
              { "anyOf",
                nlohmann::json::array(
-                       { { { "type", "object" },
-                           { "description",
-                             "Model-facing point shortcut. Small numeric x/y values "
-                             "are millimeters; large integer values are KiCad "
-                             "internal units." },
-                           { "additionalProperties", false },
-                           { "properties",
-                             { { "x", { { "type", "number" } } },
-                               { "y", { { "type", "number" } } } } },
-                           { "required", nlohmann::json::array( { "x", "y" } ) } },
+                       { directPoint( "Model-facing point shortcut.",
+                                      true ),
                          { { "type", "object" },
                            { "description", "Explicit millimeter point shortcut." },
                            { "additionalProperties", false },
@@ -262,7 +306,44 @@ nlohmann::json catalogPointSchema( const char* aDescription )
                              "Two-number millimeter shortcut: [x_mm, y_mm]." },
                            { "items", { { "type", "number" } } },
                            { "minItems", 2 },
-                           { "maxItems", 2 } } } ) } };
+                           { "maxItems", 2 } },
+                         { { "type", "string" },
+                           { "description", "Point resolved from a handle alias." } },
+                         { { "type", "integer" },
+                           { "minimum", 1 },
+                           { "description", "Point resolved from a session-local handle id." } },
+                         { { "type", "object" },
+                           { "description",
+                             "Point resolved from a handle or alias plus an optional offset." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "relative_to", pointReference() },
+                               { "anchor",
+                                 { { "type", "string" },
+                                   { "enum",
+                                     nlohmann::json::array(
+                                             { "center", "position", "start", "end",
+                                               "midpoint", "bbox_min", "bbox_max",
+                                               "min", "max" } ) } } },
+                               { "offset", offsetPoint } } },
+                           { "required",
+                             nlohmann::json::array( { "relative_to" } ) } },
+                         { { "type", "object" },
+                           { "description",
+                             "Point interpolated between two point expressions." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "between",
+                                 { { "type", "array" },
+                                   { "items", pointReference() },
+                                   { "minItems", 2 },
+                                   { "maxItems", 2 } } },
+                               { "t", { { "type", "number" } } },
+                               { "fraction", { { "type", "number" } } },
+                               { "percent", { { "type", "number" } } },
+                               { "offset", offsetPoint } } },
+                           { "required",
+                             nlohmann::json::array( { "between" } ) } } } ) } };
 }
 
 
@@ -744,7 +825,11 @@ nlohmann::json sessionAtomicOperationContractsJson()
                 { "alias", { { "type", "string" } } },
                 { "metadata",
                   { { "type", "object" }, { "additionalProperties", true } } } } },
-            { "required", nlohmann::json::array( { "start", "end" } ) } } },
+            { "anyOf",
+              nlohmann::json::array(
+                      { { { "required", nlohmann::json::array( { "start", "end" } ) } },
+                        { { "required",
+                            nlohmann::json::array( { "parallel_to", "offset" } ) } } } ) } } },
         { "pcb.create_track_polyline",
           { { "type", "object" },
             { "additionalProperties", true },
@@ -2424,6 +2509,35 @@ bool selectionFilterRequested( const nlohmann::json& aFilter )
     return aFilter.is_object() && aFilter.contains( "selection" )
            && aFilter["selection"].is_boolean()
            && aFilter["selection"].get<bool>();
+}
+
+
+nlohmann::json queryItemsFilterFromArguments( const nlohmann::json& aArguments )
+{
+    nlohmann::json filter = nlohmann::json::object();
+
+    if( aArguments.is_object() && aArguments.contains( "filter" )
+        && aArguments["filter"].is_object() )
+    {
+        filter = aArguments["filter"];
+    }
+
+    static constexpr const char* FILTER_KEYS[] = {
+        "type",         "net",       "layer",          "alias",
+        "handle",       "selection", "bbox",           "session_only",
+        "live_board",   "live_board_seed"
+    };
+
+    for( const char* key : FILTER_KEYS )
+    {
+        if( aArguments.is_object() && aArguments.contains( key )
+            && !filter.contains( key ) )
+        {
+            filter[key] = aArguments[key];
+        }
+    }
+
+    return filter;
 }
 
 
@@ -4628,10 +4742,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
 
         if( aToolCall.m_ToolName == wxS( "kisurf_query_items" ) )
         {
-            nlohmann::json filter = nlohmann::json::object();
-
-            if( arguments.contains( "filter" ) && arguments["filter"].is_object() )
-                filter = arguments["filter"];
+            nlohmann::json filter = queryItemsFilterFromArguments( arguments );
 
             return currentBoardInvocationResult(
                     currentBoardAdapter->QueryCurrentBoardItems( fromJson( filter ) ) );
@@ -5792,10 +5903,7 @@ AI_TOOL_INVOCATION_RESULT AI_SESSION_TOOL_CALL_HANDLER::HandleToolCall(
             return deniedForMode( seedErrorCode, seedMessage );
         }
 
-        wxString filterJson = wxS( "{}" );
-
-        if( arguments.contains( "filter" ) && arguments["filter"].is_object() )
-            filterJson = fromJson( arguments["filter"] );
+        wxString filterJson = fromJson( queryItemsFilterFromArguments( arguments ) );
 
         std::vector<AI_SHADOW_ITEM> queriedItems =
                 m_Session->ShadowBoard().QueryItems( filterJson );

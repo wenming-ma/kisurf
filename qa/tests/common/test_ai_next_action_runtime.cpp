@@ -4837,6 +4837,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     bool sawRoutingRepairSegmentPointSchema = false;
     bool sawRoutingPolylinePointSchema = false;
     bool sawRoutingBusSegmentPointSchema = false;
+    bool sawAtomicRunRelativePointExpressionContract = false;
     bool sawPlacementMoveHandleSchema = false;
     bool sawPlacementOrientationRepairHandleSchema = false;
     bool sawRoutingNamespaceDescription = false;
@@ -4848,36 +4849,91 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     auto pointSchemaRequiresXY =
             []( const nlohmann::json& aSchema )
             {
-                if( !aSchema.is_object()
-                    || !aSchema.contains( "properties" )
-                    || !aSchema["properties"].is_object()
-                    || !aSchema.contains( "required" )
-                    || !aSchema["required"].is_array() )
+                auto schemaDirectlyRequiresXY =
+                        []( const nlohmann::json& aCandidate )
+                        {
+                            if( !aCandidate.is_object()
+                                || !aCandidate.contains( "properties" )
+                                || !aCandidate["properties"].is_object()
+                                || !aCandidate.contains( "required" )
+                                || !aCandidate["required"].is_array() )
+                            {
+                                return false;
+                            }
+
+                            const nlohmann::json& properties =
+                                    aCandidate["properties"];
+                            bool hasX = properties.contains( "x" );
+                            bool hasY = properties.contains( "y" );
+                            bool requiresX = false;
+                            bool requiresY = false;
+
+                            for( const nlohmann::json& value :
+                                 aCandidate["required"] )
+                            {
+                                if( !value.is_string() )
+                                    continue;
+
+                                if( value.get<std::string>() == "x" )
+                                    requiresX = true;
+
+                                if( value.get<std::string>() == "y" )
+                                    requiresY = true;
+                            }
+
+                            return hasX && hasY && requiresX && requiresY
+                                   && aCandidate.value( "additionalProperties",
+                                                        true ) == false;
+                        };
+
+                if( schemaDirectlyRequiresXY( aSchema ) )
+                    return true;
+
+                if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+                    || !aSchema["anyOf"].is_array() )
                 {
                     return false;
                 }
 
-                const nlohmann::json& properties = aSchema["properties"];
-                bool hasX = properties.contains( "x" );
-                bool hasY = properties.contains( "y" );
-                bool requiresX = false;
-                bool requiresY = false;
+                for( const nlohmann::json& variant : aSchema["anyOf"] )
+                    if( schemaDirectlyRequiresXY( variant ) )
+                        return true;
 
-                for( const nlohmann::json& value : aSchema["required"] )
+                return false;
+            };
+
+    auto pointSchemaSupportsRelativeExpressions =
+            []( const nlohmann::json& aSchema )
+            {
+                if( !aSchema.is_object() || !aSchema.contains( "anyOf" )
+                    || !aSchema["anyOf"].is_array() )
                 {
-                    if( !value.is_string() )
-                        continue;
-
-                    if( value.get<std::string>() == "x" )
-                        requiresX = true;
-
-                    if( value.get<std::string>() == "y" )
-                        requiresY = true;
+                    return false;
                 }
 
-                return hasX && hasY && requiresX && requiresY
-                       && aSchema.value( "additionalProperties", true )
-                                  == false;
+                bool sawRelativeTo = false;
+                bool sawBetween = false;
+
+                for( const nlohmann::json& variant : aSchema["anyOf"] )
+                {
+                    if( !variant.is_object() || !variant.contains( "properties" )
+                        || !variant["properties"].is_object() )
+                    {
+                        continue;
+                    }
+
+                    const nlohmann::json& properties = variant["properties"];
+                    sawRelativeTo =
+                            sawRelativeTo
+                            || ( properties.contains( "relative_to" )
+                                 && properties.contains( "offset" ) );
+                    sawBetween =
+                            sawBetween
+                            || ( properties.contains( "between" )
+                                 && properties.contains( "percent" ) );
+                }
+
+                return sawRelativeTo && sawBetween;
             };
 
     auto boxSchemaSupportsCanonicalForms =
@@ -5180,6 +5236,26 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
 
                 sawAtomicRunMaintenanceScopeContract =
                         contractsDeclareMaintenanceScopes( contracts );
+
+                if( contracts.contains( "pcb.create_via" )
+                    && contracts["pcb.create_via"].contains( "properties" )
+                    && contracts["pcb.create_via"]["properties"].contains(
+                               "position" )
+                    && contracts.contains( "pcb.create_track_segment" )
+                    && contracts["pcb.create_track_segment"].contains(
+                               "properties" ) )
+                {
+                    const nlohmann::json& viaPosition =
+                            contracts["pcb.create_via"]["properties"]["position"];
+                    const nlohmann::json& trackSegmentProperties =
+                            contracts["pcb.create_track_segment"]["properties"];
+
+                    sawAtomicRunRelativePointExpressionContract =
+                            pointSchemaRequiresXY( viaPosition )
+                            && pointSchemaSupportsRelativeExpressions( viaPosition )
+                            && trackSegmentProperties.contains( "parallel_to" )
+                            && trackSegmentProperties.contains( "offset" );
+                }
             }
         }
 
@@ -5807,6 +5883,7 @@ BOOST_AUTO_TEST_CASE( CallableToolCatalogUsesProviderFunctionToolSchema )
     BOOST_CHECK( sawScriptMaintenanceScopeContract );
     BOOST_CHECK( sawRepairMaintenanceScopeContract );
     BOOST_CHECK( sawAtomicRunMaintenanceScopeContract );
+    BOOST_CHECK( sawAtomicRunRelativePointExpressionContract );
     BOOST_CHECK( sawPlacementRepairRequiredPosition );
     BOOST_CHECK( sawPlacementMoveRepairRequiredHandles );
     BOOST_CHECK( sawPlacementOrientationRepairRequiredFacts );

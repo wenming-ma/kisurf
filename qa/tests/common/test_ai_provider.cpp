@@ -2213,6 +2213,13 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                 const nlohmann::json& queryItemsParameters =
                         toolByName["kisurf_query_items"]["function"]["parameters"];
                 BOOST_REQUIRE( queryItemsParameters["properties"].contains( "filter" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "type" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "net" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "layer" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "alias" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "selection" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "bbox" ) );
+                BOOST_CHECK( queryItemsParameters["properties"].contains( "handle" ) );
                 BOOST_CHECK( !queryItemsParameters["properties"].contains(
                         "live_board" ) );
                 BOOST_CHECK( !queryItemsParameters["properties"].contains(
@@ -2386,12 +2393,20 @@ BOOST_AUTO_TEST_CASE( OpenAiProviderDeclaresKiSurfTools )
                                      "position" ) != std::string::npos );
                 BOOST_CHECK( operationContracts["pcb.create_via"]["properties"].contains(
                         "layer_pair" ) );
-                BOOST_CHECK( operationContracts["pcb.create_track_segment"]["required"]
-                                     .dump()
-                                     .find( "start" )
+                const nlohmann::json& trackSegmentContract =
+                        operationContracts["pcb.create_track_segment"];
+                BOOST_CHECK( trackSegmentContract["properties"].contains( "width" ) );
+                BOOST_CHECK( trackSegmentContract["properties"].contains( "parallel_to" ) );
+                BOOST_CHECK( trackSegmentContract["properties"].contains( "offset" ) );
+                BOOST_REQUIRE( trackSegmentContract.contains( "anyOf" ) );
+                BOOST_CHECK( trackSegmentContract["anyOf"].dump().find( "start" )
                              != std::string::npos );
-                BOOST_CHECK( operationContracts["pcb.create_track_segment"]["properties"]
-                                     .contains( "width" ) );
+                BOOST_CHECK( trackSegmentContract["anyOf"].dump().find( "end" )
+                             != std::string::npos );
+                BOOST_CHECK( trackSegmentContract["anyOf"].dump().find( "parallel_to" )
+                             != std::string::npos );
+                BOOST_CHECK( trackSegmentContract["anyOf"].dump().find( "offset" )
+                             != std::string::npos );
                 BOOST_CHECK( operationContracts["pcb.move_items"]["properties"].contains(
                         "target_positions" ) );
                 BOOST_REQUIRE( operationContracts.contains( "pcb.delete_items" ) );

@@ -2,6 +2,9 @@
 #include <kisurf/ai/ai_provider_input_compiler.h>
 #include <kisurf/ai/ai_prompt_trace_store.h>
 
+#include <string>
+
+#include <wx/ffile.h>
 #include <wx/filefn.h>
 #include <wx/filename.h>
 #include <wx/utils.h>
@@ -38,6 +41,17 @@ AI_PROVIDER_REQUEST compiledTraceRequest( uint64_t aRequestId )
                                            static_cast<unsigned long long>( aRequestId ) );
 
     return AiCompileProviderInput( request );
+}
+
+
+std::string rawTraceRecord( uint64_t aRequestId, size_t aPayloadSize )
+{
+    return std::string( "{\"request_id\":" )
+            + std::to_string( aRequestId )
+            + ",\"conversation_id\":7,\"request_kind\":0,"
+              "\"context_estimated_chars\":1,\"provider_status\":\"sent\","
+              "\"prompt_trace\":\""
+            + std::string( aPayloadSize, 'x' ) + "\"}\n";
 }
 }
 
@@ -125,6 +139,41 @@ BOOST_AUTO_TEST_CASE( RetentionKeepsNewestTraceEntries )
     BOOST_REQUIRE_EQUAL( entries.size(), 2 );
     BOOST_CHECK_EQUAL( entries.at( 0 ).m_RequestId, 202 );
     BOOST_CHECK_EQUAL( entries.at( 1 ).m_RequestId, 203 );
+
+    if( wxFileExists( path ) )
+        wxRemoveFile( path );
+}
+
+
+BOOST_AUTO_TEST_CASE( RetentionStreamsExistingLargeTraceFile )
+{
+    wxString path = uniquePromptTracePath( wxS( "large_retention" ) );
+
+    {
+        wxFFile file( path, wxS( "wb" ) );
+        BOOST_REQUIRE( file.IsOpened() );
+
+        const std::string first = rawTraceRecord( 401, 1024 * 1024 );
+        const std::string second = rawTraceRecord( 402, 1024 * 1024 );
+
+        BOOST_REQUIRE_EQUAL( file.Write( first.data(), first.size() ), first.size() );
+        BOOST_REQUIRE_EQUAL( file.Write( second.data(), second.size() ), second.size() );
+        file.Close();
+    }
+
+    AI_PROMPT_TRACE_RETENTION_POLICY policy;
+    policy.m_MaxEntries = 2;
+
+    AI_PROMPT_TRACE_STORE store( path, policy );
+    wxString              error;
+
+    BOOST_REQUIRE( store.Append( compiledTraceRequest( 403 ), wxS( "sent" ), error ) );
+
+    std::vector<AI_PROMPT_TRACE_ENTRY> entries = store.LoadAll( error );
+
+    BOOST_REQUIRE_EQUAL( entries.size(), 2 );
+    BOOST_CHECK_EQUAL( entries.at( 0 ).m_RequestId, 402 );
+    BOOST_CHECK_EQUAL( entries.at( 1 ).m_RequestId, 403 );
 
     if( wxFileExists( path ) )
         wxRemoveFile( path );

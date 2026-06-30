@@ -13,6 +13,7 @@
 #include <kisurf/ai/ai_accept_applier.h>
 #include <kisurf/ai/ai_atomic_operation_executor.h>
 #include <kisurf/ai/ai_execution_session.h>
+#include <kisurf/ai/ai_session_tool_call_handler.h>
 #include <kisurf/ai/ai_shadow_board.h>
 #include <kisurf_ai_pcb_session_apply_adapter.h>
 #include <kisurf_ai_pcb_session_shadow_seeder.h>
@@ -32,6 +33,7 @@
 #include <zone.h>
 
 #include <cstdlib>
+#include <set>
 
 namespace
 {
@@ -142,6 +144,32 @@ FOOTPRINT* addFootprintWithPad( BOARD& aBoard, NETINFO_ITEM* aNet )
 {
     PAD* pad = addFootprintPad( aBoard, aNet );
     return pad->GetParentFootprint();
+}
+
+
+AI_PROVIDER_REQUEST pcbChatRequest()
+{
+    AI_PROVIDER_REQUEST request;
+    request.m_RequestId = 42;
+    request.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_ContextVersion.m_DocumentRevision = 1;
+    request.m_ContextVersion.m_SelectionRevision = 1;
+    request.m_ContextVersion.m_ViewRevision = 1;
+    request.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    request.m_ContextSnapshot.m_Version = request.m_ContextVersion;
+    return request;
+}
+
+
+AI_TOOL_CALL_RECORD pcbToolCall( const wxString& aName,
+                                const wxString& aArgumentsJson )
+{
+    AI_TOOL_CALL_RECORD call;
+    call.m_RequestId = 42;
+    call.m_ToolCallId = wxS( "pcb-tool-call" );
+    call.m_ToolName = aName;
+    call.m_ArgumentsJson = aArgumentsJson;
+    return call;
 }
 } // namespace
 
@@ -367,6 +395,152 @@ BOOST_AUTO_TEST_CASE( AcceptReplayDeletesLiveSeededItemByAlias )
     BOOST_REQUIRE_MESSAGE( result.m_Ok, result.m_Message );
     BOOST_CHECK( result.m_BoardMutated );
     BOOST_CHECK( boardVias( board ).empty() );
+}
+
+
+BOOST_AUTO_TEST_CASE( CurrentBoardQueryItemsSeesExistingRoutingItems )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    addTrackSegment( board, gnd, VECTOR2I( 1000, 2000 ),
+                     VECTOR2I( 3000, 2000 ) );
+    addVia( board, gnd, VECTOR2I( 2500, 2000 ) );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+
+    AI_CURRENT_BOARD_TOOL_RESULT summary = adapter.QueryCurrentBoardSummary();
+    BOOST_REQUIRE_MESSAGE( summary.m_Ok, summary.m_ResultJson.ToStdString() );
+    nlohmann::json summaryPayload =
+            nlohmann::json::parse( summary.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( summaryPayload["summary"]["track_segments"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( summaryPayload["summary"]["vias"].get<size_t>(), 1 );
+
+    AI_CURRENT_BOARD_TOOL_RESULT routing =
+            adapter.QueryCurrentBoardItems( wxS( "{\"type\":\"routing\"}" ) );
+    BOOST_REQUIRE_MESSAGE( routing.m_Ok, routing.m_ResultJson.ToStdString() );
+    nlohmann::json routingPayload =
+            nlohmann::json::parse( routing.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( routingPayload["returned_count"].get<size_t>(), 2 );
+
+    std::set<std::string> routingTypes;
+    for( const nlohmann::json& item : routingPayload["items"] )
+        routingTypes.insert( item["type"].get<std::string>() );
+
+    BOOST_CHECK( routingTypes.contains( "track_segment" ) );
+    BOOST_CHECK( routingTypes.contains( "via" ) );
+
+    AI_CURRENT_BOARD_TOOL_RESULT tracks =
+            adapter.QueryCurrentBoardItems( wxS( "{\"type\":\"tracks\"}" ) );
+    BOOST_REQUIRE_MESSAGE( tracks.m_Ok, tracks.m_ResultJson.ToStdString() );
+    nlohmann::json tracksPayload =
+            nlohmann::json::parse( tracks.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( tracksPayload["returned_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( tracksPayload["items"][0]["type"].get<std::string>(),
+                       "track_segment" );
+
+    AI_CURRENT_BOARD_TOOL_RESULT vias =
+            adapter.QueryCurrentBoardItems( wxS( "{\"type\":\"vias\"}" ) );
+    BOOST_REQUIRE_MESSAGE( vias.m_Ok, vias.m_ResultJson.ToStdString() );
+    nlohmann::json viasPayload =
+            nlohmann::json::parse( vias.m_ResultJson.ToStdString() );
+    BOOST_CHECK_EQUAL( viasPayload["returned_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( viasPayload["items"][0]["type"].get<std::string>(), "via" );
+}
+
+
+BOOST_AUTO_TEST_CASE( CurrentBoardAtomicDeleteItemsRemovesExistingRoutingItems )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+    addTrackSegment( board, gnd, VECTOR2I( 1000, 2000 ),
+                     VECTOR2I( 3000, 2000 ) );
+    addVia( board, gnd, VECTOR2I( 2500, 2000 ) );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_CURRENT_BOARD_TOOL_RESULT result =
+            adapter.RunCurrentBoardAtomicOperation(
+                    AI_SESSION_OPERATION_KIND::DeleteItems,
+                    wxS( "{\"filter\":{\"type\":\"routing\"}}" ) );
+
+    BOOST_REQUIRE_MESSAGE( result.m_Ok, result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( result.m_Executed );
+    BOOST_CHECK( board.Tracks().empty() );
+
+    nlohmann::json payload =
+            nlohmann::json::parse( result.m_ResultJson.ToStdString() );
+    BOOST_CHECK( payload["board_mutated"].get<bool>() );
+    BOOST_CHECK_EQUAL( payload["current_board_apply"]["status"].get<std::string>(),
+                       "applied" );
+    BOOST_CHECK_EQUAL( payload["resolved_items"].size(), 2 );
+}
+
+
+BOOST_AUTO_TEST_CASE( ChatDirectHandlerPerformsCurrentBoardCrud )
+{
+    BOARD board;
+    NETINFO_ITEM* gnd = new NETINFO_ITEM( &board, wxS( "GND" ), 1 );
+    board.Add( gnd );
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( &board, nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( board, toolManager );
+    AI_SESSION_TOOL_CALL_HANDLER         handler( nullptr, &adapter );
+    handler.SetDirectLiveApplyAfterMutation( true );
+    AI_PROVIDER_REQUEST request = pcbChatRequest();
+
+    AI_TOOL_INVOCATION_RESULT createResult = handler.HandleToolCall(
+            request, pcbToolCall( wxS( "kisurf_run_atomic_operation" ),
+                                  wxS( "{\"kind\":\"pcb.create_via\","
+                                       "\"arguments\":{\"alias\":\"crud-via\","
+                                       "\"net\":\"GND\",\"position\":{\"x\":10,\"y\":20},"
+                                       "\"diameter\":0.6,\"drill\":0.3}}" ) ) );
+    BOOST_REQUIRE_MESSAGE( createResult.m_Allowed,
+                           createResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( createResult.m_Executed );
+    BOOST_REQUIRE_EQUAL( boardVias( board ).size(), 1 );
+    const VECTOR2I originalPosition = boardVias( board ).front()->GetPosition();
+
+    AI_TOOL_INVOCATION_RESULT queryResult = handler.HandleToolCall(
+            request, pcbToolCall( wxS( "kisurf_query_items" ),
+                                  wxS( "{\"type\":\"via\",\"net\":\"GND\"}" ) ) );
+    BOOST_REQUIRE_MESSAGE( queryResult.m_Allowed,
+                           queryResult.m_ResultJson.ToStdString() );
+    nlohmann::json queryPayload =
+            nlohmann::json::parse( queryResult.m_ResultJson.ToStdString() );
+    BOOST_REQUIRE_EQUAL( queryPayload["returned_count"].get<size_t>(), 1 );
+    BOOST_CHECK_EQUAL( queryPayload["items"][0]["alias"].get<std::string>(),
+                       "crud-via" );
+
+    AI_TOOL_INVOCATION_RESULT moveResult = handler.HandleToolCall(
+            request, pcbToolCall( wxS( "kisurf_run_atomic_operation" ),
+                                  wxS( "{\"kind\":\"pcb.move_items\","
+                                       "\"arguments\":{\"alias\":\"crud-via\","
+                                       "\"delta\":{\"x\":1,\"y\":2}}}" ) ) );
+    BOOST_REQUIRE_MESSAGE( moveResult.m_Allowed,
+                           moveResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( moveResult.m_Executed );
+    BOOST_REQUIRE_EQUAL( boardVias( board ).size(), 1 );
+    BOOST_CHECK( boardVias( board ).front()->GetPosition() != originalPosition );
+
+    AI_TOOL_INVOCATION_RESULT deleteResult = handler.HandleToolCall(
+            request, pcbToolCall( wxS( "kisurf_run_atomic_operation" ),
+                                  wxS( "{\"kind\":\"pcb.delete_items\","
+                                       "\"arguments\":{\"filter\":{\"type\":\"via\","
+                                       "\"net\":\"GND\"}}}" ) ) );
+    BOOST_REQUIRE_MESSAGE( deleteResult.m_Allowed,
+                           deleteResult.m_ResultJson.ToStdString() );
+    BOOST_CHECK( deleteResult.m_Executed );
+    BOOST_CHECK( boardVias( board ).empty() );
+    BOOST_CHECK( !handler.ActiveSession() );
 }
 
 

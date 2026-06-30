@@ -364,27 +364,70 @@ nlohmann::json sessionAtomicOperationIdsJson()
 
 nlohmann::json internalPointSchema( const char* aDescription )
 {
+    auto directPoint =
+            []( const char* aDescriptionText, bool aUseMillimeterDescription )
+            {
+                std::string description = aDescriptionText;
+
+                if( aUseMillimeterDescription )
+                {
+                    description +=
+                            " Small numeric x/y values are millimeters; large "
+                            "integer values are KiCad internal units.";
+                }
+
+                return nlohmann::json{
+                    { "type", "object" },
+                    { "description", description },
+                    { "additionalProperties", false },
+                    { "properties",
+                      { { "x",
+                          { { "type", "number" },
+                            { "description",
+                              "X coordinate. Use millimeters for normal model calls, "
+                              "e.g. 25.5." } } },
+                        { "y",
+                          { { "type", "number" },
+                            { "description",
+                              "Y coordinate. Use millimeters for normal model calls, "
+                              "e.g. 19.75." } } } } },
+                    { "required", nlohmann::json::array( { "x", "y" } ) }
+                };
+            };
+
+    auto pointReference =
+            []()
+            {
+                return nlohmann::json{
+                    { "description", "Handle alias, handle id, handle object, or direct point." },
+                    { "anyOf",
+                      nlohmann::json::array(
+                              { { { "type", "string" },
+                                  { "description", "Model-readable handle alias." } },
+                                { { "type", "integer" },
+                                  { "minimum", 1 },
+                                  { "description", "Session-local handle id." } },
+                                { { "type", "object" },
+                                  { "additionalProperties", true },
+                                  { "description",
+                                    "Handle object such as {alias} or {handle_id,generation}." } },
+                                { { "type", "object" },
+                                  { "additionalProperties", false },
+                                  { "properties",
+                                    { { "x", { { "type", "number" } } },
+                                      { "y", { { "type", "number" } } } } },
+                                  { "required",
+                                    nlohmann::json::array( { "x", "y" } ) } } } ) }
+                };
+            };
+
+    const nlohmann::json offsetPoint =
+            directPoint( "Offset point or delta.", false );
+
     return { { "description", aDescription },
              { "anyOf",
                nlohmann::json::array(
-                       { { { "type", "object" },
-                           { "description",
-                             "Model-facing point shortcut. Small numeric x/y values "
-                             "are millimeters; large integer values are KiCad internal "
-                             "units." },
-                           { "additionalProperties", false },
-                           { "properties",
-                             { { "x",
-                                 { { "type", "number" },
-                                   { "description",
-                                     "X coordinate. Use millimeters for normal model "
-                                     "calls, e.g. 25.5." } } },
-                               { "y",
-                                 { { "type", "number" },
-                                   { "description",
-                                     "Y coordinate. Use millimeters for normal model "
-                                     "calls, e.g. 19.75." } } } } },
-                           { "required", nlohmann::json::array( { "x", "y" } ) } },
+                       { directPoint( "Model-facing point shortcut.", true ),
                          { { "type", "object" },
                            { "description", "Explicit millimeter point shortcut." },
                            { "additionalProperties", false },
@@ -411,7 +454,44 @@ nlohmann::json internalPointSchema( const char* aDescription )
                              "Two-number millimeter shortcut: [x_mm, y_mm]." },
                            { "items", { { "type", "number" } } },
                            { "minItems", 2 },
-                           { "maxItems", 2 } } } ) } };
+                           { "maxItems", 2 } },
+                         { { "type", "string" },
+                           { "description", "Point resolved from a handle alias." } },
+                         { { "type", "integer" },
+                           { "minimum", 1 },
+                           { "description", "Point resolved from a session-local handle id." } },
+                         { { "type", "object" },
+                           { "description",
+                             "Point resolved from a handle or alias plus an optional offset." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "relative_to", pointReference() },
+                               { "anchor",
+                                 { { "type", "string" },
+                                   { "enum",
+                                     nlohmann::json::array(
+                                             { "center", "position", "start", "end",
+                                               "midpoint", "bbox_min", "bbox_max",
+                                               "min", "max" } ) } } },
+                               { "offset", offsetPoint } } },
+                           { "required",
+                             nlohmann::json::array( { "relative_to" } ) } },
+                         { { "type", "object" },
+                           { "description",
+                             "Point interpolated between two point expressions." },
+                           { "additionalProperties", false },
+                           { "properties",
+                             { { "between",
+                                 { { "type", "array" },
+                                   { "items", pointReference() },
+                                   { "minItems", 2 },
+                                   { "maxItems", 2 } } },
+                               { "t", { { "type", "number" } } },
+                               { "fraction", { { "type", "number" } } },
+                               { "percent", { { "type", "number" } } },
+                               { "offset", offsetPoint } } },
+                           { "required",
+                             nlohmann::json::array( { "between" } ) } } } ) } };
 }
 
 
@@ -682,10 +762,30 @@ nlohmann::json atomicOperationContractSchemas()
                 { "layer", { { "type", "string" } } },
                 { "net", { { "type", "string" } } },
                 { "width", modelLengthSchema( "Track width.", 1 ) },
+                { "parallel_to",
+                  { { "description",
+                      "Optional reference track segment. When start/end are omitted, "
+                      "the executor copies the reference start/end and applies offset." },
+                    { "anyOf",
+                      nlohmann::json::array(
+                              { { { "type", "string" },
+                                  { "description", "Model-readable handle alias." } },
+                                { { "type", "integer" },
+                                  { "minimum", 1 },
+                                  { "description", "Session-local handle id." } },
+                                { { "type", "object" },
+                                  { "additionalProperties", true },
+                                  { "description",
+                                    "Handle object such as {alias} or {handle_id,generation}." } } } ) } } },
+                { "offset", internalPointSchema( "Relative or parallel point offset." ) },
                 { "alias", { { "type", "string" } } },
                 { "metadata",
                   { { "type", "object" }, { "additionalProperties", true } } } } },
-            { "required", nlohmann::json::array( { "start", "end" } ) } } },
+            { "anyOf",
+              nlohmann::json::array(
+                      { { { "required", nlohmann::json::array( { "start", "end" } ) } },
+                        { { "required",
+                            nlohmann::json::array( { "parallel_to", "offset" } ) } } } ) } } },
         { "pcb.create_track_polyline",
           { { "type", "object" },
             { "additionalProperties", true },
@@ -937,7 +1037,16 @@ nlohmann::json sessionQueryItemsToolParameters()
 {
     return { { "type", "object" },
              { "properties",
-               { { "filter", queryItemsFilterSchema() } } },
+               { { "filter", queryItemsFilterSchema() },
+                 { "type", { { "type", "string" } } },
+                 { "net", { { "type", "string" } } },
+                 { "layer", { { "type", "string" } } },
+                 { "alias", { { "type", "string" } } },
+                 { "selection", { { "type", "boolean" } } },
+                 { "bbox",
+                   internalBoxSchema(
+                           "Bounding box intersection filter in internal coordinates." ) },
+                 { "handle", queryHandleFilterSchema() } } },
              { "additionalProperties", false } };
 }
 

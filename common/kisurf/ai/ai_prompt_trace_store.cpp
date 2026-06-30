@@ -2,13 +2,14 @@
 
 #include <nlohmann/json.hpp>
 
+#include <array>
+#include <deque>
 #include <utility>
 
 #include <wx/ffile.h>
 #include <wx/filefn.h>
 #include <wx/filename.h>
 #include <wx/stdpaths.h>
-#include <wx/textfile.h>
 
 namespace
 {
@@ -33,6 +34,110 @@ nlohmann::json parseJsonOrString( const wxString& aText )
         return toUtf8String( aText );
 
     return parsed;
+}
+
+
+template<typename LineHandler>
+bool readJsonlLines( const wxString& aPath, LineHandler aHandler, wxString& aError )
+{
+    wxFFile file( aPath, wxS( "rb" ) );
+
+    if( !file.IsOpened() )
+    {
+        aError = wxString::Format( wxS( "Unable to open prompt trace store: %s" ),
+                                   aPath );
+        return false;
+    }
+
+    std::array<char, 64 * 1024> buffer;
+    std::string                 currentLine;
+    size_t                      lineNumber = 0;
+
+    for( ;; )
+    {
+        const size_t bytesRead = file.Read( buffer.data(), buffer.size() );
+
+        if( bytesRead == 0 )
+            break;
+
+        for( size_t i = 0; i < bytesRead; ++i )
+        {
+            const char ch = buffer[i];
+
+            if( ch == '\n' )
+            {
+                if( !currentLine.empty() && currentLine.back() == '\r' )
+                    currentLine.pop_back();
+
+                ++lineNumber;
+
+                if( !aHandler( currentLine, lineNumber ) )
+                    return false;
+
+                currentLine.clear();
+            }
+            else
+            {
+                currentLine.push_back( ch );
+            }
+        }
+    }
+
+    if( !currentLine.empty() )
+    {
+        ++lineNumber;
+
+        if( !aHandler( currentLine, lineNumber ) )
+            return false;
+    }
+
+    aError.clear();
+    return true;
+}
+
+
+bool writeJsonlLinesReplacingFile( const wxString& aPath,
+                                   const std::deque<std::string>& aLines,
+                                   wxString& aError )
+{
+    const wxString tempPath = aPath + wxS( ".tmp" );
+    wxFFile        file( tempPath, wxS( "wb" ) );
+
+    if( !file.IsOpened() )
+    {
+        aError = wxString::Format( wxS( "Unable to open prompt trace temp store: %s" ),
+                                   tempPath );
+        return false;
+    }
+
+    for( const std::string& line : aLines )
+    {
+        if( !line.empty() && file.Write( line.data(), line.size() ) != line.size() )
+        {
+            aError = wxString::Format( wxS( "Unable to write prompt trace temp store: %s" ),
+                                       tempPath );
+            return false;
+        }
+
+        if( file.Write( "\n", 1 ) != 1 )
+        {
+            aError = wxString::Format( wxS( "Unable to write prompt trace temp store: %s" ),
+                                       tempPath );
+            return false;
+        }
+    }
+
+    file.Close();
+
+    if( !wxRenameFile( tempPath, aPath, true ) )
+    {
+        aError = wxString::Format( wxS( "Unable to replace prompt trace store: %s" ),
+                                   aPath );
+        return false;
+    }
+
+    aError.clear();
+    return true;
 }
 }
 
@@ -136,7 +241,6 @@ bool AI_PROMPT_TRACE_STORE::Append( const AI_PROVIDER_REQUEST& aRequest,
 std::vector<AI_PROMPT_TRACE_ENTRY> AI_PROMPT_TRACE_STORE::LoadAll( wxString& aError ) const
 {
     std::vector<AI_PROMPT_TRACE_ENTRY> entries;
-    wxTextFile                         file;
 
     if( !wxFileExists( m_Path ) )
     {
@@ -144,28 +248,22 @@ std::vector<AI_PROMPT_TRACE_ENTRY> AI_PROMPT_TRACE_STORE::LoadAll( wxString& aEr
         return entries;
     }
 
-    if( !file.Open( m_Path ) )
+    const bool ok = readJsonlLines( m_Path,
+            [&]( const std::string& aLine, size_t aLineNumber )
     {
-        aError = wxString::Format( wxS( "Unable to open prompt trace store: %s" ),
-                                   m_Path );
-        return entries;
-    }
-
-    for( size_t lineIndex = 0; lineIndex < file.GetLineCount(); ++lineIndex )
-    {
-        const wxString line = file.GetLine( lineIndex ).Trim().Trim( false );
+        const wxString line = fromUtf8String( aLine ).Trim().Trim( false );
 
         if( line.IsEmpty() )
-            continue;
+            return true;
 
-        nlohmann::json record = nlohmann::json::parse( toUtf8String( line ), nullptr, false );
+        nlohmann::json record = nlohmann::json::parse( aLine, nullptr, false );
 
         if( record.is_discarded() || !record.is_object() )
         {
             aError = wxString::Format( wxS( "Invalid prompt trace JSONL at line %zu" ),
-                                       lineIndex + 1 );
+                                       aLineNumber );
             entries.clear();
-            return entries;
+            return false;
         }
 
         AI_PROMPT_TRACE_ENTRY entry;
@@ -188,7 +286,12 @@ std::vector<AI_PROMPT_TRACE_ENTRY> AI_PROMPT_TRACE_STORE::LoadAll( wxString& aEr
             entry.m_ProviderTraceJson = fromUtf8String( providerTraceIt->dump() );
 
         entries.push_back( std::move( entry ) );
-    }
+
+        return true;
+    }, aError );
+
+    if( !ok )
+        return entries;
 
     aError.clear();
     return entries;
@@ -203,16 +306,23 @@ bool AI_PROMPT_TRACE_STORE::ApplyRetention( wxString& aError ) const
         return true;
     }
 
-    wxTextFile file;
+    std::deque<std::string> retained;
+    size_t                  lineCount = 0;
 
-    if( !file.Open( m_Path ) )
+    if( !readJsonlLines( m_Path,
+            [&]( const std::string& aLine, size_t )
     {
-        aError = wxString::Format( wxS( "Unable to open prompt trace store: %s" ),
-                                   m_Path );
+        ++lineCount;
+        retained.push_back( aLine );
+
+        while( retained.size() > m_Retention.m_MaxEntries )
+            retained.pop_front();
+
+        return true;
+    }, aError ) )
+    {
         return false;
     }
-
-    const size_t lineCount = file.GetLineCount();
 
     if( lineCount <= m_Retention.m_MaxEntries )
     {
@@ -220,25 +330,8 @@ bool AI_PROMPT_TRACE_STORE::ApplyRetention( wxString& aError ) const
         return true;
     }
 
-    std::vector<wxString> retained;
-    retained.reserve( m_Retention.m_MaxEntries );
-
-    const size_t firstRetained = lineCount - m_Retention.m_MaxEntries;
-
-    for( size_t lineIndex = firstRetained; lineIndex < lineCount; ++lineIndex )
-        retained.push_back( file.GetLine( lineIndex ) );
-
-    file.Clear();
-
-    for( const wxString& line : retained )
-        file.AddLine( line );
-
-    if( !file.Write() )
-    {
-        aError = wxString::Format( wxS( "Unable to apply prompt trace retention: %s" ),
-                                   m_Path );
+    if( !writeJsonlLinesReplacingFile( m_Path, retained, aError ) )
         return false;
-    }
 
     aError.clear();
     return true;

@@ -12604,20 +12604,102 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                 auto pointSchema =
                         []( const char* aDescription )
                         {
+                            auto directPoint =
+                                    []( const char* aDirectDescription )
+                                    {
+                                        return nlohmann::json{
+                                            { "type", "object" },
+                                            { "additionalProperties", false },
+                                            { "description", aDirectDescription },
+                                            { "properties",
+                                              { { "x",
+                                                  { { "type", "integer" },
+                                                    { "description",
+                                                      "Internal-coordinate x value." } } },
+                                                { "y",
+                                                  { { "type", "integer" },
+                                                    { "description",
+                                                      "Internal-coordinate y value." } } } } },
+                                            { "required",
+                                              nlohmann::json::array( { "x", "y" } ) }
+                                        };
+                                    };
+
+                            auto pointReference =
+                                    [&directPoint]()
+                                    {
+                                        return nlohmann::json{
+                                            { "description",
+                                              "Handle alias, handle id, handle object, or direct point." },
+                                            { "anyOf",
+                                              nlohmann::json::array(
+                                                      { { { "type", "string" },
+                                                          { "description",
+                                                            "Model-readable handle alias." } },
+                                                        { { "type", "integer" },
+                                                          { "minimum", 1 },
+                                                          { "description",
+                                                            "Session-local handle id." } },
+                                                        { { "type", "object" },
+                                                          { "additionalProperties", true },
+                                                          { "description",
+                                                            "Handle object such as {alias} or {handle_id,generation}." } },
+                                                        directPoint(
+                                                                "Direct internal-coordinate point." ) } ) }
+                                        };
+                                    };
+
+                            const nlohmann::json offsetPoint =
+                                    directPoint( "Offset point or delta." );
+
                             return nlohmann::json{
-                                { "type", "object" },
-                                { "additionalProperties", false },
                                 { "description", aDescription },
-                                { "properties",
-                                  { { "x",
-                                      { { "type", "integer" },
-                                        { "description",
-                                          "Internal-coordinate x value." } } },
-                                    { "y",
-                                      { { "type", "integer" },
-                                        { "description",
-                                          "Internal-coordinate y value." } } } } },
-                                { "required", nlohmann::json::array( { "x", "y" } ) }
+                                { "anyOf",
+                                  nlohmann::json::array(
+                                          { directPoint( "Direct internal-coordinate point." ),
+                                            { { "type", "string" },
+                                              { "description",
+                                                "Point resolved from a handle alias." } },
+                                            { { "type", "integer" },
+                                              { "minimum", 1 },
+                                              { "description",
+                                                "Point resolved from a session-local handle id." } },
+                                            { { "type", "object" },
+                                              { "description",
+                                                "Point resolved from a handle or alias plus an optional offset." },
+                                              { "additionalProperties", false },
+                                              { "properties",
+                                                { { "relative_to", pointReference() },
+                                                  { "anchor",
+                                                    { { "type", "string" },
+                                                      { "enum",
+                                                        nlohmann::json::array(
+                                                                { "center", "position",
+                                                                  "start", "end",
+                                                                  "midpoint", "bbox_min",
+                                                                  "bbox_max", "min",
+                                                                  "max" } ) } } },
+                                                  { "offset", offsetPoint } } },
+                                              { "required",
+                                                nlohmann::json::array(
+                                                        { "relative_to" } ) } },
+                                            { { "type", "object" },
+                                              { "description",
+                                                "Point interpolated between two point expressions." },
+                                              { "additionalProperties", false },
+                                              { "properties",
+                                                { { "between",
+                                                    { { "type", "array" },
+                                                      { "items", pointReference() },
+                                                      { "minItems", 2 },
+                                                      { "maxItems", 2 } } },
+                                                  { "t", { { "type", "number" } } },
+                                                  { "fraction", { { "type", "number" } } },
+                                                  { "percent", { { "type", "number" } } },
+                                                  { "offset", offsetPoint } } },
+                                              { "required",
+                                                nlohmann::json::array(
+                                                        { "between" } ) } } } ) }
                             };
                         };
 
@@ -13027,12 +13109,35 @@ wxString AI_NEXT_ACTION_TOOL_REGISTRY::CallableToolCatalogJson() const
                                         { "net", { { "type", "string" } } },
                                         { "width",
                                           { { "type", "integer" }, { "minimum", 1 } } },
+                                        { "parallel_to",
+                                          { { "description",
+                                              "Optional reference track segment. When start/end are omitted, "
+                                              "the executor copies the reference start/end and applies offset." },
+                                            { "anyOf",
+                                              nlohmann::json::array(
+                                                      { { { "type", "string" },
+                                                          { "description",
+                                                            "Session handle alias." } },
+                                                        { { "type", "integer" },
+                                                          { "minimum", 1 } },
+                                                        { { "type", "object" },
+                                                          { "additionalProperties", true },
+                                                          { "description",
+                                                            "Handle object such as {alias} or {handle_id,generation}." } } } ) } } },
+                                        { "offset",
+                                          pointSchema( "Relative or parallel point offset." ) },
                                         { "alias", { { "type", "string" } } },
                                         { "metadata",
                                           { { "type", "object" },
                                             { "additionalProperties", true } } } } },
-                                    { "required",
-                                      nlohmann::json::array( { "start", "end" } ) } } },
+                                    { "anyOf",
+                                      nlohmann::json::array(
+                                              { { { "required",
+                                                    nlohmann::json::array(
+                                                            { "start", "end" } ) } },
+                                                { { "required",
+                                                    nlohmann::json::array(
+                                                            { "parallel_to", "offset" } ) } } } ) } } },
                                 { "pcb.create_track_polyline",
                                   { { "type", "object" },
                                     { "additionalProperties", true },
