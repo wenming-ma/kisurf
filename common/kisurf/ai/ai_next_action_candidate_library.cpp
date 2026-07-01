@@ -49,6 +49,14 @@ struct ROUTING_SEGMENT_CANDIDATE
 };
 
 
+struct ROUTING_TARGET_POINT
+{
+    VECTOR2I m_Position = VECTOR2I( 0, 0 );
+    wxString m_NetName;
+    wxString m_Label;
+};
+
+
 struct DRAWING_ZONE_CANDIDATE
 {
     VECTOR2I          m_Position = VECTOR2I( 0, 0 );
@@ -244,9 +252,225 @@ void appendViaPoints( const std::vector<AI_OBJECT_REF>& aObjects,
 }
 
 
-std::optional<ROUTING_SEGMENT_CANDIDATE> parseRoutingCandidate(
-        const AI_TOOL_STATE_SNAPSHOT& aToolState )
+int64_t absoluteDelta( int aLeft, int aRight )
 {
+    const int64_t delta = static_cast<int64_t>( aLeft )
+                          - static_cast<int64_t>( aRight );
+    return delta < 0 ? -delta : delta;
+}
+
+
+wxString normalizedRoutingNetName( wxString aNetName )
+{
+    aNetName.Trim( true ).Trim( false );
+
+    while( aNetName.StartsWith( wxS( "/" ) ) )
+        aNetName = aNetName.Mid( 1 );
+
+    return aNetName;
+}
+
+
+bool netMatchesRoutingTarget( const wxString& aCandidateNet,
+                              const wxString& aTargetNet )
+{
+    if( aCandidateNet.IsEmpty() || aTargetNet.IsEmpty() )
+        return false;
+
+    return aCandidateNet == aTargetNet
+           || normalizedRoutingNetName( aCandidateNet )
+                      == normalizedRoutingNetName( aTargetNet );
+}
+
+
+void appendRoutingTargetPoint( std::vector<ROUTING_TARGET_POINT>& aTargets,
+                               std::set<std::string>& aSeenKeys,
+                               const wxString& aLabel,
+                               const wxString& aNetName,
+                               const VECTOR2I& aPosition,
+                               const wxString& aCandidateNet,
+                               const VECTOR2I& aStart )
+{
+    if( !netMatchesRoutingTarget( aCandidateNet, aNetName )
+        || samePoint( aPosition, aStart ) )
+    {
+        return;
+    }
+
+    std::string key = toUtf8String( aLabel );
+    key += "|";
+    key += std::to_string( aPosition.x );
+    key += ",";
+    key += std::to_string( aPosition.y );
+
+    if( !aSeenKeys.insert( key ).second )
+        return;
+
+    ROUTING_TARGET_POINT target;
+    target.m_Position = aPosition;
+    target.m_NetName = aNetName;
+    target.m_Label = aLabel;
+    aTargets.push_back( target );
+}
+
+
+void appendRoutingTargetPointsFromDetails(
+        const nlohmann::json& aDetails,
+        const wxString& aLabel,
+        const wxString& aCandidateNet,
+        const VECTOR2I& aStart,
+        std::vector<ROUTING_TARGET_POINT>& aTargets,
+        std::set<std::string>& aSeenKeys )
+{
+    if( !aDetails.is_object() || !aDetails.contains( "net_name" )
+        || !aDetails["net_name"].is_string() )
+    {
+        return;
+    }
+
+    const wxString netName = jsonStringToWxString( aDetails["net_name"] );
+
+    for( const char* pointField : { "position", "start", "end" } )
+    {
+        VECTOR2I point( 0, 0 );
+
+        if( jsonPointToVector2I( aDetails.value( pointField, nlohmann::json() ),
+                                 point ) )
+        {
+            appendRoutingTargetPoint( aTargets, aSeenKeys,
+                                      aLabel + wxS( ":" ) + wxString( pointField ),
+                                      netName, point, aCandidateNet, aStart );
+        }
+    }
+}
+
+
+void appendRoutingTargetPointsFromObjects(
+        const std::vector<AI_OBJECT_REF>& aObjects,
+        const wxString& aCandidateNet,
+        const VECTOR2I& aStart,
+        std::vector<ROUTING_TARGET_POINT>& aTargets,
+        std::set<std::string>& aSeenKeys )
+{
+    for( const AI_OBJECT_REF& object : aObjects )
+    {
+        if( object.m_DetailsJson.IsEmpty() )
+            continue;
+
+        const nlohmann::json details =
+                nlohmann::json::parse( toUtf8String( object.m_DetailsJson ),
+                                       nullptr, false );
+
+        if( details.is_discarded() )
+            continue;
+
+        appendRoutingTargetPointsFromDetails( details, object.m_Label,
+                                              aCandidateNet, aStart,
+                                              aTargets, aSeenKeys );
+    }
+}
+
+
+void appendRoutingTargetPointsFromAnchors(
+        const std::vector<AI_CONTEXT_ANCHOR>& aAnchors,
+        const wxString& aCandidateNet,
+        const VECTOR2I& aStart,
+        std::vector<ROUTING_TARGET_POINT>& aTargets,
+        std::set<std::string>& aSeenKeys )
+{
+    for( const AI_CONTEXT_ANCHOR& anchor : aAnchors )
+    {
+        if( !anchor.m_HasPosition
+            || ( anchor.m_Kind != AI_CONTEXT_ANCHOR_KIND::RouteTarget
+                 && anchor.m_Kind != AI_CONTEXT_ANCHOR_KIND::RouteCandidate ) )
+        {
+            continue;
+        }
+
+        if( anchor.m_DetailsJson.IsEmpty() )
+            continue;
+
+        const nlohmann::json details =
+                nlohmann::json::parse( toUtf8String( anchor.m_DetailsJson ),
+                                       nullptr, false );
+
+        if( details.is_discarded() || !details.is_object()
+            || !details.contains( "net_name" ) || !details["net_name"].is_string() )
+        {
+            continue;
+        }
+
+        appendRoutingTargetPoint( aTargets, aSeenKeys, anchor.m_Label,
+                                  jsonStringToWxString( details["net_name"] ),
+                                  anchor.m_Position, aCandidateNet, aStart );
+    }
+}
+
+
+std::vector<ROUTING_TARGET_POINT> collectRoutingTargetPoints(
+        const AI_CONTEXT_SNAPSHOT& aContext,
+        const ROUTING_SEGMENT_CANDIDATE& aCandidate )
+{
+    std::vector<ROUTING_TARGET_POINT> targets;
+    std::set<std::string>             seenKeys;
+
+    appendRoutingTargetPointsFromObjects( aContext.m_VisibleObjects,
+                                          aCandidate.m_NetName,
+                                          aCandidate.m_Start, targets, seenKeys );
+    appendRoutingTargetPointsFromObjects( aContext.m_SelectedObjects,
+                                          aCandidate.m_NetName,
+                                          aCandidate.m_Start, targets, seenKeys );
+    appendRoutingTargetPointsFromAnchors( aContext.m_Anchors,
+                                          aCandidate.m_NetName,
+                                          aCandidate.m_Start, targets, seenKeys );
+    return targets;
+}
+
+
+std::optional<VECTOR2I> nextLandingFromRoutingTargets(
+        const VECTOR2I& aStart,
+        const std::vector<ROUTING_TARGET_POINT>& aTargets )
+{
+    if( aTargets.empty() )
+        return std::nullopt;
+
+    const ROUTING_TARGET_POINT* best = &aTargets.front();
+    int64_t bestDistance = absoluteDelta( aStart.x, best->m_Position.x )
+                           + absoluteDelta( aStart.y, best->m_Position.y );
+
+    for( const ROUTING_TARGET_POINT& target : aTargets )
+    {
+        const int64_t distance = absoluteDelta( aStart.x, target.m_Position.x )
+                                 + absoluteDelta( aStart.y, target.m_Position.y );
+
+        if( distance < bestDistance )
+        {
+            best = &target;
+            bestDistance = distance;
+        }
+    }
+
+    const VECTOR2I target = best->m_Position;
+
+    if( target.x == aStart.x || target.y == aStart.y )
+        return target;
+
+    const int64_t dx = absoluteDelta( target.x, aStart.x );
+    const int64_t dy = absoluteDelta( target.y, aStart.y );
+    VECTOR2I      landing = dx >= dy ? VECTOR2I( target.x, aStart.y )
+                                     : VECTOR2I( aStart.x, target.y );
+
+    if( samePoint( landing, aStart ) )
+        return target;
+
+    return landing;
+}
+
+
+std::optional<ROUTING_SEGMENT_CANDIDATE> parseRoutingCandidate(
+        const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    const AI_TOOL_STATE_SNAPSHOT& aToolState = aContext.m_ToolState;
     const nlohmann::json modeContext =
             nlohmann::json::parse( toUtf8String( aToolState.m_ModeContextJson ),
                                    nullptr, false );
@@ -280,6 +504,18 @@ std::optional<ROUTING_SEGMENT_CANDIDATE> parseRoutingCandidate(
     {
         candidate.m_End = aToolState.m_CursorBoardPosition;
         hasEnd = true;
+    }
+
+    if( !hasEnd )
+    {
+        if( std::optional<VECTOR2I> landing =
+                    nextLandingFromRoutingTargets(
+                            candidate.m_Start,
+                            collectRoutingTargetPoints( aContext, candidate ) ) )
+        {
+            candidate.m_End = *landing;
+            hasEnd = true;
+        }
     }
 
     if( !hasEnd || samePoint( candidate.m_Start, candidate.m_End ) )
@@ -1026,7 +1262,7 @@ std::optional<AI_SUGGESTION_RECORD> AiGenerateRoutingSegmentCandidate(
         return std::nullopt;
 
     std::optional<ROUTING_SEGMENT_CANDIDATE> candidate =
-            parseRoutingCandidate( aTrigger.m_ContextSnapshot.m_ToolState );
+            parseRoutingCandidate( aTrigger.m_ContextSnapshot );
 
     if( !candidate )
         return std::nullopt;

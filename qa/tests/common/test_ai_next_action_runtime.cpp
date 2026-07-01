@@ -4490,6 +4490,36 @@ AI_SUGGESTION_TRIGGER makeAutofillTrigger()
 }
 
 
+AI_SUGGESTION_TRIGGER makeAgentPanelSelfSurfaceTrigger()
+{
+    AI_SUGGESTION_TRIGGER trigger;
+    trigger.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextVersion.m_DocumentRevision = 32;
+    trigger.m_ContextVersion.m_ViewRevision = 3;
+    trigger.m_ContextSnapshot.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_Version = trigger.m_ContextVersion;
+    trigger.m_ContextSnapshot.m_ToolState.m_EditorKind = AI_EDITOR_KIND::Pcb;
+    trigger.m_ContextSnapshot.m_ToolState.m_Kind = AI_TOOL_STATE_KIND::Idle;
+    trigger.m_ContextSnapshot.m_ToolState.m_ContextVersion = trigger.m_ContextVersion;
+
+    AI_PANEL_STATE_RECORD panel;
+    panel.m_Id = wxS( "agent.panel" );
+    panel.m_Title = wxS( "Agent" );
+    panel.m_FocusedControlId = wxS( "agent.input" );
+    panel.m_FocusedControlLabel = wxS( "Agent input" );
+    panel.m_Summary = wxS( "KiSurf agent chat input" );
+    panel.m_StateJson = wxS( "{\"schema_version\":\"agent-panel-v1\","
+                             "\"focused_control\":\"agent.input\"}" );
+    trigger.m_ContextSnapshot.m_PanelStates.push_back( panel );
+
+    trigger.m_Activity.m_Sequence = 63;
+    trigger.m_Activity.m_ActionName = wxS( "agent.panel.focusInput" );
+    trigger.m_Reason = wxS( "agent panel self focus" );
+    trigger.m_PreviewOnly = true;
+    return trigger;
+}
+
+
 AI_SUGGESTION_TRIGGER makeIdleMouseMoveTrigger()
 {
     AI_SUGGESTION_TRIGGER trigger = makeAutofillTrigger();
@@ -4654,6 +4684,17 @@ BOOST_AUTO_TEST_CASE( SchedulerSuppressesRawMouseMoveOutsideActiveToolState )
                            makeIdleMouseMoveTrigger() )
                           .has_value() );
     BOOST_CHECK( scheduler.BuildSemanticEvent( makeViaTrigger() ).has_value() );
+}
+
+
+BOOST_AUTO_TEST_CASE( SchedulerIgnoresAgentPanelSelfSurface )
+{
+    AI_NEXT_ACTION_SCHEDULER scheduler;
+
+    BOOST_CHECK( !scheduler.BuildSemanticEvent(
+                           makeAgentPanelSelfSurfaceTrigger() )
+                          .has_value() );
+    BOOST_CHECK( scheduler.BuildSemanticEvent( makeAutofillTrigger() ).has_value() );
 }
 
 

@@ -552,6 +552,71 @@ BOOST_AUTO_TEST_CASE( PicProgrammerChatDirectLiveCanReuseCreatedAliasAcrossCalls
 }
 
 
+BOOST_AUTO_TEST_CASE( PicProgrammerChatDirectLiveResolvesRelativePointReference )
+{
+    std::unique_ptr<BOARD> board = KI_TEST::ReadBoardFromFileOrStream(
+            demoBoardPath( "pic_programmer/pic_programmer.kicad_pcb" ) );
+    BOOST_REQUIRE( board );
+
+    board->BuildListOfNets();
+    board->BuildConnectivity();
+
+    TOOL_MANAGER toolManager;
+    toolManager.SetEnvironment( board.get(), nullptr, nullptr, nullptr, nullptr );
+
+    KISURF_AI_PCB_SESSION_APPLY_ADAPTER adapter( *board, toolManager );
+    KISURF_AI_PCB_SESSION_SHADOW_SEEDER seeder( *board );
+    AI_SESSION_TOOL_CALL_HANDLER handler( nullptr, &adapter, nullptr, &seeder );
+    handler.SetDirectLiveApplyAfterMutation( true );
+
+    AI_PROVIDER_REQUEST request = liveToolRequest();
+    const size_t        initialViaCount = boardVias( *board ).size();
+    const VECTOR2I      basePosition( 25000000, 20000000 );
+    const VECTOR2I      relativePosition( 26000000, 19500000 );
+
+    AI_TOOL_INVOCATION_RESULT createBase = handler.HandleToolCall(
+            request,
+            liveToolCall(
+                    wxS( "kisurf_run_atomic_operation" ),
+                    { { "kind", "pcb.create_via" },
+                      { "arguments",
+                        { { "alias", "relative-base-via" },
+                          { "net", "GND" },
+                          { "diameter", 0.6 },
+                          { "drill", 0.3 },
+                          { "position", nlohmann::json::array( { 25.0, 20.0 } ) } } } } ) );
+
+    BOOST_REQUIRE_MESSAGE( createBase.m_Allowed,
+                           createBase.m_ResultJson.ToStdString() );
+    BOOST_CHECK( createBase.m_Executed );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK( viaAtPosition( *board, basePosition ) );
+
+    AI_TOOL_INVOCATION_RESULT createRelative = handler.HandleToolCall(
+            request,
+            liveToolCall(
+                    wxS( "kisurf_run_atomic_operation" ),
+                    { { "kind", "pcb.create_via" },
+                      { "arguments",
+                        { { "alias", "relative-offset-via" },
+                          { "net", "GND" },
+                          { "diameter", 0.6 },
+                          { "drill", 0.3 },
+                          { "position",
+                            { { "relative_to", "relative-base-via" },
+                              { "anchor", "center" },
+                              { "offset",
+                                { { "x", 1.0 }, { "y", -0.5 } } } } } } } } ) );
+
+    BOOST_REQUIRE_MESSAGE( createRelative.m_Allowed,
+                           createRelative.m_ResultJson.ToStdString() );
+    BOOST_CHECK( createRelative.m_Executed );
+    BOOST_CHECK( !handler.ActiveSession() );
+    BOOST_CHECK_EQUAL( boardVias( *board ).size(), initialViaCount + 2 );
+    BOOST_CHECK( viaAtPosition( *board, relativePosition ) );
+}
+
+
 BOOST_AUTO_TEST_CASE( PicProgrammerChatDirectLiveCanMoveCreatedAliasWithPositionShortcut )
 {
     std::unique_ptr<BOARD> board = KI_TEST::ReadBoardFromFileOrStream(

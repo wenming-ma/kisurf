@@ -413,6 +413,32 @@ BOOST_AUTO_TEST_CASE( RoutingProviderUsesToolStateCursorWhenModeContextOmitsCurs
 }
 
 
+BOOST_AUTO_TEST_CASE( RoutingProviderPlansNextLandingFromVisibleSameNetTargetWithoutCursor )
+{
+    AI_SUGGESTION_TRIGGER trigger = makeRoutingTrigger(
+            routingModeContext( wxS( "GND" ), wxS( "F.Cu" ), 150000, false ) );
+    trigger.m_ContextSnapshot.m_ToolState.m_HasCursorBoardPosition = false;
+    trigger.m_ContextSnapshot.m_VisibleObjects.push_back(
+            viaRef( 500, 200, wxS( "/GND" ) ) );
+
+    std::optional<AI_SUGGESTION_RECORD> suggestion =
+            AiGenerateRoutingSegmentCandidate( trigger );
+
+    BOOST_REQUIRE( suggestion.has_value() );
+
+    std::optional<AI_SUGGESTION_OPERATION> operation =
+            ParseAiSuggestionOperation( suggestion->m_ArgumentsJson );
+
+    BOOST_REQUIRE( operation.has_value() );
+    BOOST_CHECK( operation->IsRouteSegmentPreview() );
+    BOOST_CHECK_EQUAL( operation->m_NetName, wxString( wxS( "GND" ) ) );
+    BOOST_CHECK_EQUAL( operation->m_Start.x, 100 );
+    BOOST_CHECK_EQUAL( operation->m_Start.y, 200 );
+    BOOST_CHECK_EQUAL( operation->m_End.x, 500 );
+    BOOST_CHECK_EQUAL( operation->m_End.y, 200 );
+}
+
+
 BOOST_AUTO_TEST_CASE( RoutingToolStateCanSuggestSegmentBeforeNetIsResolved )
 {
     std::optional<AI_SUGGESTION_RECORD> suggestion =

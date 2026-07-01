@@ -3638,6 +3638,36 @@ wxString cursorRegionFingerprintForSnapshot( const AI_CONTEXT_SNAPSHOT& aSnapsho
 }
 
 
+bool isAgentPanelSelfSurface( const AI_PANEL_STATE_RECORD& aPanel )
+{
+    return aPanel.m_Id == wxS( "agent.panel" );
+}
+
+
+bool panelStateHasNextActionSignal( const AI_PANEL_STATE_RECORD& aPanel )
+{
+    return !aPanel.m_FocusedControlId.IsEmpty()
+           || !aPanel.m_FocusedControlLabel.IsEmpty()
+           || !aPanel.m_SelectedText.IsEmpty()
+           || !aPanel.m_StateJson.IsEmpty();
+}
+
+
+bool hasNextActionRelevantPanelState( const AI_CONTEXT_SNAPSHOT& aContext )
+{
+    for( const AI_PANEL_STATE_RECORD& panel : aContext.m_PanelStates )
+    {
+        if( isAgentPanelSelfSurface( panel ) )
+            continue;
+
+        if( panelStateHasNextActionSignal( panel ) )
+            return true;
+    }
+
+    return false;
+}
+
+
 wxString contextKindForObservation( const AI_CONTEXT_SNAPSHOT& aContext )
 {
     wxString kind = AiDynamicContextKind( aContext );
@@ -3656,11 +3686,14 @@ wxString contextKindForObservation( const AI_CONTEXT_SNAPSHOT& aContext )
     case AI_TOOL_STATE_KIND::PlacingVia:
         return wxS( "placement" );
 
+    case AI_TOOL_STATE_KIND::DrawingZone:
+        return wxS( "placement" );
+
     default:
         break;
     }
 
-    if( !aContext.m_PanelStates.empty() )
+    if( hasNextActionRelevantPanelState( aContext ) )
         return wxS( "autofill" );
 
     return wxS( "unknown" );
@@ -4148,7 +4181,7 @@ std::string packetKindForContext( const AI_CONTEXT_SNAPSHOT& aContext,
         break;
     }
 
-    if( !aContext.m_PanelStates.empty() )
+    if( hasNextActionRelevantPanelState( aContext ) )
         return "structured_surface";
 
     return toUtf8String( aWorkState );
@@ -12252,10 +12285,16 @@ std::optional<AI_SEMANTIC_EVENT> AI_NEXT_ACTION_SCHEDULER::BuildSemanticEvent(
             action.Contains( wxS( "mouse.move" ) )
             || action.Contains( wxS( "cursor.move" ) )
             || action.Contains( wxS( "pointer.move" ) );
+    const bool activeToolState = isActiveNextActionToolState(
+            aTrigger.m_ContextSnapshot.m_ToolState.m_Kind );
 
-    if( rawPointerMove
-        && !isActiveNextActionToolState(
-                aTrigger.m_ContextSnapshot.m_ToolState.m_Kind ) )
+    if( rawPointerMove && !activeToolState )
+    {
+        return std::nullopt;
+    }
+
+    if( !activeToolState
+        && !hasNextActionRelevantPanelState( aTrigger.m_ContextSnapshot ) )
     {
         return std::nullopt;
     }

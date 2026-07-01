@@ -1335,6 +1335,94 @@ nlohmann::json directGeometryJson( const BOARD_ITEM& aItem )
 }
 
 
+std::optional<VECTOR2I> directGeometryFieldPoint( const nlohmann::json& aGeometry,
+                                                  const char* aField )
+{
+    if( aGeometry.is_object() && aGeometry.contains( aField ) )
+        return pointFromJson( aGeometry[aField] );
+
+    return std::nullopt;
+}
+
+
+std::optional<VECTOR2I> directGeometryBoxPoint( const nlohmann::json& aGeometry,
+                                                const std::string& aAnchor )
+{
+    if( !aGeometry.is_object() || !aGeometry.contains( "bbox" )
+        || !aGeometry["bbox"].is_object() )
+    {
+        return std::nullopt;
+    }
+
+    const nlohmann::json& bbox = aGeometry["bbox"];
+
+    if( !bbox.contains( "x" ) || !bbox.contains( "y" )
+        || !bbox.contains( "width" ) || !bbox.contains( "height" )
+        || !bbox["x"].is_number() || !bbox["y"].is_number()
+        || !bbox["width"].is_number() || !bbox["height"].is_number() )
+    {
+        return std::nullopt;
+    }
+
+    const int x = static_cast<int>( bbox["x"].get<double>() );
+    const int y = static_cast<int>( bbox["y"].get<double>() );
+    const int width = static_cast<int>( bbox["width"].get<double>() );
+    const int height = static_cast<int>( bbox["height"].get<double>() );
+
+    if( aAnchor == "bbox_min" || aAnchor == "min" )
+        return VECTOR2I( x, y );
+
+    if( aAnchor == "bbox_max" || aAnchor == "max" )
+        return VECTOR2I( x + width, y + height );
+
+    if( aAnchor == "center" || aAnchor == "midpoint" || aAnchor.empty() )
+        return VECTOR2I( x + width / 2, y + height / 2 );
+
+    return std::nullopt;
+}
+
+
+std::optional<VECTOR2I> directItemAnchorPoint( const BOARD_ITEM& aItem,
+                                               const std::string& aAnchor )
+{
+    const nlohmann::json geometry = directGeometryJson( aItem );
+
+    if( aAnchor == "position" )
+        return directGeometryFieldPoint( geometry, "position" );
+
+    if( aAnchor == "start" )
+        return directGeometryFieldPoint( geometry, "start" );
+
+    if( aAnchor == "end" )
+        return directGeometryFieldPoint( geometry, "end" );
+
+    if( aAnchor == "center" || aAnchor == "midpoint" || aAnchor.empty() )
+    {
+        if( std::optional<VECTOR2I> position =
+                    directGeometryFieldPoint( geometry, "position" ) )
+        {
+            return position;
+        }
+
+        std::optional<VECTOR2I> start =
+                directGeometryFieldPoint( geometry, "start" );
+        std::optional<VECTOR2I> end = directGeometryFieldPoint( geometry, "end" );
+
+        if( start && end )
+            return VECTOR2I( ( start->x + end->x ) / 2,
+                             ( start->y + end->y ) / 2 );
+
+        if( std::optional<VECTOR2I> center =
+                    directGeometryFieldPoint( geometry, "center" ) )
+        {
+            return center;
+        }
+    }
+
+    return directGeometryBoxPoint( geometry, aAnchor );
+}
+
+
 nlohmann::json directItemJson( const BOARD& aBoard, const BOARD_ITEM& aItem )
 {
     nlohmann::json item = {
@@ -1744,6 +1832,302 @@ std::vector<BOARD_ITEM*> resolveDirectOperationItems( BOARD& aBoard,
     }
 
     return items;
+}
+
+
+std::optional<VECTOR2I> directOffsetFromExpression( const nlohmann::json& aValue,
+                                                    wxString& aError )
+{
+    if( !aValue.is_object() || !aValue.contains( "offset" ) )
+        return VECTOR2I( 0, 0 );
+
+    std::optional<VECTOR2I> offset = pointFromJson( aValue["offset"] );
+
+    if( !offset )
+        aError = wxS( "Relative point offset must be an x/y point." );
+
+    return offset;
+}
+
+
+std::optional<VECTOR2I> resolveDirectReferenceAnchor(
+        BOARD& aBoard, const nlohmann::json& aReference,
+        const std::string& aAnchor, wxString& aError )
+{
+    std::optional<BOARD_ITEM*> item = resolveDirectHandle( aBoard, aReference );
+
+    if( !item || !( *item ) )
+    {
+        aError = wxS( "Relative point reference did not resolve to a live board item." );
+        return std::nullopt;
+    }
+
+    std::optional<VECTOR2I> point =
+            directItemAnchorPoint( **item, aAnchor.empty() ? "center" : aAnchor );
+
+    if( !point )
+    {
+        aError = wxString::Format( wxS( "Relative point anchor '%s' is not available." ),
+                                   wxString::FromUTF8( aAnchor.c_str() ) );
+        return std::nullopt;
+    }
+
+    return point;
+}
+
+
+std::optional<VECTOR2I> resolveDirectPointExpression(
+        BOARD& aBoard, const nlohmann::json& aPoint, wxString& aError )
+{
+    if( std::optional<VECTOR2I> point = pointFromJson( aPoint ) )
+        return point;
+
+    if( aPoint.is_string() )
+        return resolveDirectReferenceAnchor( aBoard, aPoint, "center", aError );
+
+    if( !aPoint.is_object() )
+    {
+        aError = wxS( "Point expression must be an x/y point or item reference." );
+        return std::nullopt;
+    }
+
+    if( aPoint.contains( "relative_to" ) )
+    {
+        const std::string anchor =
+                aPoint.contains( "anchor" ) && aPoint["anchor"].is_string()
+                        ? aPoint["anchor"].get<std::string>()
+                        : std::string( "center" );
+        std::optional<VECTOR2I> base =
+                resolveDirectReferenceAnchor( aBoard, aPoint["relative_to"],
+                                              anchor, aError );
+
+        if( !base )
+            return std::nullopt;
+
+        std::optional<VECTOR2I> offset = directOffsetFromExpression( aPoint, aError );
+
+        if( !offset )
+            return std::nullopt;
+
+        return *base + *offset;
+    }
+
+    if( aPoint.contains( "between" ) && aPoint["between"].is_array()
+        && aPoint["between"].size() >= 2 )
+    {
+        wxString firstError;
+        wxString secondError;
+        std::optional<VECTOR2I> first =
+                resolveDirectPointExpression( aBoard, aPoint["between"][0],
+                                              firstError );
+        std::optional<VECTOR2I> second =
+                resolveDirectPointExpression( aBoard, aPoint["between"][1],
+                                              secondError );
+
+        if( !first || !second )
+        {
+            aError = !firstError.IsEmpty() ? firstError : secondError;
+
+            if( aError.IsEmpty() )
+                aError = wxS( "between endpoints did not resolve." );
+
+            return std::nullopt;
+        }
+
+        double t = 0.5;
+
+        if( aPoint.contains( "t" ) && aPoint["t"].is_number() )
+            t = aPoint["t"].get<double>();
+        else if( aPoint.contains( "fraction" ) && aPoint["fraction"].is_number() )
+            t = aPoint["fraction"].get<double>();
+        else if( aPoint.contains( "percent" ) && aPoint["percent"].is_number() )
+            t = aPoint["percent"].get<double>() / 100.0;
+
+        VECTOR2I interpolated(
+                static_cast<int>( std::llround(
+                        static_cast<double>( first->x )
+                        + ( static_cast<double>( second->x - first->x ) * t ) ) ),
+                static_cast<int>( std::llround(
+                        static_cast<double>( first->y )
+                        + ( static_cast<double>( second->y - first->y ) * t ) ) ) );
+
+        std::optional<VECTOR2I> offset = directOffsetFromExpression( aPoint, aError );
+
+        if( !offset )
+            return std::nullopt;
+
+        return interpolated + *offset;
+    }
+
+    if( aPoint.contains( "handle" ) || aPoint.contains( "alias" )
+        || aPoint.contains( "uuid" ) )
+    {
+        const nlohmann::json reference =
+                aPoint.contains( "handle" ) ? aPoint["handle"] : aPoint;
+        const std::string anchor =
+                aPoint.contains( "anchor" ) && aPoint["anchor"].is_string()
+                        ? aPoint["anchor"].get<std::string>()
+                        : std::string( "center" );
+
+        return resolveDirectReferenceAnchor( aBoard, reference, anchor, aError );
+    }
+
+    aError = wxS( "Point expression must contain x/y, relative_to, between, "
+                  "handle, alias, or uuid." );
+    return std::nullopt;
+}
+
+
+bool resolveDirectPointExpressionInPlace( BOARD& aBoard, nlohmann::json& aValue,
+                                          wxString& aError )
+{
+    std::optional<VECTOR2I> point =
+            resolveDirectPointExpression( aBoard, aValue, aError );
+
+    if( !point )
+        return false;
+
+    aValue = directPointJson( *point );
+    return true;
+}
+
+
+bool resolveDirectPointTreeInPlace( BOARD& aBoard, nlohmann::json& aValue,
+                                    wxString& aError )
+{
+    if( pointFromJson( aValue ) )
+        return true;
+
+    if( aValue.is_string()
+        || ( aValue.is_object()
+             && ( aValue.contains( "relative_to" ) || aValue.contains( "between" )
+                  || aValue.contains( "handle" ) || aValue.contains( "alias" )
+                  || aValue.contains( "uuid" ) ) ) )
+    {
+        return resolveDirectPointExpressionInPlace( aBoard, aValue, aError );
+    }
+
+    if( aValue.is_object() )
+    {
+        for( auto& [key, value] : aValue.items() )
+        {
+            wxUnusedVar( key );
+
+            if( !resolveDirectPointTreeInPlace( aBoard, value, aError ) )
+                return false;
+        }
+    }
+    else if( aValue.is_array() )
+    {
+        for( nlohmann::json& value : aValue )
+        {
+            if( !resolveDirectPointTreeInPlace( aBoard, value, aError ) )
+                return false;
+        }
+    }
+
+    return true;
+}
+
+
+bool resolveDirectParallelTrackShortcutInPlace( BOARD& aBoard, nlohmann::json& aArgs,
+                                                wxString& aError )
+{
+    if( !aArgs.contains( "parallel_to" )
+        || ( aArgs.contains( "start" ) && aArgs.contains( "end" ) ) )
+    {
+        return true;
+    }
+
+    std::optional<BOARD_ITEM*> item =
+            resolveDirectHandle( aBoard, aArgs["parallel_to"] );
+
+    if( !item || !( *item ) )
+    {
+        aError = wxS( "parallel_to did not resolve to a live board item." );
+        return false;
+    }
+
+    PCB_TRACK* track = dynamic_cast<PCB_TRACK*>( *item );
+
+    if( !track || dynamic_cast<PCB_VIA*>( *item ) )
+    {
+        aError = wxS( "parallel_to requires a track segment item." );
+        return false;
+    }
+
+    std::optional<VECTOR2I> offset = directOffsetFromExpression( aArgs, aError );
+
+    if( !offset )
+        return false;
+
+    aArgs["start"] = directPointJson( track->GetStart() + *offset );
+    aArgs["end"] = directPointJson( track->GetEnd() + *offset );
+    aArgs.erase( "parallel_to" );
+    aArgs.erase( "offset" );
+    return true;
+}
+
+
+bool resolveSelectedDirectPointField( BOARD& aBoard, nlohmann::json& aArgs,
+                                      const char* aField, wxString& aError )
+{
+    if( !aArgs.contains( aField ) )
+        return true;
+
+    return resolveDirectPointTreeInPlace( aBoard, aArgs[aField], aError );
+}
+
+
+bool resolveDirectOperationPointExpressionsInPlace( BOARD& aBoard,
+                                                    AI_SESSION_OPERATION_KIND aKind,
+                                                    nlohmann::json& aArgs,
+                                                    wxString& aError )
+{
+    switch( aKind )
+    {
+    case AI_SESSION_OPERATION_KIND::CreateVia:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "position", aError );
+
+    case AI_SESSION_OPERATION_KIND::CreateTrackSegment:
+        return resolveDirectParallelTrackShortcutInPlace( aBoard, aArgs, aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "start", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "end", aError );
+
+    case AI_SESSION_OPERATION_KIND::CreateTrackPolyline:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "points", aError );
+
+    case AI_SESSION_OPERATION_KIND::CreateZone:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "outline", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "points", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "outer", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "inner", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "holes", aError );
+
+    case AI_SESSION_OPERATION_KIND::CreateShape:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "geometry", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "start", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "mid", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "end", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "center", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "points", aError );
+
+    case AI_SESSION_OPERATION_KIND::MoveItems:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "position", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "target_position", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "target", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "target_point", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "destination", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "to", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "move_to", aError )
+               && resolveSelectedDirectPointField( aBoard, aArgs, "target_positions", aError );
+
+    case AI_SESSION_OPERATION_KIND::UpdateItemGeometry:
+        return resolveSelectedDirectPointField( aBoard, aArgs, "geometry_patch", aError );
+
+    default:
+        return true;
+    }
 }
 
 
@@ -2633,6 +3017,9 @@ KISURF_AI_PCB_SESSION_APPLY_ADAPTER::RunCurrentBoardAtomicOperation(
         abortCurrentBoardToolTransaction();
         return currentBoardError( aCode, aMessage );
     };
+
+    if( !resolveDirectOperationPointExpressionsInPlace( board, aKind, args, error ) )
+        return fail( wxS( "invalid_arguments" ), error );
 
     auto addCreated = [&]( BOARD_ITEM* aItem )
     {
